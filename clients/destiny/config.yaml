@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/HEAD/configuration-schema.json
+package: destiny
+output: client.gen.go
+compatibility:
+  always-prefix-enum-values: true
+generate:
+  models: true
+  client: true
+output-options:
+  include-operation-ids: [
+    "Destiny2.GetProfile",
+    "Destiny2.GetActivityHistory",
+    "Destiny2.GetPostGameCarnageReport",
+    "Destiny2.GetItem"
+  ]

@@ -1,0 +1,28 @@
+openapi: 3.0.0
+info:
+  title: One Trick
+  description: One Trick
+  version: 1.0.0
+servers:
+  - url: 'https'
+paths:
+  /ping:
+    get:
+      responses:
+        '200':
+          description: pet response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pong'
+components:
+  schemas:
+    # base types
+    Pong:
+      type: object
+      required:
+        - ping
+      properties:
+        ping:
+          type: string
+          example: pong
