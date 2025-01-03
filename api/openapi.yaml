@@ -4,7 +4,7 @@ info:
   description: One Trick
   version: 1.0.0
 servers:
-  - url: 'https'
+  - url: 'https://localhost:8080'
 paths:
   /ping:
     get:

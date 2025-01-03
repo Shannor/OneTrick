@@ -1,4 +1,4 @@
-package libs
+package services
 
 import (
 	"context"
@@ -29,27 +29,27 @@ const Energy = 2465295065
 const Power = 953998645
 const SubClass = 3284755031
 
-type Destiny interface {
+type DestinyService interface {
 	GetUserSnapshot(membershipID int64) ([]destiny.DestinyEntitiesItemsDestinyItemComponent, *time.Time, error)
 	WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemComponent, timestamp *time.Time) error
 	GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) (any, error)
 	GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) (any, error)
 }
 
-type API struct {
+type Service struct {
 	client    *resty.Client
 	genClient *destiny.ClientWithResponses
 }
 
-func (a *API) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
+func (a *Service) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
 	return getActivity(a, membershipID, characterID, count, int64(destiny.CurrentActivityModeTypePvPQuickplay), page)
 }
 
-func (a *API) GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
+func (a *Service) GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
 	return getActivity(a, membershipID, characterID, count, int64(destiny.CurrentActivityModeTypePvPCompetitive), page)
 }
 
-func getActivity(a *API, membershipID, characterID int64, count int64, mode int64, page int64) (
+func getActivity(a *Service, membershipID, characterID int64, count int64, mode int64, page int64) (
 	[]destiny.DestinyHistoricalStatsDestinyHistoricalStatsPeriodGroup,
 	error,
 ) {
@@ -75,7 +75,7 @@ func getActivity(a *API, membershipID, characterID int64, count int64, mode int6
 
 const profileFile = "profile_data.json"
 
-func (a *API) WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemComponent, timestamp *time.Time) error {
+func (a *Service) WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemComponent, timestamp *time.Time) error {
 	existingData := make(map[string]any)
 	stat, err := os.Stat(profileFile)
 	if err == nil && !stat.IsDir() {
@@ -110,7 +110,7 @@ func (a *API) WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemCompone
 	return nil
 }
 
-func (a *API) GetUserSnapshot(membershipId int64) ([]destiny.DestinyEntitiesItemsDestinyItemComponent, *time.Time, error) {
+func (a *Service) GetUserSnapshot(membershipId int64) ([]destiny.DestinyEntitiesItemsDestinyItemComponent, *time.Time, error) {
 	var components []int32
 	components = append(components, 205)
 	params := &destiny.Destiny2GetProfileParams{
@@ -154,7 +154,7 @@ func (a *API) GetUserSnapshot(membershipId int64) ([]destiny.DestinyEntitiesItem
 
 const accessToken = "CPjuBhKGAgAgPaFF75otR0QMEd5aiJ9/Zwm9DEam9oZfHluU556o3mbgAAAACMiTGscENoFDeffOB30j3GhPHUhp1ZbXJsdzjOFhGLw8HFA7triZ5s0wx965nNXdn3IDxjBjxjd65Xg+2b6yM0cgRzQAnIhPy/uvq/oBT2s9lIkPKripHs5yCOmSbZXnOHLCOr0ZvN1Dx3aWBtXDd8bgZEJrAfmnTHnBsZhTWmHMLT6A8CoNJJHJiRLgAI0EsGcbYZDTAZzt+OVur1CLS+/F/yQnhNwKzP1cmVHnu02Zq2meNcQQazkxNUPEwFcxPRycTMXEHNQH0T0pbGvX0Q3FJe9OuNLS+5VyCvJPdpo="
 
-func NewDestinyAPI() Destiny {
+func NewDestinyService() DestinyService {
 	hc := http.Client{}
 	cli, err := destiny.NewClientWithResponses(
 		"https://www.bungie.net/Platform",
@@ -174,7 +174,7 @@ func NewDestinyAPI() Destiny {
 	c := resty.New()
 	c.SetDebug(false)
 	c.SetBaseURL("https://www.bungie.net/Platform")
-	c.SetHeader("X-API-KEY", apiKey)
+	c.SetHeader("X-Service-KEY", apiKey)
 	c.SetHeader("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 	c.SetHeader("Accept", "application/json")
 	c.SetHeaders(map[string]string{
@@ -182,12 +182,12 @@ func NewDestinyAPI() Destiny {
 		"User-Agent":   "My custom User Agent String",
 	})
 
-	return &API{
+	return &Service{
 		client:    c,
 		genClient: cli,
 	}
 }
-func (a *API) SearchUsers(searchTerm string, page int) (*UserResponse, error) {
+func (a *Service) SearchUsers(searchTerm string, page int) (*UserResponse, error) {
 
 	responseStruct := &UserResponse{}
 	_, err := a.client.R().
