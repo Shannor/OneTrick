@@ -44,6 +44,13 @@ func main() {
 
 	h := api.HandlerFromMux(server, r)
 
+	r.Get("/openapi", func(w http.ResponseWriter, r *http.Request) {
+		// Set Content-Type to be proper YAML
+		w.Header().Set("Content-Type", "application/x-yaml")
+
+		// Serve the file
+		http.ServeFile(w, r, "./api/openapi.yaml")
+	})
 	r.Get("/profile", func(w http.ResponseWriter, r *http.Request) {
 		items, timestamp, err := destinyService.GetUserSnapshot(primaryMembershipId)
 		if err != nil {
