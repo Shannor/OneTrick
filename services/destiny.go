@@ -33,10 +33,10 @@ type DestinyService interface {
 	GetClosestSnapshot(membershipID int64, snapshot *time.Time) ([]destiny.ItemComponent, error)
 	GetWeaponDetails(ctx context.Context, membershipID string, weaponInstanceID string) (*destiny.DestinyItem, error)
 	WriteToFile(items []destiny.ItemComponent, timestamp *time.Time) error
-	GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) (any, error)
-	GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) (any, error)
-	GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) (any, error)
-	GetWeaponsFromActivity(ctx context.Context, characterID string, activityID int64) ([]destiny.HistoricalWeaponStats, *time.Time, error)
+	GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) ([]destiny.StatsPeriodGroup, error)
+	GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) ([]destiny.StatsPeriodGroup, error)
+	GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) ([]destiny.StatsPeriodGroup, error)
+	GetActivity(ctx context.Context, characterID string, activityID int64) (*destiny.HistoricalStatsActivity, []destiny.HistoricalWeaponStats, *time.Time, error)
 }
 
 type Service struct {
@@ -44,20 +44,20 @@ type Service struct {
 	genClient *destiny.ClientWithResponses
 }
 
-func (a *Service) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
+func (a *Service) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) ([]destiny.StatsPeriodGroup, error) {
 	return getActivity(a, membershipID, characterID, count, int64(destiny.CurrentActivityModeTypePvPQuickplay), page)
 }
 
-func (a *Service) GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
+func (a *Service) GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) ([]destiny.StatsPeriodGroup, error) {
 	return getActivity(a, membershipID, characterID, count, int64(destiny.CurrentActivityModeTypeAllPvP), page)
 }
 
-func (a *Service) GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
+func (a *Service) GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) ([]destiny.StatsPeriodGroup, error) {
 	return getActivity(a, membershipID, characterID, count, int64(destiny.CurrentActivityModeTypePvPCompetitive), page)
 }
 
 func getActivity(a *Service, membershipID, characterID int64, count int64, mode int64, page int64) (
-	[]destiny.DestinyHistoricalStatsDestinyHistoricalStatsPeriodGroup,
+	[]destiny.StatsPeriodGroup,
 	error,
 ) {
 	resp, err := a.genClient.Destiny2GetActivityHistoryWithResponse(
@@ -75,7 +75,7 @@ func getActivity(a *Service, membershipID, characterID int64, count int64, mode 
 		return nil, err
 	}
 	if resp.JSON200.Response.Activities == nil {
-		return make([]destiny.DestinyHistoricalStatsDestinyHistoricalStatsPeriodGroup, 0), nil
+		return make([]destiny.StatsPeriodGroup, 0), nil
 	}
 	return *resp.JSON200.Response.Activities, nil
 }
@@ -116,7 +116,7 @@ func (a *Service) WriteToFile(items []destiny.ItemComponent, timestamp *time.Tim
 	return nil
 }
 
-func (a *Service) GetWeaponsFromActivity(ctx context.Context, characterID string, activityID int64) ([]destiny.HistoricalWeaponStats, *time.Time, error) {
+func (a *Service) GetActivity(ctx context.Context, characterID string, activityID int64) (*destiny.HistoricalStatsActivity, []destiny.HistoricalWeaponStats, *time.Time, error) {
 
 	resp, err := a.genClient.Destiny2GetPostGameCarnageReportWithResponse(ctx, activityID)
 	if err != nil {
@@ -126,15 +126,19 @@ func (a *Service) GetWeaponsFromActivity(ctx context.Context, characterID string
 			"activity id",
 			activityID,
 		).Error("Failed to get post game carnage report")
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	if resp.JSON200.PostGameCarnageReportData.Entries == nil {
-		return nil, nil, nil
+	data := resp.JSON200.PostGameCarnageReportData
+	if data.Entries == nil || data.ActivityDetails == nil {
+		slog.With("activity id", activityID).Error("No data found for activity")
+		return nil, nil, nil, nil
 	}
 
 	var weapons []destiny.HistoricalWeaponStats
-	// TODO: Add safety here
-	for _, entry := range *resp.JSON200.PostGameCarnageReportData.Entries {
+	for _, entry := range *data.Entries {
+		if entry.CharacterId == nil {
+			continue
+		}
 		if *entry.CharacterId == characterID {
 			weapons = *entry.Extended.Weapons
 			break
@@ -142,9 +146,9 @@ func (a *Service) GetWeaponsFromActivity(ctx context.Context, characterID string
 
 	}
 	if weapons == nil {
-		return nil, nil, fmt.Errorf("no data found for characterID: %s", characterID)
+		return nil, nil, nil, fmt.Errorf("no data found for characterID: %s", characterID)
 	}
-	return weapons, resp.JSON200.PostGameCarnageReportData.Period, nil
+	return data.ActivityDetails, weapons, data.Period, nil
 }
 
 func (a *Service) GetClosestSnapshot(membershipID int64, activityPeriod *time.Time) ([]destiny.ItemComponent, error) {

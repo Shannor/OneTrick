@@ -40548,6 +40548,7 @@
       },
       "Destiny.HistoricalStats.DestinyHistoricalStatsActivity": {
         "type": "object",
+        "x-go-name": "HistoricalStatsActivity",
         "properties": {
           "referenceId": {
             "type": "integer",
@@ -41660,6 +41661,7 @@
       },
       "Destiny.HistoricalStats.DestinyHistoricalStatsPeriodGroup": {
         "type": "object",
+        "x-go-name": "StatsPeriodGroup",
         "properties": {
           "period": {
             "type": "string",

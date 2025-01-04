@@ -15,9 +15,59 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Pong'
-  /activities/{activityId}/weapons:
+  /activities:
     get:
-      operationId: GetWeaponsForActivity
+      parameters:
+        - name: count
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: page
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+      operationId: GetActivities
+      responses:
+        200:
+          description: "List of Activities that have past"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                 $ref: "#/components/schemas/ActivityHistory"
+                 /activities:
+                   get:
+                     parameters:
+                       - name: count
+                         in: query
+                         required: true
+                         schema:
+                           type: integer
+                           format: int64
+                       - name: page
+                         in: query
+                         required: true
+                         schema:
+                           type: integer
+                           format: int64
+                     operationId: GetActivities
+                     responses:
+                       200:
+                         description: "List of Activities that have past"
+                         content:
+                           application/json:
+                             schema:
+                               type: array
+                               items:
+                                 $ref: "#/components/schemas/ActivityHistory"
+  /activities/{activityId}:
+    get:
+      operationId: GetActivity
       parameters:
         - name: activityId
           in: path
@@ -31,13 +81,43 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                allOf:
-                  - $ref: "#/components/schemas/WeaponStats"
+                type: object
+                required:
+                  - activity
+                  - stats
+                properties:
+                  activity:
+                    $ref: "#/components/schemas/ActivityHistory"
+                  stats:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WeaponStats"
 
 components:
   schemas:
-    # base types
+    ActivityHistory:
+     type: object
+     required:
+       - referenceId
+       - activityHash
+       - instanceId
+     properties:
+       referenceId:
+         type: integer
+         format: int64
+       activityHash:
+        type: integer
+        format: int64
+        description: "Hash id of the type of activity: Strike, Competitive, QuickPlay, etc. "
+       instanceId:
+         type: string
+         description: "Id to get more details about the particular game"
+       isPrivate:
+         type: boolean
+       mode:
+         type: string
+         description: "Name of the Destiny Activity Mode"
+
     Pong:
       type: object
       required:

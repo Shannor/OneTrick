@@ -4,15 +4,36 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path"
+	"strings"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/gin-gonic/gin"
 	"github.com/oapi-codegen/runtime"
-	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
+	strictgin "github.com/oapi-codegen/runtime/strictmiddleware/gin"
 )
+
+// ActivityHistory defines model for ActivityHistory.
+type ActivityHistory struct {
+	// ActivityHash Hash id of the type of activity: Strike, Competitive, QuickPlay, etc.
+	ActivityHash int64 `json:"activityHash"`
+
+	// InstanceId Id to get more details about the particular game
+	InstanceId string `json:"instanceId"`
+	IsPrivate  *bool  `json:"isPrivate,omitempty"`
+
+	// Mode Name of the Destiny Activity Mode
+	Mode        *string `json:"mode,omitempty"`
+	ReferenceId int64   `json:"referenceId"`
+}
 
 // BaseItemInfo defines model for BaseItemInfo.
 type BaseItemInfo struct {
@@ -119,212 +140,182 @@ type WeaponStats struct {
 	Stats *map[string]StatsValue `json:"stats,omitempty"`
 }
 
+// GetActivitiesParams defines parameters for GetActivities.
+type GetActivitiesParams struct {
+	Count int64 `form:"count" json:"count"`
+	Page  int64 `form:"page" json:"page"`
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 
-	// (GET /activities/{activityId}/weapons)
-	GetWeaponsForActivity(w http.ResponseWriter, r *http.Request, activityId string)
+	// (GET /activities)
+	GetActivities(c *gin.Context, params GetActivitiesParams)
+
+	// (GET /activities/{activityId})
+	GetActivity(c *gin.Context, activityId string)
 
 	// (GET /ping)
-	GetPing(w http.ResponseWriter, r *http.Request)
-}
-
-// Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
-
-type Unimplemented struct{}
-
-// (GET /activities/{activityId}/weapons)
-func (_ Unimplemented) GetWeaponsForActivity(w http.ResponseWriter, r *http.Request, activityId string) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// (GET /ping)
-func (_ Unimplemented) GetPing(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	GetPing(c *gin.Context)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
 type ServerInterfaceWrapper struct {
 	Handler            ServerInterface
 	HandlerMiddlewares []MiddlewareFunc
-	ErrorHandlerFunc   func(w http.ResponseWriter, r *http.Request, err error)
+	ErrorHandler       func(*gin.Context, error, int)
 }
 
-type MiddlewareFunc func(http.Handler) http.Handler
+type MiddlewareFunc func(c *gin.Context)
 
-// GetWeaponsForActivity operation middleware
-func (siw *ServerInterfaceWrapper) GetWeaponsForActivity(w http.ResponseWriter, r *http.Request) {
+// GetActivities operation middleware
+func (siw *ServerInterfaceWrapper) GetActivities(c *gin.Context) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetActivitiesParams
+
+	// ------------- Required query parameter "count" -------------
+
+	if paramValue := c.Query("count"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument count is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "count", c.Request.URL.Query(), &params.Count)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter count: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "page" -------------
+
+	if paramValue := c.Query("page"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument page is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "page", c.Request.URL.Query(), &params.Page)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetActivities(c, params)
+}
+
+// GetActivity operation middleware
+func (siw *ServerInterfaceWrapper) GetActivity(c *gin.Context) {
 
 	var err error
 
 	// ------------- Path parameter "activityId" -------------
 	var activityId string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "activityId", chi.URLParam(r, "activityId"), &activityId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "activityId", c.Param("activityId"), &activityId, runtime.BindStyledParameterOptions{Explode: false, Required: true})
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "activityId", Err: err})
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter activityId: %w", err), http.StatusBadRequest)
 		return
 	}
 
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetWeaponsForActivity(w, r, activityId)
-	}))
-
 	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
 	}
 
-	handler.ServeHTTP(w, r)
+	siw.Handler.GetActivity(c, activityId)
 }
 
 // GetPing operation middleware
-func (siw *ServerInterfaceWrapper) GetPing(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetPing(w, r)
-	}))
+func (siw *ServerInterfaceWrapper) GetPing(c *gin.Context) {
 
 	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-type UnescapedCookieParamError struct {
-	ParamName string
-	Err       error
-}
-
-func (e *UnescapedCookieParamError) Error() string {
-	return fmt.Sprintf("error unescaping cookie parameter '%s'", e.ParamName)
-}
-
-func (e *UnescapedCookieParamError) Unwrap() error {
-	return e.Err
-}
-
-type UnmarshalingParamError struct {
-	ParamName string
-	Err       error
-}
-
-func (e *UnmarshalingParamError) Error() string {
-	return fmt.Sprintf("Error unmarshaling parameter %s as JSON: %s", e.ParamName, e.Err.Error())
-}
-
-func (e *UnmarshalingParamError) Unwrap() error {
-	return e.Err
-}
-
-type RequiredParamError struct {
-	ParamName string
-}
-
-func (e *RequiredParamError) Error() string {
-	return fmt.Sprintf("Query argument %s is required, but not found", e.ParamName)
-}
-
-type RequiredHeaderError struct {
-	ParamName string
-	Err       error
-}
-
-func (e *RequiredHeaderError) Error() string {
-	return fmt.Sprintf("Header parameter %s is required, but not found", e.ParamName)
-}
-
-func (e *RequiredHeaderError) Unwrap() error {
-	return e.Err
-}
-
-type InvalidParamFormatError struct {
-	ParamName string
-	Err       error
-}
-
-func (e *InvalidParamFormatError) Error() string {
-	return fmt.Sprintf("Invalid format for parameter %s: %s", e.ParamName, e.Err.Error())
-}
-
-func (e *InvalidParamFormatError) Unwrap() error {
-	return e.Err
-}
-
-type TooManyValuesForParamError struct {
-	ParamName string
-	Count     int
-}
-
-func (e *TooManyValuesForParamError) Error() string {
-	return fmt.Sprintf("Expected one value for %s, got %d", e.ParamName, e.Count)
-}
-
-// Handler creates http.Handler with routing matching OpenAPI spec.
-func Handler(si ServerInterface) http.Handler {
-	return HandlerWithOptions(si, ChiServerOptions{})
-}
-
-type ChiServerOptions struct {
-	BaseURL          string
-	BaseRouter       chi.Router
-	Middlewares      []MiddlewareFunc
-	ErrorHandlerFunc func(w http.ResponseWriter, r *http.Request, err error)
-}
-
-// HandlerFromMux creates http.Handler with routing matching OpenAPI spec based on the provided mux.
-func HandlerFromMux(si ServerInterface, r chi.Router) http.Handler {
-	return HandlerWithOptions(si, ChiServerOptions{
-		BaseRouter: r,
-	})
-}
-
-func HandlerFromMuxWithBaseURL(si ServerInterface, r chi.Router, baseURL string) http.Handler {
-	return HandlerWithOptions(si, ChiServerOptions{
-		BaseURL:    baseURL,
-		BaseRouter: r,
-	})
-}
-
-// HandlerWithOptions creates http.Handler with additional options
-func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handler {
-	r := options.BaseRouter
-
-	if r == nil {
-		r = chi.NewRouter()
-	}
-	if options.ErrorHandlerFunc == nil {
-		options.ErrorHandlerFunc = func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		middleware(c)
+		if c.IsAborted() {
+			return
 		}
 	}
+
+	siw.Handler.GetPing(c)
+}
+
+// GinServerOptions provides options for the Gin server.
+type GinServerOptions struct {
+	BaseURL      string
+	Middlewares  []MiddlewareFunc
+	ErrorHandler func(*gin.Context, error, int)
+}
+
+// RegisterHandlers creates http.Handler with routing matching OpenAPI spec.
+func RegisterHandlers(router gin.IRouter, si ServerInterface) {
+	RegisterHandlersWithOptions(router, si, GinServerOptions{})
+}
+
+// RegisterHandlersWithOptions creates http.Handler with additional options
+func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options GinServerOptions) {
+	errorHandler := options.ErrorHandler
+	if errorHandler == nil {
+		errorHandler = func(c *gin.Context, err error, statusCode int) {
+			c.JSON(statusCode, gin.H{"msg": err.Error()})
+		}
+	}
+
 	wrapper := ServerInterfaceWrapper{
 		Handler:            si,
 		HandlerMiddlewares: options.Middlewares,
-		ErrorHandlerFunc:   options.ErrorHandlerFunc,
+		ErrorHandler:       errorHandler,
 	}
 
-	r.Group(func(r chi.Router) {
-		r.Get(options.BaseURL+"/activities/{activityId}/weapons", wrapper.GetWeaponsForActivity)
-	})
-	r.Group(func(r chi.Router) {
-		r.Get(options.BaseURL+"/ping", wrapper.GetPing)
-	})
-
-	return r
+	router.GET(options.BaseURL+"/activities", wrapper.GetActivities)
+	router.GET(options.BaseURL+"/activities/:activityId", wrapper.GetActivity)
+	router.GET(options.BaseURL+"/ping", wrapper.GetPing)
 }
 
-type GetWeaponsForActivityRequestObject struct {
+type GetActivitiesRequestObject struct {
+	Params GetActivitiesParams
+}
+
+type GetActivitiesResponseObject interface {
+	VisitGetActivitiesResponse(w http.ResponseWriter) error
+}
+
+type GetActivities200JSONResponse []ActivityHistory
+
+func (response GetActivities200JSONResponse) VisitGetActivitiesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetActivityRequestObject struct {
 	ActivityId string `json:"activityId"`
 }
 
-type GetWeaponsForActivityResponseObject interface {
-	VisitGetWeaponsForActivityResponse(w http.ResponseWriter) error
+type GetActivityResponseObject interface {
+	VisitGetActivityResponse(w http.ResponseWriter) error
 }
 
-type GetWeaponsForActivity200JSONResponse WeaponStats
+type GetActivity200JSONResponse struct {
+	Activity ActivityHistory `json:"activity"`
+	Stats    []WeaponStats   `json:"stats"`
+}
 
-func (response GetWeaponsForActivity200JSONResponse) VisitGetWeaponsForActivityResponse(w http.ResponseWriter) error {
+func (response GetActivity200JSONResponse) VisitGetActivityResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
@@ -350,88 +341,208 @@ func (response GetPing200JSONResponse) VisitGetPingResponse(w http.ResponseWrite
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
-	// (GET /activities/{activityId}/weapons)
-	GetWeaponsForActivity(ctx context.Context, request GetWeaponsForActivityRequestObject) (GetWeaponsForActivityResponseObject, error)
+	// (GET /activities)
+	GetActivities(ctx context.Context, request GetActivitiesRequestObject) (GetActivitiesResponseObject, error)
+
+	// (GET /activities/{activityId})
+	GetActivity(ctx context.Context, request GetActivityRequestObject) (GetActivityResponseObject, error)
 
 	// (GET /ping)
 	GetPing(ctx context.Context, request GetPingRequestObject) (GetPingResponseObject, error)
 }
 
-type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
-type StrictMiddlewareFunc = strictnethttp.StrictHTTPMiddlewareFunc
-
-type StrictHTTPServerOptions struct {
-	RequestErrorHandlerFunc  func(w http.ResponseWriter, r *http.Request, err error)
-	ResponseErrorHandlerFunc func(w http.ResponseWriter, r *http.Request, err error)
-}
+type StrictHandlerFunc = strictgin.StrictGinHandlerFunc
+type StrictMiddlewareFunc = strictgin.StrictGinMiddlewareFunc
 
 func NewStrictHandler(ssi StrictServerInterface, middlewares []StrictMiddlewareFunc) ServerInterface {
-	return &strictHandler{ssi: ssi, middlewares: middlewares, options: StrictHTTPServerOptions{
-		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-		},
-		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		},
-	}}
-}
-
-func NewStrictHandlerWithOptions(ssi StrictServerInterface, middlewares []StrictMiddlewareFunc, options StrictHTTPServerOptions) ServerInterface {
-	return &strictHandler{ssi: ssi, middlewares: middlewares, options: options}
+	return &strictHandler{ssi: ssi, middlewares: middlewares}
 }
 
 type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
-	options     StrictHTTPServerOptions
 }
 
-// GetWeaponsForActivity operation middleware
-func (sh *strictHandler) GetWeaponsForActivity(w http.ResponseWriter, r *http.Request, activityId string) {
-	var request GetWeaponsForActivityRequestObject
+// GetActivities operation middleware
+func (sh *strictHandler) GetActivities(ctx *gin.Context, params GetActivitiesParams) {
+	var request GetActivitiesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetActivities(ctx, request.(GetActivitiesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetActivities")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetActivitiesResponseObject); ok {
+		if err := validResponse.VisitGetActivitiesResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetActivity operation middleware
+func (sh *strictHandler) GetActivity(ctx *gin.Context, activityId string) {
+	var request GetActivityRequestObject
 
 	request.ActivityId = activityId
 
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetWeaponsForActivity(ctx, request.(GetWeaponsForActivityRequestObject))
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetActivity(ctx, request.(GetActivityRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetWeaponsForActivity")
+		handler = middleware(handler, "GetActivity")
 	}
 
-	response, err := handler(r.Context(), w, r, request)
+	response, err := handler(ctx, request)
 
 	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetWeaponsForActivityResponseObject); ok {
-		if err := validResponse.VisitGetWeaponsForActivityResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetActivityResponseObject); ok {
+		if err := validResponse.VisitGetActivityResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
 		}
 	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
 	}
 }
 
 // GetPing operation middleware
-func (sh *strictHandler) GetPing(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) GetPing(ctx *gin.Context) {
 	var request GetPingRequestObject
 
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.GetPing(ctx, request.(GetPingRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
 		handler = middleware(handler, "GetPing")
 	}
 
-	response, err := handler(r.Context(), w, r, request)
+	response, err := handler(ctx, request)
 
 	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
 	} else if validResponse, ok := response.(GetPingResponseObject); ok {
-		if err := validResponse.VisitGetPingResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		if err := validResponse.VisitGetPingResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
 		}
 	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
 	}
+}
+
+// Base64 encoded, gzipped, json marshaled Swagger object
+var swaggerSpec = []string{
+
+	"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",
+	"AAD//8NPCT24FQAA",
+}
+
+// GetSwagger returns the content of the embedded swagger specification file
+// or error if failed to decode
+func decodeSpec() ([]byte, error) {
+	zipped, err := base64.StdEncoding.DecodeString(strings.Join(swaggerSpec, ""))
+	if err != nil {
+		return nil, fmt.Errorf("error base64 decoding spec: %w", err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(zipped))
+	if err != nil {
+		return nil, fmt.Errorf("error decompressing spec: %w", err)
+	}
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(zr)
+	if err != nil {
+		return nil, fmt.Errorf("error decompressing spec: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+var rawSpec = decodeSpecCached()
+
+// a naive cached of a decoded swagger spec
+func decodeSpecCached() func() ([]byte, error) {
+	data, err := decodeSpec()
+	return func() ([]byte, error) {
+		return data, err
+	}
+}
+
+// Constructs a synthetic filesystem for resolving external references when loading openapi specifications.
+func PathToRawSpec(pathToFile string) map[string]func() ([]byte, error) {
+	res := make(map[string]func() ([]byte, error))
+	if len(pathToFile) > 0 {
+		res[pathToFile] = rawSpec
+	}
+
+	return res
+}
+
+// GetSwagger returns the Swagger specification corresponding to the generated code
+// in this file. The external references of Swagger specification are resolved.
+// The logic of resolving external references is tightly connected to "import-mapping" feature.
+// Externally referenced files must be embedded in the corresponding golang packages.
+// Urls can be supported but this task was out of the scope.
+func GetSwagger() (swagger *openapi3.T, err error) {
+	resolvePath := PathToRawSpec("")
+
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = true
+	loader.ReadFromURIFunc = func(loader *openapi3.Loader, url *url.URL) ([]byte, error) {
+		pathToFile := url.String()
+		pathToFile = path.Clean(pathToFile)
+		getSpec, ok := resolvePath[pathToFile]
+		if !ok {
+			err1 := fmt.Errorf("path not found: %s", pathToFile)
+			return nil, err1
+		}
+		return getSpec()
+	}
+	var specData []byte
+	specData, err = rawSpec()
+	if err != nil {
+		return
+	}
+	swagger, err = loader.LoadFromData(specData)
+	if err != nil {
+		return
+	}
+	return
 }

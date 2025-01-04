@@ -1,15 +1,14 @@
 package main
 
 import (
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/oapi-codegen/gin-middleware"
 	"log"
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/services"
-	"time"
 )
 
 const primaryMembershipId = 4611686018434106050
@@ -18,56 +17,46 @@ func main() {
 	destinyService := services.NewDestinyService()
 	server := api.NewServer(destinyService)
 
-	r := chi.NewMux()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	// Load OpenAPI spec file
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		slog.Error("failed to load swagger spec file")
+		return
+	}
+	// Clear out the servers array in the swagger spec, that skips validating
+	// that server names match. We don't know how this thing will be run.
+	swagger.Servers = nil
 
-	// Basic CORS
-	// for more ideas, see: https://developer.github.com/v3/#cross-origin-resource-sharing
-	r.Use(cors.Handler(cors.Options{
-		// AllowedOrigins:   []string{"https://foo.com"}, // Use this to allow specific origin hosts
-		AllowedOrigins: []string{"https://*", "http://*"},
-		// AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: false,
-		MaxAge:           300, // Maximum value not ignored by any of major browsers
-	}))
+	r := gin.Default()
+	r.Use(cors.Default())
 
-	// Set a timeout value on the request context (ctx), that will signal
-	// through ctx.Done() that the request has timed out and further
-	// processing should be stopped.
-	r.Use(middleware.Timeout(60 * time.Second))
-
-	h := api.HandlerFromMux(server, r)
-
-	r.Get("/openapi", func(w http.ResponseWriter, r *http.Request) {
-		// Set Content-Type to be proper YAML
-		w.Header().Set("Content-Type", "application/x-yaml")
-
-		// Serve the file
-		http.ServeFile(w, r, "./api/openapi.yaml")
+	r.GET("/openapi", func(c *gin.Context) {
+		c.Header("Content-Type", "application/x-yaml")
+		c.File("./api/openapi.yaml")
 	})
-	r.Get("/profile", func(w http.ResponseWriter, r *http.Request) {
+
+	// TODO: Convert to a POST method in openapi spec
+	r.GET("/profile", func(c *gin.Context) {
 		items, timestamp, err := destinyService.GetUserSnapshot(primaryMembershipId)
 		if err != nil {
-			http.Error(w, "Failed to fetch profile data", http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch profile data"})
 			return
 		}
 
 		err = destinyService.WriteToFile(items, timestamp)
 		if err != nil {
-			http.Error(w, "Failed to save profile data", http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save profile data"})
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Profile data saved successfully!"))
+		c.JSON(http.StatusOK, gin.H{"message": "Profile data saved successfully!"})
 	})
+	r.Use(ginmiddleware.OapiRequestValidator(swagger))
+
+	h := api.NewStrictHandler(server, nil)
+	api.RegisterHandlers(r, h)
+
 	s := &http.Server{
-		Handler: h,
+		Handler: r,
 		Addr:    "0.0.0.0:8080",
 	}
 

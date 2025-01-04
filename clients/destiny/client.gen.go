@@ -1478,11 +1478,11 @@ type DestinyEntitiesProfilesDestinyVendorReceiptsComponent struct {
 // DestinyHistoricalStatsDestinyActivityHistoryResults defines model for Destiny.HistoricalStats.DestinyActivityHistoryResults.
 type DestinyHistoricalStatsDestinyActivityHistoryResults struct {
 	// Activities List of activities, the most recent activity first.
-	Activities *[]DestinyHistoricalStatsDestinyHistoricalStatsPeriodGroup `json:"activities,omitempty"`
+	Activities *[]StatsPeriodGroup `json:"activities,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyHistoricalStatsActivity Summary information about the activity that was played.
-type DestinyHistoricalStatsDestinyHistoricalStatsActivity struct {
+// HistoricalStatsActivity Summary information about the activity that was played.
+type HistoricalStatsActivity struct {
 	// DirectorActivityHash The unique hash identifier of the DestinyActivityDefinition that was played.
 	DirectorActivityHash *uint32 `json:"directorActivityHash,omitempty"`
 
@@ -1506,10 +1506,10 @@ type DestinyHistoricalStatsDestinyHistoricalStatsActivity struct {
 	ReferenceId *uint32 `json:"referenceId,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyHistoricalStatsPeriodGroup defines model for Destiny.HistoricalStats.DestinyHistoricalStatsPeriodGroup.
-type DestinyHistoricalStatsDestinyHistoricalStatsPeriodGroup struct {
+// StatsPeriodGroup defines model for Destiny.HistoricalStats.DestinyHistoricalStatsPeriodGroup.
+type StatsPeriodGroup struct {
 	// ActivityDetails If the period group is for a specific activity, this property will be set.
-	ActivityDetails *DestinyHistoricalStatsDestinyHistoricalStatsActivity `json:"activityDetails,omitempty"`
+	ActivityDetails *HistoricalStatsActivity `json:"activityDetails,omitempty"`
 
 	// Period Period for the group. If the stat periodType is day, then this will have a specific day. If the type is monthly, then this value will be the first day of the applicable month. This value is not set when the periodType is 'all time'.
 	Period *time.Time `json:"period,omitempty"`
@@ -1590,7 +1590,7 @@ type DestinyPlayer struct {
 // PostGameCarnageReportData defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportData.
 type PostGameCarnageReportData struct {
 	// ActivityDetails Details about the activity.
-	ActivityDetails *DestinyHistoricalStatsDestinyHistoricalStatsActivity `json:"activityDetails,omitempty"`
+	ActivityDetails *HistoricalStatsActivity `json:"activityDetails,omitempty"`
 
 	// ActivityWasStartedFromBeginning True if the activity was started from the beginning, if that information is available and the activity was played post Witch Queen release.
 	ActivityWasStartedFromBeginning *bool `json:"activityWasStartedFromBeginning"`

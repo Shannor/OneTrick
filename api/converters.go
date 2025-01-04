@@ -113,3 +113,43 @@ func transformD2StatValue(item *destiny.HistoricalStatsValue) *StatsValue {
 	}
 	return result
 }
+
+func uintToInt64[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](item *T) *int64 {
+	if item == nil {
+		return nil
+	}
+	return utils.ToPointer(int64(*item))
+}
+
+func TransformHistoricActivity(history destiny.HistoricalStatsActivity) ActivityHistory {
+	return ActivityHistory{
+		ActivityHash: *uintToInt64(history.DirectorActivityHash),
+		InstanceId:   *history.InstanceId,
+		IsPrivate:    history.IsPrivate,
+		Mode:         utils.ToPointer("Mode"),
+		ReferenceId:  *uintToInt64(history.ReferenceId),
+	}
+}
+func TransformPeriodGroups(period []destiny.StatsPeriodGroup) []ActivityHistory {
+	if period == nil {
+		return nil
+	}
+	result := []ActivityHistory{}
+	for _, group := range period {
+		result = append(result, *TransformPeriodGroup(&group))
+	}
+	return result
+}
+func TransformPeriodGroup(period *destiny.StatsPeriodGroup) *ActivityHistory {
+	if period == nil {
+		return nil
+	}
+
+	return &ActivityHistory{
+		ActivityHash: *uintToInt64(period.ActivityDetails.DirectorActivityHash),
+		InstanceId:   *period.ActivityDetails.InstanceId,
+		IsPrivate:    period.ActivityDetails.IsPrivate,
+		Mode:         utils.ToPointer("Mode"),
+		ReferenceId:  *uintToInt64(period.ActivityDetails.ReferenceId),
+	}
+}
