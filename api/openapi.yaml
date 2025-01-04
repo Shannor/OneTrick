@@ -4,7 +4,7 @@ info:
   description: One Trick
   version: 1.0.0
 servers:
-  - url: 'https://localhost:8080'
+  - url: 'http://localhost:8080'
 paths:
   /ping:
     get:
@@ -15,6 +15,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Pong'
+  /activities/{activityId}/weapons:
+    get:
+      operationId: GetWeaponsForActivity
+      parameters:
+        - name: activityId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The unique identifier for the activity.
+      responses:
+        '200':
+          description: Array of used guns during an activity
+          content:
+            application/json:
+              schema:
+                type: array
+                allOf:
+                  - $ref: "#/components/schemas/WeaponStats"
+
 components:
   schemas:
     # base types
@@ -26,3 +46,147 @@ components:
         ping:
           type: string
           example: pong
+    WeaponStats:
+      type: object
+      properties:
+        referenceId:
+          type: integer
+          description: The hash ID of the item definition that describes the weapon.
+          format: uint32
+        details:
+          $ref: "#/components/schemas/ItemDetails"
+        stats:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/StatsValue"
+          description: Collection of stats for the period.
+          x-dictionary-key:
+            type: string
+    StatsValue:
+      type: object
+      properties:
+        statId:
+          type: string
+          description: Unique ID for this stat
+        basic:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Basic stat value.
+        pga:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Per game average for the statistic, if applicable
+        weighted:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Weighted value of the stat if a weight greater than 1 has been assigned.
+        activityId:
+          type: integer
+          description: >-
+            When a stat represents the best, most, longest, fastest or
+            some other personal best, the actual activity ID where that
+            personal best was established is available on this property.
+          format: int64
+          nullable: true
+    StatsValuePair:
+      type: object
+      properties:
+        value:
+          type: number
+          description: Raw value of the statistic
+          format: double
+        displayValue:
+          type: string
+          description: Localized formatted version of the value.
+    Perk:
+      type: object
+      properties:
+        hash:
+          type: integer
+          description: The hash ID of the perk
+        iconPath:
+          type: string
+          description: "link to icon"
+        isActive:
+          type: boolean
+          description: Whether the perk is active or not.
+        visible:
+          type: boolean
+          description: Whether the perk is visible or not.
+    Stats:
+      type: object
+      additionalProperties:
+        type: object
+        properties:
+          statHash:
+            type: integer
+            description: The hash ID of the stat.
+          value:
+            type: integer
+            description: The value of the stat.
+    Socket:
+      type: object
+      properties:
+        plugHash:
+          type: integer
+          description: The hash ID of the socket plug.
+        isEnabled:
+          type: boolean
+          description: Whether the socket plug is enabled or not.
+        isVisible:
+          type: boolean
+          description: Whether the socket plug is visible or not.
+    BaseItemInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        itemHash:
+          type: integer
+        instanceId:
+          type: string
+        bucketHash:
+          type: integer
+    ItemDetails:
+      type: object
+      x-go-name: ItemDetails
+      properties:
+        characterId:
+          type: string
+          description: >-
+            If the item is on a character, this will return the ID of
+            the character that is holding the item.
+          nullable: true
+        baseInfo:
+          $ref: "#/components/schemas/BaseItemInfo"
+        perks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Perk"
+          description: >-
+            Information specifically about the perks currently active on the item.
+            COMPONENT TYPE: ItemPerks
+        stats:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/Stats"
+          description: >-
+            Information about the computed stats of the item: power, defense, etc...
+            COMPONENT TYPE: ItemStats
+        sockets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Socket"
+          description: >-
+            Information about the sockets of the item: which are currently active,
+            what potential sockets you could have and the stats/abilities/perks
+            you can gain from them.
+            COMPONENT TYPE: ItemSockets
+      description: >-
+        The response object for retrieving an individual instanced item. None of
+        these components are relevant for an item that doesn't have an
+        "itemInstanceId": for those, get your information from the
+        DestinyInventoryDefinition.

@@ -533,7 +533,7 @@ type DestinyComponentsInventoryDestinyMaterialRequirementState struct {
 // DestinyComponentsInventoryDestinyPlatformSilverComponent defines model for Destiny.Components.Inventory.DestinyPlatformSilverComponent.
 type DestinyComponentsInventoryDestinyPlatformSilverComponent struct {
 	// PlatformSilver If a Profile is played on multiple platforms, this is the silver they have for each platform, keyed by Membership Type.
-	PlatformSilver *map[string]DestinyEntitiesItemsDestinyItemComponent `json:"platformSilver,omitempty"`
+	PlatformSilver *map[string]ItemComponent `json:"platformSilver,omitempty"`
 }
 
 // DestinyComponentsItemsDestinyItemPlugComponent Plugs are non-instanced items that can provide Stat and Perk benefits when socketed into an instanced item. Items have Sockets, and Plugs are inserted into Sockets.
@@ -1212,11 +1212,11 @@ type DestinyEntitiesCharactersDestinyCharacterRenderComponent struct {
 // Inventory Items returned here are in a flat list, but importantly they have a bucketHash property that indicates the specific inventory bucket that is holding them. These buckets constitute things like the separate sections of the Vault, the user's inventory slots, etc. See DestinyInventoryBucketDefinition for more info.
 type DestinyEntitiesInventoryDestinyInventoryComponent struct {
 	// Items The items in this inventory. If you care to bucket them, use the item's bucketHash property to group them.
-	Items *[]DestinyEntitiesItemsDestinyItemComponent `json:"items,omitempty"`
+	Items *[]ItemComponent `json:"items,omitempty"`
 }
 
-// DestinyEntitiesItemsDestinyItemComponent The base item component, filled with properties that are generally useful to know in any item request or that don't feel worthwhile to put in their own component.
-type DestinyEntitiesItemsDestinyItemComponent struct {
+// ItemComponent The base item component, filled with properties that are generally useful to know in any item request or that don't feel worthwhile to put in their own component.
+type ItemComponent struct {
 	// BindStatus If the item is bound to a location, it will be specified in this enum.
 	BindStatus *int32 `json:"bindStatus,omitempty"`
 
@@ -1488,7 +1488,7 @@ type DestinyHistoricalStatsDestinyHistoricalStatsActivity struct {
 
 	// InstanceId The unique identifier for this *specific* match that was played.
 	// This value can be used to get additional data about this activity such as who else was playing via the GetPostGameCarnageReport endpoint.
-	InstanceId *int64 `json:"instanceId,omitempty"`
+	InstanceId *string `json:"instanceId,omitempty"`
 
 	// IsPrivate Whether or not the match was a private match.
 	IsPrivate *bool `json:"isPrivate,omitempty"`
@@ -1515,11 +1515,11 @@ type DestinyHistoricalStatsDestinyHistoricalStatsPeriodGroup struct {
 	Period *time.Time `json:"period,omitempty"`
 
 	// Values Collection of stats for the period.
-	Values *map[string]DestinyHistoricalStatsDestinyHistoricalStatsValue `json:"values,omitempty"`
+	Values *map[string]HistoricalStatsValue `json:"values,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyHistoricalStatsValue defines model for Destiny.HistoricalStats.DestinyHistoricalStatsValue.
-type DestinyHistoricalStatsDestinyHistoricalStatsValue struct {
+// HistoricalStatsValue defines model for Destiny.HistoricalStats.DestinyHistoricalStatsValue.
+type HistoricalStatsValue struct {
 	// ActivityId When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
 	ActivityId *int64 `json:"activityId"`
 
@@ -1545,17 +1545,20 @@ type DestinyHistoricalStatsDestinyHistoricalStatsValuePair struct {
 	Value *float64 `json:"value,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyHistoricalWeaponStats defines model for Destiny.HistoricalStats.DestinyHistoricalWeaponStats.
-type DestinyHistoricalStatsDestinyHistoricalWeaponStats struct {
+// HistoricalWeaponStats defines model for Destiny.HistoricalStats.DestinyHistoricalWeaponStats.
+type HistoricalWeaponStats struct {
 	// ReferenceId The hash ID of the item definition that describes the weapon.
 	ReferenceId *uint32 `json:"referenceId,omitempty"`
 
 	// Values Collection of stats for the period.
-	Values *map[string]DestinyHistoricalStatsDestinyHistoricalStatsValue `json:"values,omitempty"`
+	Values *map[string]HistoricalStatsValue `json:"values,omitempty"`
 }
 
 // DestinyHistoricalStatsDestinyPlayer defines model for Destiny.HistoricalStats.DestinyPlayer.
-type DestinyHistoricalStatsDestinyPlayer struct {
+type DestinyHistoricalStatsDestinyPlayer = DestinyPlayer
+
+// DestinyPlayer defines model for .
+type DestinyPlayer struct {
 	// BungieNetUserInfo Details about the player as they are known on BungieNet. This will be undefined if the player has marked their credential private, or does not have a BungieNet account.
 	BungieNetUserInfo *UserUserInfoCard `json:"bungieNetUserInfo,omitempty"`
 
@@ -1584,8 +1587,8 @@ type DestinyHistoricalStatsDestinyPlayer struct {
 	RaceHash   *uint32 `json:"raceHash,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyPostGameCarnageReportData defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportData.
-type DestinyHistoricalStatsDestinyPostGameCarnageReportData struct {
+// PostGameCarnageReportData defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportData.
+type PostGameCarnageReportData struct {
 	// ActivityDetails Details about the activity.
 	ActivityDetails *DestinyHistoricalStatsDestinyHistoricalStatsActivity `json:"activityDetails,omitempty"`
 
@@ -1593,7 +1596,7 @@ type DestinyHistoricalStatsDestinyPostGameCarnageReportData struct {
 	ActivityWasStartedFromBeginning *bool `json:"activityWasStartedFromBeginning"`
 
 	// Entries Collection of players and their data for this activity.
-	Entries *[]DestinyHistoricalStatsDestinyPostGameCarnageReportEntry `json:"entries,omitempty"`
+	Entries *[]PostGameCarnageReportEntry `json:"entries,omitempty"`
 
 	// Period Date and time for the activity.
 	Period *time.Time `json:"period,omitempty"`
@@ -1605,43 +1608,43 @@ type DestinyHistoricalStatsDestinyPostGameCarnageReportData struct {
 	Teams *[]DestinyHistoricalStatsDestinyPostGameCarnageReportTeamEntry `json:"teams,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyPostGameCarnageReportEntry defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry.
-type DestinyHistoricalStatsDestinyPostGameCarnageReportEntry struct {
+// PostGameCarnageReportEntry defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry.
+type PostGameCarnageReportEntry struct {
 	// CharacterId ID of the player's character used in the activity.
-	CharacterId *int64 `json:"characterId,omitempty"`
+	CharacterId *string `json:"characterId,omitempty"`
 
 	// Extended Extended data extracted from the activity blob.
-	Extended *DestinyHistoricalStatsDestinyPostGameCarnageReportExtendedData `json:"extended,omitempty"`
+	Extended *PostGameCarnageReportExtendedData `json:"extended,omitempty"`
 
 	// Player Identity details of the player
 	Player *DestinyHistoricalStatsDestinyPlayer `json:"player,omitempty"`
 
 	// Score Score of the player if available
-	Score *DestinyHistoricalStatsDestinyHistoricalStatsValue `json:"score,omitempty"`
+	Score *HistoricalStatsValue `json:"score,omitempty"`
 
 	// Standing Standing of the player
 	Standing *int32 `json:"standing,omitempty"`
 
 	// Values Collection of stats for the player in this activity.
-	Values *map[string]DestinyHistoricalStatsDestinyHistoricalStatsValue `json:"values,omitempty"`
+	Values *map[string]HistoricalStatsValue `json:"values,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyPostGameCarnageReportExtendedData defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportExtendedData.
-type DestinyHistoricalStatsDestinyPostGameCarnageReportExtendedData struct {
+// PostGameCarnageReportExtendedData defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportExtendedData.
+type PostGameCarnageReportExtendedData struct {
 	// Values Collection of stats for the player in this activity.
-	Values *map[string]DestinyHistoricalStatsDestinyHistoricalStatsValue `json:"values,omitempty"`
+	Values *map[string]HistoricalStatsValue `json:"values,omitempty"`
 
 	// Weapons List of weapons and their perspective values.
-	Weapons *[]DestinyHistoricalStatsDestinyHistoricalWeaponStats `json:"weapons,omitempty"`
+	Weapons *[]HistoricalWeaponStats `json:"weapons,omitempty"`
 }
 
 // DestinyHistoricalStatsDestinyPostGameCarnageReportTeamEntry defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportTeamEntry.
 type DestinyHistoricalStatsDestinyPostGameCarnageReportTeamEntry struct {
 	// Score Score earned by the team
-	Score *DestinyHistoricalStatsDestinyHistoricalStatsValue `json:"score,omitempty"`
+	Score *HistoricalStatsValue `json:"score,omitempty"`
 
 	// Standing Team's standing relative to other teams.
-	Standing *DestinyHistoricalStatsDestinyHistoricalStatsValue `json:"standing,omitempty"`
+	Standing *HistoricalStatsValue `json:"standing,omitempty"`
 
 	// TeamId Integer ID for the team.
 	TeamId *int32 `json:"teamId,omitempty"`
@@ -1943,10 +1946,10 @@ type DestinyQuestsDestinyQuestStatus struct {
 	VendorHash *uint32 `json:"vendorHash"`
 }
 
-// DestinyResponsesDestinyItemResponse The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
-type DestinyResponsesDestinyItemResponse struct {
+// DestinyItem The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+type DestinyItem struct {
 	// CharacterId If the item is on a character, this will return the ID of the character that is holding the item.
-	CharacterId *int64 `json:"characterId"`
+	CharacterId *string `json:"characterId"`
 
 	// Instance Basic instance data for the item.
 	// COMPONENT TYPE: ItemInstances
@@ -2475,8 +2478,8 @@ type SingleComponentResponseOfDestinyInventoryComponent struct {
 
 // SingleComponentResponseOfDestinyItemComponent defines model for SingleComponentResponseOfDestinyItemComponent.
 type SingleComponentResponseOfDestinyItemComponent struct {
-	// Data The base item component, filled with properties that are generally useful to know in any item request or that don't feel worthwhile to put in their own component.
-	Data *DestinyEntitiesItemsDestinyItemComponent `json:"data,omitempty"`
+	// ItemComponent The base item component, filled with properties that are generally useful to know in any item request or that don't feel worthwhile to put in their own component.
+	ItemComponent *ItemComponent `json:"data,omitempty"`
 
 	// Disabled If true, this component is disabled.
 	Disabled *bool  `json:"disabled"`
@@ -2775,7 +2778,7 @@ type UserUserInfoCard struct {
 	IsPublic *bool `json:"isPublic,omitempty"`
 
 	// MembershipId Membership ID as they user is known in the Accounts service
-	MembershipId *int64 `json:"membershipId,omitempty"`
+	MembershipId *string `json:"membershipId,omitempty"`
 
 	// MembershipType Type of the membership. Not necessarily the native type.
 	MembershipType *int32 `json:"membershipType,omitempty"`
@@ -2795,15 +2798,15 @@ type DestinyActivityHistoryResults struct {
 	ThrottleSeconds    *int32                                               `json:"ThrottleSeconds,omitempty"`
 }
 
-// DestinyPostGameCarnageReportData defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportData.
-type DestinyPostGameCarnageReportData struct {
-	DetailedErrorTrace *string                                                 `json:"DetailedErrorTrace,omitempty"`
-	ErrorCode          *int32                                                  `json:"ErrorCode,omitempty"`
-	ErrorStatus        *string                                                 `json:"ErrorStatus,omitempty"`
-	Message            *string                                                 `json:"Message,omitempty"`
-	MessageData        *map[string]string                                      `json:"MessageData,omitempty"`
-	Response           *DestinyHistoricalStatsDestinyPostGameCarnageReportData `json:"Response,omitempty"`
-	ThrottleSeconds    *int32                                                  `json:"ThrottleSeconds,omitempty"`
+// DestinyHistoricalStatsDestinyPostGameCarnageReportData defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportData.
+type DestinyHistoricalStatsDestinyPostGameCarnageReportData struct {
+	DetailedErrorTrace        *string                    `json:"DetailedErrorTrace,omitempty"`
+	ErrorCode                 *int32                     `json:"ErrorCode,omitempty"`
+	ErrorStatus               *string                    `json:"ErrorStatus,omitempty"`
+	Message                   *string                    `json:"Message,omitempty"`
+	MessageData               *map[string]string         `json:"MessageData,omitempty"`
+	PostGameCarnageReportData *PostGameCarnageReportData `json:"Response,omitempty"`
+	ThrottleSeconds           *int32                     `json:"ThrottleSeconds,omitempty"`
 }
 
 // DestinyItemResponse defines model for Destiny.Responses.DestinyItemResponse.
@@ -2814,9 +2817,9 @@ type DestinyItemResponse struct {
 	Message            *string            `json:"Message,omitempty"`
 	MessageData        *map[string]string `json:"MessageData,omitempty"`
 
-	// Response The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
-	Response        *DestinyResponsesDestinyItemResponse `json:"Response,omitempty"`
-	ThrottleSeconds *int32                               `json:"ThrottleSeconds,omitempty"`
+	// DestinyItem The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+	DestinyItem     *DestinyItem `json:"Response,omitempty"`
+	ThrottleSeconds *int32       `json:"ThrottleSeconds,omitempty"`
 }
 
 // DestinyProfileResponse defines model for Destiny.Responses.DestinyProfileResponse.
@@ -3318,7 +3321,7 @@ type ClientWithResponsesInterface interface {
 type Destiny2GetPostGameCarnageReportResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON200      *DestinyPostGameCarnageReportData
+	JSON200      *DestinyHistoricalStatsDestinyPostGameCarnageReportData
 }
 
 // Status returns HTTPResponse.Status
@@ -3454,7 +3457,7 @@ func ParseDestiny2GetPostGameCarnageReportResponse(rsp *http.Response) (*Destiny
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest DestinyPostGameCarnageReportData
+		var dest DestinyHistoricalStatsDestinyPostGameCarnageReportData
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

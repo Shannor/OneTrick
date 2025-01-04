@@ -35,3 +35,5 @@ go.work.sum
 
 # IntelliJ IDEA module files
 *.ipr
+
+profile_data.json

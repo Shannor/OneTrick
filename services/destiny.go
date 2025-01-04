@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"oneTrick/clients/destiny"
-	utils2 "oneTrick/utils"
+	"oneTrick/utils"
 	"os"
 	"strconv"
 	"time"
@@ -17,7 +17,6 @@ import (
 
 const apiKey = "e3a8403b8e274b438735bc9de80cd1db"
 const searchUserPOST = "/User/Search/GlobalName/{page}/"
-const getProfile = "/Destiny2/2/Profile/4611686018434106050/?components=206,205"
 const characterID = "2305843009261519028"
 const membershipId = "7274114"
 
@@ -30,10 +29,14 @@ const Power = 953998645
 const SubClass = 3284755031
 
 type DestinyService interface {
-	GetUserSnapshot(membershipID int64) ([]destiny.DestinyEntitiesItemsDestinyItemComponent, *time.Time, error)
-	WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemComponent, timestamp *time.Time) error
+	GetUserSnapshot(membershipID int64) ([]destiny.ItemComponent, *time.Time, error)
+	GetClosestSnapshot(membershipID int64, snapshot *time.Time) ([]destiny.ItemComponent, error)
+	GetWeaponDetails(ctx context.Context, membershipID string, weaponInstanceID string) (*destiny.DestinyItem, error)
+	WriteToFile(items []destiny.ItemComponent, timestamp *time.Time) error
 	GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) (any, error)
+	GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) (any, error)
 	GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) (any, error)
+	GetWeaponsFromActivity(ctx context.Context, characterID string, activityID int64) ([]destiny.HistoricalWeaponStats, *time.Time, error)
 }
 
 type Service struct {
@@ -43,6 +46,10 @@ type Service struct {
 
 func (a *Service) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
 	return getActivity(a, membershipID, characterID, count, int64(destiny.CurrentActivityModeTypePvPQuickplay), page)
+}
+
+func (a *Service) GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
+	return getActivity(a, membershipID, characterID, count, int64(destiny.CurrentActivityModeTypeAllPvP), page)
 }
 
 func (a *Service) GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) (any, error) {
@@ -59,9 +66,9 @@ func getActivity(a *Service, membershipID, characterID int64, count int64, mode 
 		membershipID,
 		characterID,
 		&destiny.Destiny2GetActivityHistoryParams{
-			Count: utils2.ToPointer(int32(count)),
-			Mode:  utils2.ToPointer(int32(mode)),
-			Page:  utils2.ToPointer(int32(page)),
+			Count: utils.ToPointer(int32(count)),
+			Mode:  utils.ToPointer(int32(mode)),
+			Page:  utils.ToPointer(int32(page)),
 		},
 	)
 	if err != nil {
@@ -75,8 +82,8 @@ func getActivity(a *Service, membershipID, characterID int64, count int64, mode 
 
 const profileFile = "profile_data.json"
 
-func (a *Service) WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemComponent, timestamp *time.Time) error {
-	existingData := make(map[string]any)
+func (a *Service) WriteToFile(items []destiny.ItemComponent, timestamp *time.Time) error {
+	existingData := make(map[string][]destiny.ItemComponent)
 	stat, err := os.Stat(profileFile)
 	if err == nil && !stat.IsDir() {
 		content, readErr := os.ReadFile(profileFile)
@@ -94,8 +101,7 @@ func (a *Service) WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemCom
 	}
 	defer file.Close()
 
-	// TODO: Format the timestamp
-	existingData[timestamp.String()] = items
+	existingData[timestamp.Format(time.RFC3339)] = items
 	// Marshal the updated data
 	data, err := json.MarshalIndent(existingData, "", "  ")
 	if err != nil {
@@ -110,7 +116,117 @@ func (a *Service) WriteToFile(items []destiny.DestinyEntitiesItemsDestinyItemCom
 	return nil
 }
 
-func (a *Service) GetUserSnapshot(membershipId int64) ([]destiny.DestinyEntitiesItemsDestinyItemComponent, *time.Time, error) {
+func (a *Service) GetWeaponsFromActivity(ctx context.Context, characterID string, activityID int64) ([]destiny.HistoricalWeaponStats, *time.Time, error) {
+
+	resp, err := a.genClient.Destiny2GetPostGameCarnageReportWithResponse(ctx, activityID)
+	if err != nil {
+		slog.With(
+			"error",
+			err.Error(),
+			"activity id",
+			activityID,
+		).Error("Failed to get post game carnage report")
+		return nil, nil, err
+	}
+	if resp.JSON200.PostGameCarnageReportData.Entries == nil {
+		return nil, nil, nil
+	}
+
+	var weapons []destiny.HistoricalWeaponStats
+	// TODO: Add safety here
+	for _, entry := range *resp.JSON200.PostGameCarnageReportData.Entries {
+		if *entry.CharacterId == characterID {
+			weapons = *entry.Extended.Weapons
+			break
+		}
+
+	}
+	if weapons == nil {
+		return nil, nil, fmt.Errorf("no data found for characterID: %s", characterID)
+	}
+	return weapons, resp.JSON200.PostGameCarnageReportData.Period, nil
+}
+
+func (a *Service) GetClosestSnapshot(membershipID int64, activityPeriod *time.Time) ([]destiny.ItemComponent, error) {
+	existingData := make(map[string][]destiny.ItemComponent)
+	stat, err := os.Stat(profileFile)
+	if err == nil && !stat.IsDir() {
+		content, readErr := os.ReadFile(profileFile)
+		if readErr == nil {
+			_ = json.Unmarshal(content, &existingData) // Ignore error for simplicity
+		} else {
+			slog.With("error", readErr.Error()).Error("Failed to read file")
+		}
+	}
+
+	var closestSnapshot string
+	minDuration := time.Duration(1<<63 - 1) // Max duration value
+
+	for snapshot := range existingData {
+		t, err := time.Parse(time.RFC3339, snapshot)
+		if err != nil {
+			slog.With("error", err.Error(), "snapshot", snapshot).Error("Failed to parse snapshot time")
+			continue
+		}
+
+		duration := t.Sub(*activityPeriod)
+		if duration < 0 {
+			duration = -duration
+		}
+
+		if duration < minDuration {
+			minDuration = duration
+			closestSnapshot = snapshot
+		}
+	}
+
+	if closestSnapshot == "" {
+		return nil, fmt.Errorf("no matching snapshot found for membership ID %d", membershipID)
+	}
+
+	return existingData[closestSnapshot], nil
+}
+
+const (
+	ItemPerks      = 302
+	ItemStats      = 304
+	ItemSockets    = 305
+	ItemCommonData = 307
+)
+
+func (a *Service) GetWeaponDetails(ctx context.Context, membershipID string, weaponInstanceID string) (*destiny.DestinyItem, error) {
+	components := []int32{ItemPerks, ItemStats, ItemSockets, ItemCommonData}
+	membershipIdInt64, err := strconv.ParseInt(membershipID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert membershipId to int64: %v", err)
+	}
+	weaponInstanceIDInt64, err := strconv.ParseInt(weaponInstanceID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert membershipId to int64: %v", err)
+	}
+	params := destiny.Destiny2GetItemParams{Components: &components}
+	response, err := a.genClient.Destiny2GetItemWithResponse(
+		ctx,
+		2,
+		membershipIdInt64,
+		weaponInstanceIDInt64,
+		&params,
+	)
+	if err != nil {
+		slog.With(
+			"error",
+			err.Error(),
+			"weapon instance id",
+			weaponInstanceID,
+		).Error("Failed to get item details")
+		return nil, err
+	}
+	if response.JSON200.DestinyItem == nil {
+		return nil, nil
+	}
+	return response.JSON200.DestinyItem, nil
+}
+func (a *Service) GetUserSnapshot(membershipId int64) ([]destiny.ItemComponent, *time.Time, error) {
 	var components []int32
 	components = append(components, 205)
 	params := &destiny.Destiny2GetProfileParams{
@@ -125,7 +241,7 @@ func (a *Service) GetUserSnapshot(membershipId int64) ([]destiny.DestinyEntities
 		return nil, nil, fmt.Errorf("no response found")
 	}
 	timeStamp := test.JSON200.Response.ResponseMintedTimestamp
-	var items []destiny.DestinyEntitiesItemsDestinyItemComponent
+	var items []destiny.ItemComponent
 	if test.JSON200.Response.CharacterEquipment.Data != nil {
 		equipment := *test.JSON200.Response.CharacterEquipment.Data
 		for ID, equ := range equipment {
@@ -135,7 +251,7 @@ func (a *Service) GetUserSnapshot(membershipId int64) ([]destiny.DestinyEntities
 		}
 
 	}
-	results := make([]destiny.DestinyEntitiesItemsDestinyItemComponent, 0)
+	results := make([]destiny.ItemComponent, 0)
 	for _, item := range items {
 		switch *item.BucketHash {
 		case Kinetic:
@@ -148,7 +264,7 @@ func (a *Service) GetUserSnapshot(membershipId int64) ([]destiny.DestinyEntities
 			results = append(results, item)
 		}
 	}
-	utils2.PrettyPrint(len(results))
+	utils.PrettyPrint(len(results))
 	return results, timeStamp, nil
 }
 

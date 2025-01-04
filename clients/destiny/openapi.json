@@ -8549,9 +8549,8 @@
             "x-enum-is-bitmask": false
           },
           "membershipId": {
-            "type": "integer",
+            "type": "string",
             "description": "Membership ID as they user is known in the Accounts service",
-            "format": "int64"
           },
           "displayName": {
             "type": "string",
@@ -29475,6 +29474,7 @@
       },
       "Destiny.Entities.Items.DestinyItemComponent": {
         "type": "object",
+        "x-go-name": "ItemComponent",
         "properties": {
           "itemHash": {
             "type": "integer",
@@ -37938,11 +37938,11 @@
       },
       "Destiny.Responses.DestinyItemResponse": {
         "type": "object",
+        "x-go-name": "DestinyItem",
         "properties": {
           "characterId": {
-            "type": "integer",
+            "type": "string",
             "description": "If the item is on a character, this will return the ID of the character that is holding the item.",
-            "format": "int64",
             "nullable": true
           },
           "item": {
@@ -40503,6 +40503,7 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportData": {
         "type": "object",
+        "x-go-name": "PostGameCarnageReportData",
         "properties": {
           "period": {
             "type": "string",
@@ -40565,9 +40566,8 @@
             }
           },
           "instanceId": {
-            "type": "integer",
-            "description": "The unique identifier for this *specific* match that was played.\r\nThis value can be used to get additional data about this activity such as who else was playing via the GetPostGameCarnageReport endpoint.",
-            "format": "int64"
+            "type": "string",
+            "description": "The unique identifier for this *specific* match that was played.\r\nThis value can be used to get additional data about this activity such as who else was playing via the GetPostGameCarnageReport endpoint."
           },
           "mode": {
             "type": "integer",
@@ -40609,6 +40609,7 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry": {
         "type": "object",
+        "x-go-name": "PostGameCarnageReportEntry",
         "properties": {
           "standing": {
             "type": "integer",
@@ -40634,9 +40635,8 @@
             "description": "Identity details of the player"
           },
           "characterId": {
-            "type": "integer",
-            "description": "ID of the player's character used in the activity.",
-            "format": "int64"
+            "type": "string",
+            "description": "ID of the player's character used in the activity."
           },
           "values": {
             "type": "object",
@@ -40660,6 +40660,7 @@
         }
       },
       "Destiny.HistoricalStats.DestinyHistoricalStatsValue": {
+        "x-go-name": "HistoricalStatsValue",
         "type": "object",
         "properties": {
           "statId": {
@@ -40717,6 +40718,7 @@
       },
       "Destiny.HistoricalStats.DestinyPlayer": {
         "type": "object",
+        "x-go-type-name": "DestinyPlayer",
         "properties": {
           "destinyUserInfo": {
             "type": "object",
@@ -40791,6 +40793,7 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportExtendedData": {
         "type": "object",
+        "x-go-name": "PostGameCarnageReportExtendedData",
         "properties": {
           "weapons": {
             "type": "array",
@@ -40813,6 +40816,7 @@
       },
       "Destiny.HistoricalStats.DestinyHistoricalWeaponStats": {
         "type": "object",
+        "x-go-name": "HistoricalWeaponStats",
         "properties": {
           "referenceId": {
             "type": "integer",
@@ -49657,7 +49661,6 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportData": {
         "description": "Look at the Response property for more information about the nature of this response",
-        "x-go-name": "DestinyPostGameCarnageReportData",
         "content": {
           "application/json": {
             "schema": {

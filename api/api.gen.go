@@ -4,19 +4,126 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oapi-codegen/runtime"
+	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
 )
+
+// BaseItemInfo defines model for BaseItemInfo.
+type BaseItemInfo struct {
+	BucketHash *int    `json:"bucketHash,omitempty"`
+	InstanceId *string `json:"instanceId,omitempty"`
+	ItemHash   *int    `json:"itemHash,omitempty"`
+	Name       *string `json:"name,omitempty"`
+}
+
+// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+type ItemDetails struct {
+	BaseInfo *BaseItemInfo `json:"baseInfo,omitempty"`
+
+	// CharacterId If the item is on a character, this will return the ID of the character that is holding the item.
+	CharacterId *string `json:"characterId"`
+
+	// Perks Information specifically about the perks currently active on the item. COMPONENT TYPE: ItemPerks
+	Perks *[]Perk `json:"perks,omitempty"`
+
+	// Sockets Information about the sockets of the item: which are currently active, what potential sockets you could have and the stats/abilities/perks you can gain from them. COMPONENT TYPE: ItemSockets
+	Sockets *[]Socket `json:"sockets,omitempty"`
+
+	// Stats Information about the computed stats of the item: power, defense, etc... COMPONENT TYPE: ItemStats
+	Stats *Stats `json:"stats,omitempty"`
+}
+
+// Perk defines model for Perk.
+type Perk struct {
+	// Hash The hash ID of the perk
+	Hash *int `json:"hash,omitempty"`
+
+	// IconPath link to icon
+	IconPath *string `json:"iconPath,omitempty"`
+
+	// IsActive Whether the perk is active or not.
+	IsActive *bool `json:"isActive,omitempty"`
+
+	// Visible Whether the perk is visible or not.
+	Visible *bool `json:"visible,omitempty"`
+}
 
 // Pong defines model for Pong.
 type Pong struct {
 	Ping string `json:"ping"`
 }
 
+// Socket defines model for Socket.
+type Socket struct {
+	// IsEnabled Whether the socket plug is enabled or not.
+	IsEnabled *bool `json:"isEnabled,omitempty"`
+
+	// IsVisible Whether the socket plug is visible or not.
+	IsVisible *bool `json:"isVisible,omitempty"`
+
+	// PlugHash The hash ID of the socket plug.
+	PlugHash *int `json:"plugHash,omitempty"`
+}
+
+// Stats defines model for Stats.
+type Stats map[string]struct {
+	// StatHash The hash ID of the stat.
+	StatHash *int `json:"statHash,omitempty"`
+
+	// Value The value of the stat.
+	Value *int `json:"value,omitempty"`
+}
+
+// StatsValue defines model for StatsValue.
+type StatsValue struct {
+	// ActivityId When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
+	ActivityId *int64 `json:"activityId"`
+
+	// Basic Basic stat value.
+	Basic *StatsValuePair `json:"basic,omitempty"`
+
+	// Pga Per game average for the statistic, if applicable
+	Pga *StatsValuePair `json:"pga,omitempty"`
+
+	// StatId Unique ID for this stat
+	StatId *string `json:"statId,omitempty"`
+
+	// Weighted Weighted value of the stat if a weight greater than 1 has been assigned.
+	Weighted *StatsValuePair `json:"weighted,omitempty"`
+}
+
+// StatsValuePair defines model for StatsValuePair.
+type StatsValuePair struct {
+	// DisplayValue Localized formatted version of the value.
+	DisplayValue *string `json:"displayValue,omitempty"`
+
+	// Value Raw value of the statistic
+	Value *float64 `json:"value,omitempty"`
+}
+
+// WeaponStats defines model for WeaponStats.
+type WeaponStats struct {
+	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+	ItemDetails *ItemDetails `json:"details,omitempty"`
+
+	// ReferenceId The hash ID of the item definition that describes the weapon.
+	ReferenceId *uint32 `json:"referenceId,omitempty"`
+
+	// Stats Collection of stats for the period.
+	Stats *map[string]StatsValue `json:"stats,omitempty"`
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+
+	// (GET /activities/{activityId}/weapons)
+	GetWeaponsForActivity(w http.ResponseWriter, r *http.Request, activityId string)
 
 	// (GET /ping)
 	GetPing(w http.ResponseWriter, r *http.Request)
@@ -25,6 +132,11 @@ type ServerInterface interface {
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
 
 type Unimplemented struct{}
+
+// (GET /activities/{activityId}/weapons)
+func (_ Unimplemented) GetWeaponsForActivity(w http.ResponseWriter, r *http.Request, activityId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
 
 // (GET /ping)
 func (_ Unimplemented) GetPing(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +151,31 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// GetWeaponsForActivity operation middleware
+func (siw *ServerInterfaceWrapper) GetWeaponsForActivity(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "activityId" -------------
+	var activityId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "activityId", chi.URLParam(r, "activityId"), &activityId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "activityId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWeaponsForActivity(w, r, activityId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetPing operation middleware
 func (siw *ServerInterfaceWrapper) GetPing(w http.ResponseWriter, r *http.Request) {
@@ -168,8 +305,133 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	}
 
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/activities/{activityId}/weapons", wrapper.GetWeaponsForActivity)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/ping", wrapper.GetPing)
 	})
 
 	return r
+}
+
+type GetWeaponsForActivityRequestObject struct {
+	ActivityId string `json:"activityId"`
+}
+
+type GetWeaponsForActivityResponseObject interface {
+	VisitGetWeaponsForActivityResponse(w http.ResponseWriter) error
+}
+
+type GetWeaponsForActivity200JSONResponse WeaponStats
+
+func (response GetWeaponsForActivity200JSONResponse) VisitGetWeaponsForActivityResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetPingRequestObject struct {
+}
+
+type GetPingResponseObject interface {
+	VisitGetPingResponse(w http.ResponseWriter) error
+}
+
+type GetPing200JSONResponse Pong
+
+func (response GetPing200JSONResponse) VisitGetPingResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+// StrictServerInterface represents all server handlers.
+type StrictServerInterface interface {
+
+	// (GET /activities/{activityId}/weapons)
+	GetWeaponsForActivity(ctx context.Context, request GetWeaponsForActivityRequestObject) (GetWeaponsForActivityResponseObject, error)
+
+	// (GET /ping)
+	GetPing(ctx context.Context, request GetPingRequestObject) (GetPingResponseObject, error)
+}
+
+type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
+type StrictMiddlewareFunc = strictnethttp.StrictHTTPMiddlewareFunc
+
+type StrictHTTPServerOptions struct {
+	RequestErrorHandlerFunc  func(w http.ResponseWriter, r *http.Request, err error)
+	ResponseErrorHandlerFunc func(w http.ResponseWriter, r *http.Request, err error)
+}
+
+func NewStrictHandler(ssi StrictServerInterface, middlewares []StrictMiddlewareFunc) ServerInterface {
+	return &strictHandler{ssi: ssi, middlewares: middlewares, options: StrictHTTPServerOptions{
+		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		},
+		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		},
+	}}
+}
+
+func NewStrictHandlerWithOptions(ssi StrictServerInterface, middlewares []StrictMiddlewareFunc, options StrictHTTPServerOptions) ServerInterface {
+	return &strictHandler{ssi: ssi, middlewares: middlewares, options: options}
+}
+
+type strictHandler struct {
+	ssi         StrictServerInterface
+	middlewares []StrictMiddlewareFunc
+	options     StrictHTTPServerOptions
+}
+
+// GetWeaponsForActivity operation middleware
+func (sh *strictHandler) GetWeaponsForActivity(w http.ResponseWriter, r *http.Request, activityId string) {
+	var request GetWeaponsForActivityRequestObject
+
+	request.ActivityId = activityId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWeaponsForActivity(ctx, request.(GetWeaponsForActivityRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWeaponsForActivity")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWeaponsForActivityResponseObject); ok {
+		if err := validResponse.VisitGetWeaponsForActivityResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPing operation middleware
+func (sh *strictHandler) GetPing(w http.ResponseWriter, r *http.Request) {
+	var request GetPingRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPing(ctx, request.(GetPingRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPing")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPingResponseObject); ok {
+		if err := validResponse.VisitGetPingResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
