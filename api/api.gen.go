@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/gin-gonic/gin"
@@ -23,12 +24,16 @@ import (
 
 // ActivityHistory defines model for ActivityHistory.
 type ActivityHistory struct {
+	Activity string `json:"activity"`
+
 	// ActivityHash Hash id of the type of activity: Strike, Competitive, QuickPlay, etc.
-	ActivityHash int64 `json:"activityHash"`
+	ActivityHash int64  `json:"activityHash"`
+	Description  string `json:"description"`
 
 	// InstanceId Id to get more details about the particular game
 	InstanceId string `json:"instanceId"`
 	IsPrivate  *bool  `json:"isPrivate,omitempty"`
+	Location   string `json:"location"`
 
 	// Mode Name of the Destiny Activity Mode
 	Mode        *string `json:"mode,omitempty"`
@@ -37,42 +42,98 @@ type ActivityHistory struct {
 
 // BaseItemInfo defines model for BaseItemInfo.
 type BaseItemInfo struct {
-	BucketHash *int    `json:"bucketHash,omitempty"`
-	InstanceId *string `json:"instanceId,omitempty"`
-	ItemHash   *int    `json:"itemHash,omitempty"`
-	Name       *string `json:"name,omitempty"`
+	BucketHash int64       `json:"bucketHash"`
+	Damage     *DamageInfo `json:"damage,omitempty"`
+	InstanceId string      `json:"instanceId"`
+	ItemHash   int64       `json:"itemHash"`
+	Name       string      `json:"name"`
 }
+
+// CharacterSnapshot defines model for CharacterSnapshot.
+type CharacterSnapshot struct {
+	// Items All items that we currently care about, Kinetic, Energy, Heavy and Class for now
+	Items []ItemSnapshot `json:"items"`
+
+	// Timestamp Timestamp that the items were equipped turning
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// Color defines model for Color.
+type Color struct {
+	Alpha int `json:"alpha"`
+	Blue  int `json:"blue"`
+	Green int `json:"green"`
+	Red   int `json:"red"`
+}
+
+// DamageInfo defines model for DamageInfo.
+type DamageInfo struct {
+	Color           Color  `json:"color"`
+	DamageIcon      string `json:"damageIcon"`
+	DamageType      string `json:"damageType"`
+	TransparentIcon string `json:"transparentIcon"`
+}
+
+// GunStat defines model for GunStat.
+type GunStat struct {
+	Description string `json:"description"`
+
+	// Hash The hash ID of the stat.
+	Hash int64  `json:"hash"`
+	Name string `json:"name"`
+
+	// Value The value of the stat.
+	Value int64 `json:"value"`
+}
+
+// HistoricalStats defines model for HistoricalStats.
+type HistoricalStats = []UniqueStatValue
 
 // ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
 type ItemDetails struct {
-	BaseInfo *BaseItemInfo `json:"baseInfo,omitempty"`
+	BaseInfo BaseItemInfo `json:"baseInfo"`
 
 	// CharacterId If the item is on a character, this will return the ID of the character that is holding the item.
 	CharacterId *string `json:"characterId"`
 
 	// Perks Information specifically about the perks currently active on the item. COMPONENT TYPE: ItemPerks
-	Perks *[]Perk `json:"perks,omitempty"`
+	Perks []Perk `json:"perks"`
 
 	// Sockets Information about the sockets of the item: which are currently active, what potential sockets you could have and the stats/abilities/perks you can gain from them. COMPONENT TYPE: ItemSockets
 	Sockets *[]Socket `json:"sockets,omitempty"`
 
 	// Stats Information about the computed stats of the item: power, defense, etc... COMPONENT TYPE: ItemStats
-	Stats *Stats `json:"stats,omitempty"`
+	Stats Stats `json:"stats"`
+}
+
+// ItemSnapshot defines model for ItemSnapshot.
+type ItemSnapshot struct {
+	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+	ItemDetails ItemDetails `json:"details"`
+
+	// InstanceId Specific instance id for the item
+	InstanceId string `json:"instanceId"`
+
+	// ItemHash Id used to find the definition of the item
+	ItemHash int64 `json:"itemHash"`
+
+	// Name Name of the particular item
+	Name string `json:"name"`
+
+	// Timestamp Time the data was grabbed
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // Perk defines model for Perk.
 type Perk struct {
+	Description *string `json:"description,omitempty"`
+
 	// Hash The hash ID of the perk
-	Hash *int `json:"hash,omitempty"`
+	Hash int64 `json:"hash"`
 
 	// IconPath link to icon
 	IconPath *string `json:"iconPath,omitempty"`
-
-	// IsActive Whether the perk is active or not.
-	IsActive *bool `json:"isActive,omitempty"`
-
-	// Visible Whether the perk is visible or not.
-	Visible *bool `json:"visible,omitempty"`
+	Name     string  `json:"name"`
 }
 
 // Pong defines model for Pong.
@@ -82,42 +143,22 @@ type Pong struct {
 
 // Socket defines model for Socket.
 type Socket struct {
+	Description string  `json:"description"`
+	Icon        *string `json:"icon,omitempty"`
+
 	// IsEnabled Whether the socket plug is enabled or not.
 	IsEnabled *bool `json:"isEnabled,omitempty"`
 
 	// IsVisible Whether the socket plug is visible or not.
-	IsVisible *bool `json:"isVisible,omitempty"`
+	IsVisible *bool  `json:"isVisible,omitempty"`
+	Name      string `json:"name"`
 
 	// PlugHash The hash ID of the socket plug.
-	PlugHash *int `json:"plugHash,omitempty"`
+	PlugHash int `json:"plugHash"`
 }
 
 // Stats defines model for Stats.
-type Stats map[string]struct {
-	// StatHash The hash ID of the stat.
-	StatHash *int `json:"statHash,omitempty"`
-
-	// Value The value of the stat.
-	Value *int `json:"value,omitempty"`
-}
-
-// StatsValue defines model for StatsValue.
-type StatsValue struct {
-	// ActivityId When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
-	ActivityId *int64 `json:"activityId"`
-
-	// Basic Basic stat value.
-	Basic *StatsValuePair `json:"basic,omitempty"`
-
-	// Pga Per game average for the statistic, if applicable
-	Pga *StatsValuePair `json:"pga,omitempty"`
-
-	// StatId Unique ID for this stat
-	StatId *string `json:"statId,omitempty"`
-
-	// Weighted Weighted value of the stat if a weight greater than 1 has been assigned.
-	Weighted *StatsValuePair `json:"weighted,omitempty"`
-}
+type Stats map[string]GunStat
 
 // StatsValuePair defines model for StatsValuePair.
 type StatsValuePair struct {
@@ -128,20 +169,40 @@ type StatsValuePair struct {
 	Value *float64 `json:"value,omitempty"`
 }
 
+// UniqueStatValue defines model for UniqueStatValue.
+type UniqueStatValue struct {
+	// ActivityId When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
+	ActivityId *int64 `json:"activityId"`
+
+	// Basic Basic stat value.
+	Basic StatsValuePair `json:"basic"`
+	Name  string         `json:"name"`
+
+	// Pga Per game average for the statistic, if applicable
+	Pga *StatsValuePair `json:"pga,omitempty"`
+
+	// Weighted Weighted value of the stat if a weight greater than 1 has been assigned.
+	Weighted *StatsValuePair `json:"weighted,omitempty"`
+}
+
 // WeaponStats defines model for WeaponStats.
 type WeaponStats struct {
 	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
 	ItemDetails *ItemDetails `json:"details,omitempty"`
 
 	// ReferenceId The hash ID of the item definition that describes the weapon.
-	ReferenceId *uint32 `json:"referenceId,omitempty"`
-
-	// Stats Collection of stats for the period.
-	Stats *map[string]StatsValue `json:"stats,omitempty"`
+	ReferenceId *int64           `json:"referenceId,omitempty"`
+	Stats       *HistoricalStats `json:"stats,omitempty"`
 }
 
 // GetActivitiesParams defines parameters for GetActivities.
 type GetActivitiesParams struct {
+	Count int64 `form:"count" json:"count"`
+	Page  int64 `form:"page" json:"page"`
+}
+
+// GetSnapshotsParams defines parameters for GetSnapshots.
+type GetSnapshotsParams struct {
 	Count int64 `form:"count" json:"count"`
 	Page  int64 `form:"page" json:"page"`
 }
@@ -157,6 +218,12 @@ type ServerInterface interface {
 
 	// (GET /ping)
 	GetPing(c *gin.Context)
+
+	// (GET /snapshots)
+	GetSnapshots(c *gin.Context, params GetSnapshotsParams)
+
+	// (POST /snapshots)
+	CreateSnapshot(c *gin.Context)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -253,6 +320,67 @@ func (siw *ServerInterfaceWrapper) GetPing(c *gin.Context) {
 	siw.Handler.GetPing(c)
 }
 
+// GetSnapshots operation middleware
+func (siw *ServerInterfaceWrapper) GetSnapshots(c *gin.Context) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSnapshotsParams
+
+	// ------------- Required query parameter "count" -------------
+
+	if paramValue := c.Query("count"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument count is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "count", c.Request.URL.Query(), &params.Count)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter count: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "page" -------------
+
+	if paramValue := c.Query("page"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument page is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "page", c.Request.URL.Query(), &params.Page)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSnapshots(c, params)
+}
+
+// CreateSnapshot operation middleware
+func (siw *ServerInterfaceWrapper) CreateSnapshot(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateSnapshot(c)
+}
+
 // GinServerOptions provides options for the Gin server.
 type GinServerOptions struct {
 	BaseURL      string
@@ -283,6 +411,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/activities", wrapper.GetActivities)
 	router.GET(options.BaseURL+"/activities/:activityId", wrapper.GetActivity)
 	router.GET(options.BaseURL+"/ping", wrapper.GetPing)
+	router.GET(options.BaseURL+"/snapshots", wrapper.GetSnapshots)
+	router.POST(options.BaseURL+"/snapshots", wrapper.CreateSnapshot)
 }
 
 type GetActivitiesRequestObject struct {
@@ -338,6 +468,39 @@ func (response GetPing200JSONResponse) VisitGetPingResponse(w http.ResponseWrite
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetSnapshotsRequestObject struct {
+	Params GetSnapshotsParams
+}
+
+type GetSnapshotsResponseObject interface {
+	VisitGetSnapshotsResponse(w http.ResponseWriter) error
+}
+
+type GetSnapshots200JSONResponse []CharacterSnapshot
+
+func (response GetSnapshots200JSONResponse) VisitGetSnapshotsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSnapshotRequestObject struct {
+}
+
+type CreateSnapshotResponseObject interface {
+	VisitCreateSnapshotResponse(w http.ResponseWriter) error
+}
+
+type CreateSnapshot201JSONResponse CharacterSnapshot
+
+func (response CreateSnapshot201JSONResponse) VisitCreateSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
@@ -349,6 +512,12 @@ type StrictServerInterface interface {
 
 	// (GET /ping)
 	GetPing(ctx context.Context, request GetPingRequestObject) (GetPingResponseObject, error)
+
+	// (GET /snapshots)
+	GetSnapshots(ctx context.Context, request GetSnapshotsRequestObject) (GetSnapshotsResponseObject, error)
+
+	// (POST /snapshots)
+	CreateSnapshot(ctx context.Context, request CreateSnapshotRequestObject) (CreateSnapshotResponseObject, error)
 }
 
 type StrictHandlerFunc = strictgin.StrictGinHandlerFunc
@@ -442,37 +611,96 @@ func (sh *strictHandler) GetPing(ctx *gin.Context) {
 	}
 }
 
+// GetSnapshots operation middleware
+func (sh *strictHandler) GetSnapshots(ctx *gin.Context, params GetSnapshotsParams) {
+	var request GetSnapshotsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSnapshots(ctx, request.(GetSnapshotsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSnapshots")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetSnapshotsResponseObject); ok {
+		if err := validResponse.VisitGetSnapshotsResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSnapshot operation middleware
+func (sh *strictHandler) CreateSnapshot(ctx *gin.Context) {
+	var request CreateSnapshotRequestObject
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSnapshot(ctx, request.(CreateSnapshotRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSnapshot")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(CreateSnapshotResponseObject); ok {
+		if err := validResponse.VisitCreateSnapshotResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"AAD//8NPCT24FQAA",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

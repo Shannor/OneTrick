@@ -8,14 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
-	"oneTrick/services"
+	"oneTrick/services/destiny"
 )
 
 const primaryMembershipId = 4611686018434106050
 
 func main() {
-	destinyService := services.NewDestinyService()
-	server := api.NewServer(destinyService)
+	destinyService := destiny.NewService()
+	server := NewServer(destinyService)
 
 	// Load OpenAPI spec file
 	swagger, err := api.GetSwagger()
@@ -35,23 +35,7 @@ func main() {
 		c.File("./api/openapi.yaml")
 	})
 
-	// TODO: Convert to a POST method in openapi spec
-	r.GET("/profile", func(c *gin.Context) {
-		items, timestamp, err := destinyService.GetUserSnapshot(primaryMembershipId)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch profile data"})
-			return
-		}
-
-		err = destinyService.WriteToFile(items, timestamp)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save profile data"})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"message": "Profile data saved successfully!"})
-	})
 	r.Use(ginmiddleware.OapiRequestValidator(swagger))
-
 	h := api.NewStrictHandler(server, nil)
 	api.RegisterHandlers(r, h)
 

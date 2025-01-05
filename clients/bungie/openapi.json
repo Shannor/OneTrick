@@ -36620,6 +36620,7 @@
       },
       "Destiny.Entities.Items.DestinyItemInstanceComponent": {
         "type": "object",
+        "x-go-name": "ItemInstanceComponent",
         "properties": {
           "damageType": {
             "type": "integer",

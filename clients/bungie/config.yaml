@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/HEAD/configuration-schema.json
-package: destiny
+package: bungie
 output: client.gen.go
 compatibility:
   always-prefix-enum-values: true

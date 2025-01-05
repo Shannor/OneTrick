@@ -15,6 +15,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Pong'
+  /snapshots:
+    post:
+      operationId: CreateSnapshot
+      description: "Creates a new snapshot in the system and returns a list of "
+      responses:
+        201:
+          description: "Return the created snapshot"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CharacterSnapshot"
+    get:
+      operationId: GetSnapshots
+      description: "Returns a list of snapshots in the system"
+      parameters:
+        - name: count
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: page
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        200:
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CharacterSnapshot"
+
   /activities:
     get:
       parameters:
@@ -40,31 +77,6 @@ paths:
                 type: array
                 items:
                  $ref: "#/components/schemas/ActivityHistory"
-                 /activities:
-                   get:
-                     parameters:
-                       - name: count
-                         in: query
-                         required: true
-                         schema:
-                           type: integer
-                           format: int64
-                       - name: page
-                         in: query
-                         required: true
-                         schema:
-                           type: integer
-                           format: int64
-                     operationId: GetActivities
-                     responses:
-                       200:
-                         description: "List of Activities that have past"
-                         content:
-                           application/json:
-                             schema:
-                               type: array
-                               items:
-                                 $ref: "#/components/schemas/ActivityHistory"
   /activities/{activityId}:
     get:
       operationId: GetActivity
@@ -95,13 +107,63 @@ paths:
 
 components:
   schemas:
+    CharacterSnapshot:
+      type: object
+      required:
+        - items
+        - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: "Timestamp that the items were equipped turning"
+        items:
+          description: "All items that we currently care about, Kinetic, Energy, Heavy and Class for now"
+          type: array
+          items:
+            $ref: "#/components/schemas/ItemSnapshot"
+    ItemSnapshot:
+      type: object
+      required:
+        - timestamp
+        - details
+        - instanceId
+        - itemHash
+        - name
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: "Time the data was grabbed"
+        instanceId:
+          type: string
+          description: "Specific instance id for the item"
+        name:
+          type: string
+          description: "Name of the particular item"
+        itemHash:
+          type: integer
+          description: "Id used to find the definition of the item"
+          format: int64
+        details:
+          $ref: "#/components/schemas/ItemDetails"
+
     ActivityHistory:
      type: object
      required:
        - referenceId
        - activityHash
        - instanceId
+       - location
+       - description
+       - activity
      properties:
+       location:
+         type: string
+       activity:
+        type: string
+       description:
+         type: string
        referenceId:
          type: integer
          format: int64
@@ -132,22 +194,23 @@ components:
         referenceId:
           type: integer
           description: The hash ID of the item definition that describes the weapon.
-          format: uint32
+          format: int64
         details:
           $ref: "#/components/schemas/ItemDetails"
         stats:
-          type: object
-          additionalProperties:
-            $ref: "#/components/schemas/StatsValue"
-          description: Collection of stats for the period.
-          x-dictionary-key:
-            type: string
-    StatsValue:
+          $ref: "#/components/schemas/HistoricalStats"
+    HistoricalStats:
+      type: array
+      items:
+        $ref: "#/components/schemas/UniqueStatValue"
+    UniqueStatValue:
       type: object
+      required:
+        - name
+        - basic
       properties:
-        statId:
+        name:
           type: string
-          description: Unique ID for this stat
         basic:
           type: object
           allOf:
@@ -183,32 +246,53 @@ components:
           description: Localized formatted version of the value.
     Perk:
       type: object
+      required:
+        - name
+        - hash
       properties:
+        name:
+          type: string
+        description:
+          type: string
         hash:
           type: integer
           description: The hash ID of the perk
+          format: int64
         iconPath:
           type: string
           description: "link to icon"
-        isActive:
-          type: boolean
-          description: Whether the perk is active or not.
-        visible:
-          type: boolean
-          description: Whether the perk is visible or not.
     Stats:
       type: object
       additionalProperties:
-        type: object
-        properties:
-          statHash:
-            type: integer
-            description: The hash ID of the stat.
-          value:
-            type: integer
-            description: The value of the stat.
+        $ref: "#/components/schemas/GunStat"
+      x-dictionary-key:
+        type: string
+    GunStat:
+      type: object
+      required:
+        - name
+        - hash
+        - value
+        - description
+      properties:
+        hash:
+          type: integer
+          description: The hash ID of the stat.
+          format: int64
+        value:
+          type: integer
+          description: The value of the stat.
+          format: int64
+        name:
+          type: string
+        description:
+          type: string
     Socket:
       type: object
+      required:
+        - plugHash
+        - name
+        - description
       properties:
         plugHash:
           type: integer
@@ -219,20 +303,76 @@ components:
         isVisible:
           type: boolean
           description: Whether the socket plug is visible or not.
+        name:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
     BaseItemInfo:
       type: object
+      required:
+        - name
+        - itemHash
+        - instanceId
+        - bucketHash
       properties:
         name:
           type: string
         itemHash:
           type: integer
+          format: int64
         instanceId:
           type: string
         bucketHash:
           type: integer
+          format: int64
+        damage:
+          $ref: "#/components/schemas/DamageInfo"
+    DamageInfo:
+      type: object
+      required:
+        - damageType
+        - damageIcon
+        - transparentIcon
+        - color
+      properties:
+        damageType:
+          type: string
+        damageIcon:
+          type: string
+        transparentIcon:
+          type: string
+        color:
+          $ref: "#/components/schemas/Color"
+    Color:
+      type: object
+      required:
+        - red
+        - green
+        - blue
+        - alpha
+      properties:
+        red:
+          type: integer
+          format: int
+        green:
+          type: integer
+          format: int
+        blue:
+          type: integer
+          format: int
+        alpha:
+          type: integer
+          format: int
+
     ItemDetails:
       type: object
       x-go-name: ItemDetails
+      required:
+        - perks
+        - stats
+        - baseInfo
       properties:
         characterId:
           type: string

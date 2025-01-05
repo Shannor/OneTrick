@@ -29,6 +29,15 @@ Steps of actions:
 Notes:
 - Need to add auto generating for enpoints https://github.com/Bungie-net/api/blob/master/openapi.json
 - https://github.com/oapi-codegen/oapi-codegen?tab=readme-ov-file#generating-api-clients
+- Could keep track of loadouts & what items are currently being held in general.
+  - Top: Equipped Items
+  - Second: On hand/ In immediate inventory
+  - Last: Saved as a Loadout
+- Need an idea of a "session" where we save the above information for reference during the playtime. 
+  - Could ask the user "what kind of session is it?" to help with how often we need to poll during games. 
+    - If trying out multiple guns and classes poll more often.
+    - If trying out just guns a little less
+    - If trying out between two or three guns with different rolls, do the least amount
 
 
 
@@ -37,8 +46,8 @@ Notes:
 
 What to build for the simplest idea. 
 1. Get my OAuth Token.
-2. Run Go server locally
+2. ~~Run Go server locally~~
 3. Add a cron job that will check every 2 minutes. 
-4. Pull down the data and store it in memory/write to disk maybe
-5. See if the data is useful and the logic worked correctly.
-6. Then try to see the data somehow in UI.
+4. ~~Pull down the data and store it in memory/write to disk maybe~~
+5. ~~See if the data is useful and the logic worked correctly.~~
+6. ~~Then try to see the data somehow in UI.~~

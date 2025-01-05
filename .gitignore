@@ -37,3 +37,4 @@ go.work.sum
 *.ipr
 
 profile_data.json
+manifest.json
