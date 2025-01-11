@@ -1,7 +1,6 @@
 package destiny
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,7 +9,6 @@ import (
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/clients/storage"
 	"oneTrick/utils"
 	"os"
 	"strconv"
@@ -72,27 +70,27 @@ func NewService() Service {
 		log.Fatal(err)
 	}
 	var manifest Manifest
-	var buf bytes.Buffer
-	err = storage.DownloadFile(&buf, destinyBucket, objectName, manifestLocation)
-	if err != nil {
-		log.Println("Failed to download manifest.json file:", err)
-		return nil
-	}
-	manifestFile, err := os.Open(manifestLocation)
-	if err != nil {
-		slog.Error("failed to open manifest.json file:", err)
-		log.Fatal(err)
-	}
-
-	if err := json.NewDecoder(manifestFile).Decode(&manifest); err != nil {
-		slog.Error("failed to parse manifest.json file:", err)
-		log.Fatal(err)
-	}
-
-	err = manifestFile.Close()
-	if err != nil {
-		slog.Warn("failed to close manifest.json file:", err)
-	}
+	//var buf bytes.Buffer
+	//err = storage.DownloadFile(&buf, destinyBucket, objectName, manifestLocation)
+	//if err != nil {
+	//	log.Println("Failed to download manifest.json file:", err)
+	//	return nil
+	//}
+	//manifestFile, err := os.Open(manifestLocation)
+	//if err != nil {
+	//	slog.Error("failed to open manifest.json file:", err)
+	//	log.Fatal(err)
+	//}
+	//
+	//if err := json.NewDecoder(manifestFile).Decode(&manifest); err != nil {
+	//	slog.Error("failed to parse manifest.json file:", err)
+	//	log.Fatal(err)
+	//}
+	//
+	//err = manifestFile.Close()
+	//if err != nil {
+	//	slog.Warn("failed to close manifest.json file:", err)
+	//}
 
 	return &service{
 		client:   cli,
