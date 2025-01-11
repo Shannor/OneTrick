@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/oapi-codegen/gin-middleware"
@@ -8,15 +9,18 @@ import (
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
+	"oneTrick/clients/gcp"
 	"oneTrick/services/destiny"
 )
 
 const primaryMembershipId = 4611686018434106050
 
 func main() {
-	destinyService := destiny.NewService()
+	firestore := gcp.CreateFirestore(context.Background())
+	destinyService := destiny.NewService(firestore)
 	server := NewServer(destinyService)
 
+	defer firestore.Close()
 	// Load OpenAPI spec file
 	swagger, err := api.GetSwagger()
 	if err != nil {

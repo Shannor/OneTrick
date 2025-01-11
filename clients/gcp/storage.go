@@ -1,9 +1,10 @@
-package storage
+package gcp
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -41,8 +42,7 @@ func DownloadFile(w io.Writer, bucketName, objectName string, destFileName strin
 		return fmt.Errorf("f.Close: %w", err)
 	}
 
-	fmt.Fprintf(w, "Blob %v downloaded to local file %v\n", objectName, destFileName)
-
+	slog.Debug("Blob downloaded successfully", "objectName", objectName, "destFileName", destFileName)
 	return nil
 
 }

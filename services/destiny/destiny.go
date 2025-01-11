@@ -1,6 +1,7 @@
 package destiny
 
 import (
+	"cloud.google.com/go/firestore"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,6 +46,7 @@ type Service interface {
 type service struct {
 	client   *bungie.ClientWithResponses
 	Manifest Manifest
+	DB       *firestore.Client
 }
 
 const manifestLocation = "./manifest.json"
@@ -52,7 +54,7 @@ const accessToken = "CPjuBhKGAgAgPaFF75otR0QMEd5aiJ9/Zwm9DEam9oZfHluU556o3mbgAAA
 const destinyBucket = "destiny"
 const objectName = "manifest.json"
 
-func NewService() Service {
+func NewService(firestore *firestore.Client) Service {
 	hc := http.Client{}
 	cli, err := bungie.NewClientWithResponses(
 		"https://www.bungie.net/Platform",
@@ -95,6 +97,7 @@ func NewService() Service {
 	return &service{
 		client:   cli,
 		Manifest: manifest,
+		DB:       firestore,
 	}
 }
 
