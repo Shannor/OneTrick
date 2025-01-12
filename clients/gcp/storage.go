@@ -20,7 +20,7 @@ func DownloadFile(w io.Writer, bucketName, objectName string, destFileName strin
 	}
 	defer client.Close()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*60*2)
 	defer cancel()
 
 	f, err := os.Create(destFileName)
