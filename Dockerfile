@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.22
+# Use the offical golang image to create a binary.
+# This is based on Debian and sets the GOPATH to /go.
+# https://hub.docker.com/_/golang
+FROM golang:1.22-bookworm as builder
+
 
 # Set destination for COPY
 WORKDIR /app
@@ -9,19 +13,21 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the source code. Note the slash at the end, as explained in
-# https://docs.docker.com/reference/dockerfile/#copy
-COPY *.go ./
+COPY . ./
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux go build -o /onetrick
+RUN go build -v -o server
 
-# Optional:
-# To bind to a TCP port, runtime parameters must be supplied to the docker command.
-# But we can document in the Dockerfile what ports
-# the application is going to listen on by default.
-# https://docs.docker.com/reference/dockerfile/#expose
+# Use the official Debian slim image for a lean production container.
+# https://hub.docker.com/_/debian
+# https://docs.docker.com/develop/develop-images/multistage-build/#use-multi-stage-builds
+FROM debian:bookworm-slim
+RUN set -x && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy the binary to the production image from the builder stage.
+COPY --from=builder /app/server /app/server
 EXPOSE 8080
-
-# Run
-CMD ["/onetrick"]
+# Run the web service on container startup.
+CMD ["/app/server"]
