@@ -41,11 +41,12 @@ type Service interface {
 	GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error)
 	GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error)
 	EnrichWeaponStats(ctx context.Context, primaryMembershipId string, items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
+	SetManifest(manifest *Manifest)
 }
 
 type service struct {
 	client   *bungie.ClientWithResponses
-	Manifest Manifest
+	Manifest *Manifest
 	DB       *firestore.Client
 }
 
@@ -71,34 +72,16 @@ func NewService(firestore *firestore.Client) Service {
 	if err != nil {
 		log.Fatal(err)
 	}
-	var manifest Manifest
-	//var buf bytes.Buffer
-	//err = storage.DownloadFile(&buf, destinyBucket, objectName, manifestLocation)
-	//if err != nil {
-	//	log.Println("Failed to download manifest.json file:", err)
-	//	return nil
-	//}
-	//manifestFile, err := os.Open(manifestLocation)
-	//if err != nil {
-	//	slog.Error("failed to open manifest.json file:", err)
-	//	log.Fatal(err)
-	//}
-	//
-	//if err := json.NewDecoder(manifestFile).Decode(&manifest); err != nil {
-	//	slog.Error("failed to parse manifest.json file:", err)
-	//	log.Fatal(err)
-	//}
-	//
-	//err = manifestFile.Close()
-	//if err != nil {
-	//	slog.Warn("failed to close manifest.json file:", err)
-	//}
-
 	return &service{
 		client:   cli,
-		Manifest: manifest,
+		Manifest: nil,
 		DB:       firestore,
 	}
+}
+
+func (a *service) SetManifest(manifest *Manifest) {
+	a.Manifest = manifest
+	slog.Info("Manifest set")
 }
 
 func (a *service) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error) {
@@ -134,7 +117,10 @@ func getActivity(a *service, membershipID, characterID int64, count int64, mode 
 	if resp.JSON200.Response.Activities == nil {
 		return nil, nil
 	}
-	return TransformPeriodGroups(*resp.JSON200.Response.Activities, a.Manifest), nil
+	if a.Manifest == nil {
+		return nil, fmt.Errorf("manifest is not provided")
+	}
+	return TransformPeriodGroups(*resp.JSON200.Response.Activities, *a.Manifest), nil
 }
 
 const profileFile = "profile_data.json"
@@ -222,7 +208,10 @@ func (a *service) GetActivity(ctx context.Context, characterID string, activityI
 	if weapons == nil {
 		return nil, nil, nil, fmt.Errorf("no data found for characterID: %s", characterID)
 	}
-	return TransformHistoricActivity(data.ActivityDetails, a.Manifest), weapons, data.Period, nil
+	if a.Manifest == nil {
+		return nil, nil, nil, fmt.Errorf("manifest is not provided")
+	}
+	return TransformHistoricActivity(data.ActivityDetails, *a.Manifest), weapons, data.Period, nil
 }
 
 func (a *service) GetClosestSnapshot(membershipID int64, activityPeriod *time.Time) (*api.CharacterSnapshot, error) {
@@ -303,7 +292,10 @@ func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, wea
 	if response.JSON200.DestinyItem == nil {
 		return nil, nil
 	}
-	return TransformItemToDetails(response.JSON200.DestinyItem, a.Manifest), nil
+	if a.Manifest == nil {
+		return nil, fmt.Errorf("manifest is not provided")
+	}
+	return TransformItemToDetails(response.JSON200.DestinyItem, *a.Manifest), nil
 }
 func (a *service) GetCurrentInventory(membershipId int64) ([]bungie.ItemComponent, *time.Time, error) {
 	var components []int32
