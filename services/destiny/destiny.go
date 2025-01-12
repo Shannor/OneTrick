@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/clients/gcp"
+	"oneTrick/envvars"
 	"oneTrick/utils"
 	"os"
 	"strconv"
@@ -38,7 +40,6 @@ type Service interface {
 	GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error)
 	GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error)
 	EnrichWeaponStats(ctx context.Context, primaryMembershipId string, items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
-	SetManifest(manifest *Manifest)
 }
 
 type service struct {
@@ -66,16 +67,81 @@ func NewService(apiKey string, firestore *firestore.Client) Service {
 	if err != nil {
 		log.Fatal(err)
 	}
+	manifest, err := getManifest()
+	if err != nil {
+		slog.With("error", err.Error()).Error("Failed to get manifest")
+	}
+	slog.Info("Manifest loaded")
 	return &service{
 		client:   cli,
-		Manifest: nil,
+		Manifest: manifest,
 		DB:       firestore,
 	}
 }
 
-func (a *service) SetManifest(manifest *Manifest) {
-	a.Manifest = manifest
-	slog.Info("Manifest set")
+const mntLocation = "mnt/destiny/manifest.json"
+const manifestLocation = "./manifest.json"
+const destinyBucket = "destiny"
+const objectName = "manifest.json"
+
+func getManifest() (*Manifest, error) {
+	var (
+		manifest = &Manifest{}
+	)
+
+	env := envvars.GetEvn()
+	if env.Environment == "production" {
+		slog.Info("Attempting to set manifest.json file for production environment")
+		stat, err := os.Stat(mntLocation)
+		if err != nil {
+			slog.With("error", err.Error()).Error("File does not exist at specified location")
+			return nil, err
+		}
+		if stat.IsDir() {
+			slog.With("error", "path is a directory").Error("Invalid file path")
+			return nil, fmt.Errorf("path is a directory")
+		}
+		file, err := os.Open(mntLocation)
+		if err != nil {
+			slog.With("error", err.Error()).Error("Failed to open file")
+			return nil, err
+		}
+		if err := json.NewDecoder(file).Decode(&manifest); err != nil {
+			slog.With("error", err.Error()).Error("failed to parse manifest.json file:", err)
+			return nil, err
+		}
+
+		err = file.Close()
+		if err != nil {
+			slog.Warn("failed to close manifest.json file:", err)
+		}
+		defer file.Close()
+		return manifest, nil
+	}
+
+	slog.Info("Attempting to set manifest.json file for dev environment")
+	err := gcp.DownloadFile(destinyBucket, objectName, manifestLocation)
+	if err != nil {
+		slog.With("error", err.Error()).Error("Failed to download manifest.json file")
+		return nil, err
+	}
+	manifestFile, err := os.Open(manifestLocation)
+	if err != nil {
+		slog.With("error", err.Error()).Error("failed to open manifest.json file")
+		return nil, err
+	}
+
+	if err := json.NewDecoder(manifestFile).Decode(&manifest); err != nil {
+		slog.With("error", err.Error()).Error("failed to parse manifest.json file:", err)
+		return nil, err
+	}
+
+	err = manifestFile.Close()
+	if err != nil {
+		slog.Warn("failed to close manifest.json file:", err)
+	}
+
+	return manifest, nil
 }
 
 func (a *service) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error) {

@@ -11,8 +11,8 @@ import (
 	"cloud.google.com/go/storage"
 )
 
-// DownloadFile downloads an object to a file.
-func DownloadFile(w io.Writer, bucketName, objectName string, destFileName string) error {
+// DownloadFile downloads an object to a local file destination on the machine.
+func DownloadFile(bucketName, objectName, destFileName string) error {
 	ctx := context.Background()
 	client, err := storage.NewClient(ctx)
 	if err != nil {
@@ -20,13 +20,15 @@ func DownloadFile(w io.Writer, bucketName, objectName string, destFileName strin
 	}
 	defer client.Close()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*60*2)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
 	defer cancel()
 
+	slog.Debug("Downloading blob", "objectName", objectName, "destFileName", destFileName)
 	f, err := os.Create(destFileName)
 	if err != nil {
 		return fmt.Errorf("os.Create: %w", err)
 	}
+	slog.Debug("Created file", "objectName", objectName, "destFileName", destFileName)
 
 	rc, err := client.Bucket(bucketName).Object(objectName).NewReader(ctx)
 	if err != nil {

@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/oapi-codegen/gin-middleware"
@@ -15,7 +12,6 @@ import (
 	"oneTrick/clients/gcp"
 	"oneTrick/envvars"
 	"oneTrick/services/destiny"
-	"os"
 )
 
 const primaryMembershipId = 4611686018434106050
@@ -26,13 +22,6 @@ func main() {
 	firestore := gcp.CreateFirestore(context.Background())
 	destinyService := destiny.NewService(env.ApiKey, firestore)
 	server := NewServer(destinyService)
-
-	go func() {
-		err := setManifest(destinyService)
-		if err != nil {
-			slog.With("error", err.Error()).Error("failed to set manifest")
-		}
-	}()
 
 	defer firestore.Close()
 	// Load OpenAPI spec file
@@ -67,37 +56,4 @@ func main() {
 
 	slog.Info("Starting HTTP server on port 8080")
 	log.Fatal(s.ListenAndServe())
-}
-
-const manifestLocation = "./manifest.json"
-const destinyBucket = "destiny"
-const objectName = "manifest.json"
-
-func setManifest(service destiny.Service) error {
-	var (
-		buf      bytes.Buffer
-		manifest destiny.Manifest
-	)
-	err := gcp.DownloadFile(&buf, destinyBucket, objectName, manifestLocation)
-	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to download manifest.json file")
-		return fmt.Errorf("failed to download manifest.json file: %w", err)
-	}
-	manifestFile, err := os.Open(manifestLocation)
-	if err != nil {
-		slog.With("error", err.Error()).Error("failed to open manifest.json file")
-		return err
-	}
-
-	if err := json.NewDecoder(manifestFile).Decode(&manifest); err != nil {
-		slog.With("error", err.Error()).Error("failed to parse manifest.json file:", err)
-		return err
-	}
-
-	err = manifestFile.Close()
-	if err != nil {
-		slog.Warn("failed to close manifest.json file:", err)
-	}
-	service.SetManifest(&manifest)
-	return nil
 }
