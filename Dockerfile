@@ -1,33 +1,27 @@
+# syntax=docker/dockerfile:1
 
-# Use the official Golang image to create a build stage
-FROM golang:1.22 AS builder
+FROM golang:1.22
 
-# Set the working directory inside the container
+# Set destination for COPY
 WORKDIR /app
 
-# Copy go.mod and go.sum files first to leverage Docker layer caching
+# Download Go modules
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
-# Copy the rest of the application source code
-COPY . .
+# Copy the source code. Note the slash at the end, as explained in
+# https://docs.docker.com/reference/dockerfile/#copy
+COPY *.go ./
 
-# Build the Go application
-RUN go build -o main .
+# Build
+RUN CGO_ENABLED=0 GOOS=linux go build -o /onetrick
 
-# Use a minimal base image for production
-FROM debian:bullseye-slim
-
-# Set the working directory inside the container
-WORKDIR /app
-
-# Copy the compiled binary from the build stage
-COPY --from=builder /app/main .
-
-# Expose the application port (update if necessary)
+# Optional:
+# To bind to a TCP port, runtime parameters must be supplied to the docker command.
+# But we can document in the Dockerfile what ports
+# the application is going to listen on by default.
+# https://docs.docker.com/reference/dockerfile/#expose
 EXPOSE 8080
 
-# Set the default command to run the application
-CMD ["./main"]
+# Run
+CMD ["/onetrick"]
