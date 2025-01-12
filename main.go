@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/gcp"
+	"oneTrick/envvars"
 	"oneTrick/services/destiny"
 	"os"
 )
@@ -20,9 +21,10 @@ import (
 const primaryMembershipId = 4611686018434106050
 
 func main() {
-	apiKey := os.Getenv("D2_API_KEY")
+	env := envvars.GetEvn()
+
 	firestore := gcp.CreateFirestore(context.Background())
-	destinyService := destiny.NewService(apiKey, firestore)
+	destinyService := destiny.NewService(env.ApiKey, firestore)
 	server := NewServer(destinyService)
 
 	go func() {
@@ -46,6 +48,10 @@ func main() {
 	r := gin.Default()
 	r.Use(cors.Default())
 
+	if env.Environment == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	r.GET("/openapi", func(c *gin.Context) {
 		c.Header("Content-Type", "application/x-yaml")
 		c.File("./api/openapi.yaml")
@@ -54,7 +60,6 @@ func main() {
 	r.Use(ginmiddleware.OapiRequestValidator(swagger))
 	h := api.NewStrictHandler(server, nil)
 	api.RegisterHandlers(r, h)
-
 	s := &http.Server{
 		Handler: r,
 		Addr:    "0.0.0.0:8080",
