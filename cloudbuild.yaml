@@ -1,5 +1,6 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'gcr.io/gruntt-destiny/github.com/shannor/onetrick', '.']
+images: ['gcr.io/gruntt-destiny/github.com/shannor/onetrick']
 options:
   logging: CLOUD_LOGGING_ONLY
