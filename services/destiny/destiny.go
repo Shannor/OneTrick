@@ -16,10 +16,7 @@ import (
 	"time"
 )
 
-const apiKey = "e3a8403b8e274b438735bc9de80cd1db"
-const searchUserPOST = "/User/Search/GlobalName/{page}/"
 const characterID = "2305843009261519028"
-const membershipId = "7274114"
 
 // Reference ID == ItemHash
 const referenceID = "882778888"
@@ -50,12 +47,9 @@ type service struct {
 	DB       *firestore.Client
 }
 
-const manifestLocation = "./manifest.json"
 const accessToken = "CPjuBhKGAgAgPaFF75otR0QMEd5aiJ9/Zwm9DEam9oZfHluU556o3mbgAAAACMiTGscENoFDeffOB30j3GhPHUhp1ZbXJsdzjOFhGLw8HFA7triZ5s0wx965nNXdn3IDxjBjxjd65Xg+2b6yM0cgRzQAnIhPy/uvq/oBT2s9lIkPKripHs5yCOmSbZXnOHLCOr0ZvN1Dx3aWBtXDd8bgZEJrAfmnTHnBsZhTWmHMLT6A8CoNJJHJiRLgAI0EsGcbYZDTAZzt+OVur1CLS+/F/yQnhNwKzP1cmVHnu02Zq2meNcQQazkxNUPEwFcxPRycTMXEHNQH0T0pbGvX0Q3FJe9OuNLS+5VyCvJPdpo="
-const destinyBucket = "destiny"
-const objectName = "manifest.json"
 
-func NewService(firestore *firestore.Client) Service {
+func NewService(apiKey string, firestore *firestore.Client) Service {
 	hc := http.Client{}
 	cli, err := bungie.NewClientWithResponses(
 		"https://www.bungie.net/Platform",

@@ -20,8 +20,9 @@ import (
 const primaryMembershipId = 4611686018434106050
 
 func main() {
+	apiKey := os.Getenv("D2_API_KEY")
 	firestore := gcp.CreateFirestore(context.Background())
-	destinyService := destiny.NewService(firestore)
+	destinyService := destiny.NewService(apiKey, firestore)
 	server := NewServer(destinyService)
 
 	go func() {
