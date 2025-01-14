@@ -366,3 +366,12 @@ type DamageColor struct {
 	Blue  int `json:"blue"`
 	Alpha int `json:"alpha"`
 }
+
+type AuthResponse struct {
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshToken     string `json:"refresh_token"`
+	RefreshExpiresIn int    `json:"refresh_expires_in"`
+	MembershipID     string `json:"membership_id"`
+}

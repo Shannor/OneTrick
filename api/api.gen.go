@@ -40,6 +40,27 @@ type ActivityHistory struct {
 	ReferenceId int64   `json:"referenceId"`
 }
 
+// AuthResponse defines model for AuthResponse.
+type AuthResponse struct {
+	// AccessToken Access token value.
+	AccessToken string `json:"accessToken"`
+
+	// ExpiresIn The time duration in which the access token will be expired.
+	ExpiresIn int `json:"expiresIn"`
+
+	// MembershipId Membership identification value.
+	MembershipId string `json:"membershipId"`
+
+	// RefreshExpiresIn The time duration in which the refresh token will be expired.
+	RefreshExpiresIn int `json:"refreshExpiresIn"`
+
+	// RefreshToken Refresh token for acquiring new access token after it is expired.
+	RefreshToken string `json:"refreshToken"`
+
+	// TokenType Type of the access token.
+	TokenType string `json:"tokenType"`
+}
+
 // BaseItemInfo defines model for BaseItemInfo.
 type BaseItemInfo struct {
 	BucketHash int64       `json:"bucketHash"`
@@ -201,11 +222,27 @@ type GetActivitiesParams struct {
 	Page  int64 `form:"page" json:"page"`
 }
 
+// LoginJSONBody defines parameters for Login.
+type LoginJSONBody struct {
+	Code string `json:"code"`
+}
+
+// RefreshTokenJSONBody defines parameters for RefreshToken.
+type RefreshTokenJSONBody struct {
+	Code string `json:"code"`
+}
+
 // GetSnapshotsParams defines parameters for GetSnapshots.
 type GetSnapshotsParams struct {
 	Count int64 `form:"count" json:"count"`
 	Page  int64 `form:"page" json:"page"`
 }
+
+// LoginJSONRequestBody defines body for Login for application/json ContentType.
+type LoginJSONRequestBody LoginJSONBody
+
+// RefreshTokenJSONRequestBody defines body for RefreshToken for application/json ContentType.
+type RefreshTokenJSONRequestBody RefreshTokenJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -216,8 +253,14 @@ type ServerInterface interface {
 	// (GET /activities/{activityId})
 	GetActivity(c *gin.Context, activityId string)
 
+	// (POST /login)
+	Login(c *gin.Context)
+
 	// (GET /ping)
 	GetPing(c *gin.Context)
+
+	// (POST /refresh)
+	RefreshToken(c *gin.Context)
 
 	// (GET /snapshots)
 	GetSnapshots(c *gin.Context, params GetSnapshotsParams)
@@ -307,6 +350,19 @@ func (siw *ServerInterfaceWrapper) GetActivity(c *gin.Context) {
 	siw.Handler.GetActivity(c, activityId)
 }
 
+// Login operation middleware
+func (siw *ServerInterfaceWrapper) Login(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.Login(c)
+}
+
 // GetPing operation middleware
 func (siw *ServerInterfaceWrapper) GetPing(c *gin.Context) {
 
@@ -318,6 +374,19 @@ func (siw *ServerInterfaceWrapper) GetPing(c *gin.Context) {
 	}
 
 	siw.Handler.GetPing(c)
+}
+
+// RefreshToken operation middleware
+func (siw *ServerInterfaceWrapper) RefreshToken(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RefreshToken(c)
 }
 
 // GetSnapshots operation middleware
@@ -410,7 +479,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 
 	router.GET(options.BaseURL+"/activities", wrapper.GetActivities)
 	router.GET(options.BaseURL+"/activities/:activityId", wrapper.GetActivity)
+	router.POST(options.BaseURL+"/login", wrapper.Login)
 	router.GET(options.BaseURL+"/ping", wrapper.GetPing)
+	router.POST(options.BaseURL+"/refresh", wrapper.RefreshToken)
 	router.GET(options.BaseURL+"/snapshots", wrapper.GetSnapshots)
 	router.POST(options.BaseURL+"/snapshots", wrapper.CreateSnapshot)
 }
@@ -452,6 +523,23 @@ func (response GetActivity200JSONResponse) VisitGetActivityResponse(w http.Respo
 	return json.NewEncoder(w).Encode(response)
 }
 
+type LoginRequestObject struct {
+	Body *LoginJSONRequestBody
+}
+
+type LoginResponseObject interface {
+	VisitLoginResponse(w http.ResponseWriter) error
+}
+
+type Login200JSONResponse AuthResponse
+
+func (response Login200JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type GetPingRequestObject struct {
 }
 
@@ -462,6 +550,23 @@ type GetPingResponseObject interface {
 type GetPing200JSONResponse Pong
 
 func (response GetPing200JSONResponse) VisitGetPingResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RefreshTokenRequestObject struct {
+	Body *RefreshTokenJSONRequestBody
+}
+
+type RefreshTokenResponseObject interface {
+	VisitRefreshTokenResponse(w http.ResponseWriter) error
+}
+
+type RefreshToken200JSONResponse AuthResponse
+
+func (response RefreshToken200JSONResponse) VisitRefreshTokenResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
@@ -510,8 +615,14 @@ type StrictServerInterface interface {
 	// (GET /activities/{activityId})
 	GetActivity(ctx context.Context, request GetActivityRequestObject) (GetActivityResponseObject, error)
 
+	// (POST /login)
+	Login(ctx context.Context, request LoginRequestObject) (LoginResponseObject, error)
+
 	// (GET /ping)
 	GetPing(ctx context.Context, request GetPingRequestObject) (GetPingResponseObject, error)
+
+	// (POST /refresh)
+	RefreshToken(ctx context.Context, request RefreshTokenRequestObject) (RefreshTokenResponseObject, error)
 
 	// (GET /snapshots)
 	GetSnapshots(ctx context.Context, request GetSnapshotsRequestObject) (GetSnapshotsResponseObject, error)
@@ -586,6 +697,39 @@ func (sh *strictHandler) GetActivity(ctx *gin.Context, activityId string) {
 	}
 }
 
+// Login operation middleware
+func (sh *strictHandler) Login(ctx *gin.Context) {
+	var request LoginRequestObject
+
+	var body LoginJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.Status(http.StatusBadRequest)
+		ctx.Error(err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.Login(ctx, request.(LoginRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "Login")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(LoginResponseObject); ok {
+		if err := validResponse.VisitLoginResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetPing operation middleware
 func (sh *strictHandler) GetPing(ctx *gin.Context) {
 	var request GetPingRequestObject
@@ -604,6 +748,39 @@ func (sh *strictHandler) GetPing(ctx *gin.Context) {
 		ctx.Status(http.StatusInternalServerError)
 	} else if validResponse, ok := response.(GetPingResponseObject); ok {
 		if err := validResponse.VisitGetPingResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RefreshToken operation middleware
+func (sh *strictHandler) RefreshToken(ctx *gin.Context) {
+	var request RefreshTokenRequestObject
+
+	var body RefreshTokenJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.Status(http.StatusBadRequest)
+		ctx.Error(err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.RefreshToken(ctx, request.(RefreshTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RefreshToken")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(RefreshTokenResponseObject); ok {
+		if err := validResponse.VisitRefreshTokenResponse(ctx.Writer); err != nil {
 			ctx.Error(err)
 		}
 	} else if response != nil {
@@ -666,41 +843,45 @@ func (sh *strictHandler) CreateSnapshot(ctx *gin.Context) {
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

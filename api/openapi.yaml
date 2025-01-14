@@ -10,11 +10,51 @@ paths:
     get:
       responses:
         '200':
-          description: pet response
+          description: ping response
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Pong'
+  /login:
+    post:
+      operationId: Login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: "Logging in"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+  /refresh:
+    post:
+      operationId: RefreshToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: "Refreshing token"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
   /snapshots:
     post:
       operationId: CreateSnapshot
@@ -188,6 +228,34 @@ components:
         ping:
           type: string
           example: pong
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: Access token value.
+        tokenType:
+          type: string
+          description: Type of the access token.
+        expiresIn:
+          type: integer
+          description: The time duration in which the access token will be expired.
+        refreshToken:
+          type: string
+          description: Refresh token for acquiring new access token after it is expired.
+        refreshExpiresIn:
+          type: integer
+          description: The time duration in which the refresh token will be expired.
+        membershipId:
+          type: string
+          description: Membership identification value.
+      required:
+        - accessToken
+        - tokenType
+        - expiresIn
+        - refreshToken
+        - refreshExpiresIn
+        - membershipId
     WeaponStats:
       type: object
       properties:

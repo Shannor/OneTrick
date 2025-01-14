@@ -120,10 +120,19 @@ func getManifest() (*Manifest, error) {
 	}
 
 	slog.Info("Attempting to set manifest.json file for dev environment")
-	err := gcp.DownloadFile(destinyBucket, objectName, manifestLocation)
+	stat, err := os.Stat(manifestLocation)
 	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to download manifest.json file")
+		slog.With("error", err.Error()).Error("File does not exist at specified location")
 		return nil, err
+	}
+	if !stat.IsDir() {
+		slog.Info("File exists at specified location")
+	} else {
+		err := gcp.DownloadFile(destinyBucket, objectName, manifestLocation)
+		if err != nil {
+			slog.With("error", err.Error()).Error("Failed to download manifest.json file")
+			return nil, err
+		}
 	}
 	manifestFile, err := os.Open(manifestLocation)
 	if err != nil {
@@ -416,16 +425,6 @@ func (a *service) EnrichWeaponStats(ctx context.Context, primaryMembershipId str
 		}
 		result.ReferenceId = uintToInt64(stats.ReferenceId)
 		result.Stats = TransformD2HistoricalStatValues(stats.Values)
-		//details, err := a.GetWeaponDetails(ctx, primaryMembershipId, id)
-		//if err != nil {
-		//	slog.With(
-		//		"error",
-		//		err.Error(),
-		//		"weapon instance id",
-		//		id,
-		//	).Error("failed to get details for weapon")
-		//}
-
 		result.ItemDetails = &details
 		results = append(results, result)
 	}

@@ -13,7 +13,33 @@ import (
 var _ api.StrictServerInterface = (*Server)(nil)
 
 type Server struct {
-	DestinyService destiny.Service
+	D2Service     destiny.Service
+	D2AuthService destiny.AuthService
+}
+
+func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.LoginResponseObject, error) {
+	code := request.Body.Code
+	resp, err := s.D2AuthService.GetAccessToken(ctx, code)
+	if err != nil {
+		slog.With("error", err.Error()).Error("Failed to fetch access token")
+		return nil, err
+	}
+
+	// TODO: Create account in DB based on Membership ID, in a separate service maybe
+	result := api.AuthResponse{
+		AccessToken:      resp.AccessToken,
+		ExpiresIn:        resp.ExpiresIn,
+		MembershipId:     resp.MembershipID,
+		RefreshExpiresIn: resp.RefreshExpiresIn,
+		RefreshToken:     resp.RefreshToken,
+		TokenType:        resp.TokenType,
+	}
+	return api.Login200JSONResponse(result), nil
+}
+
+func (s Server) RefreshToken(ctx context.Context, request api.RefreshTokenRequestObject) (api.RefreshTokenResponseObject, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (s Server) GetPing(ctx context.Context, request api.GetPingRequestObject) (api.GetPingResponseObject, error) {
@@ -22,16 +48,17 @@ func (s Server) GetPing(ctx context.Context, request api.GetPingRequestObject) (
 	}, nil
 }
 
-func NewServer(service destiny.Service) Server {
+func NewServer(service destiny.Service, authService destiny.AuthService) Server {
 	return Server{
-		DestinyService: service,
+		D2Service:     service,
+		D2AuthService: authService,
 	}
 }
 
 const characterID = "2305843009261519028"
 
 func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsRequestObject) (api.GetSnapshotsResponseObject, error) {
-	snapshots, err := s.DestinyService.GetAllCharacterSnapshots()
+	snapshots, err := s.D2Service.GetAllCharacterSnapshots()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch snapshots: %w", err)
 	}
@@ -39,7 +66,7 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 }
 
 func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRequestObject) (api.CreateSnapshotResponseObject, error) {
-	items, timestamp, err := s.DestinyService.GetCurrentInventory(primaryMembershipId)
+	items, timestamp, err := s.D2Service.GetCurrentInventory(primaryMembershipId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profile data: %w", err)
 	}
@@ -58,7 +85,7 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 			InstanceId: *item.ItemInstanceId,
 			Timestamp:  *timestamp,
 		}
-		details, err := s.DestinyService.GetWeaponDetails(ctx, strconv.Itoa(primaryMembershipId), *item.ItemInstanceId)
+		details, err := s.D2Service.GetWeaponDetails(ctx, strconv.Itoa(primaryMembershipId), *item.ItemInstanceId)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't find an item with item hash %d", item.ItemHash)
 		}
@@ -69,7 +96,7 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 	}
 
 	result.Items = itemSnapshots
-	err = s.DestinyService.SaveCharacterSnapshot(result)
+	err = s.D2Service.SaveCharacterSnapshot(result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save character snapshot: %w", err)
 	}
@@ -82,7 +109,7 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 		return nil, err
 	}
 	params := request.Params
-	resp, err := s.DestinyService.GetAllPVPActivity(primaryMembershipId, id, params.Count, params.Page)
+	resp, err := s.D2Service.GetAllPVPActivity(primaryMembershipId, id, params.Count, params.Page)
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to fetch activity data")
 		return nil, err
@@ -96,7 +123,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	if err != nil {
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
-	activityDetails, weaponStats, period, err := s.DestinyService.GetActivity(ctx, characterID, id)
+	activityDetails, weaponStats, period, err := s.D2Service.GetActivity(ctx, characterID, id)
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
 		return nil, fmt.Errorf("failed to fetch weapon data for activity: %w", err)
@@ -106,13 +133,13 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	}
 	// 1. Get the closet snapshot(s)
 	// TODO: Maybe add a warning when the snapshot is more than 30 minutes away since that may not be accurate anymore
-	characterSnapshot, err := s.DestinyService.GetClosestSnapshot(primaryMembershipId, period)
+	characterSnapshot, err := s.D2Service.GetClosestSnapshot(primaryMembershipId, period)
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to fetch snapshot")
 		return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
 	}
 
-	stats, err := s.DestinyService.EnrichWeaponStats(ctx, strconv.Itoa(primaryMembershipId), characterSnapshot.Items, weaponStats)
+	stats, err := s.D2Service.EnrichWeaponStats(ctx, strconv.Itoa(primaryMembershipId), characterSnapshot.Items, weaponStats)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed enriching")
 		return nil, fmt.Errorf("failed to enrich weapon stats: %w", err)

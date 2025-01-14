@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/go-resty/resty/v2"
 	"github.com/oapi-codegen/gin-middleware"
 	"log"
 	"log/slog"
@@ -18,10 +19,11 @@ const primaryMembershipId = 4611686018434106050
 
 func main() {
 	env := envvars.GetEvn()
-
 	firestore := gcp.CreateFirestore(context.Background())
+	rClient := resty.New()
+	d2AuthAService := destiny.NewAuthService(rClient, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore)
-	server := NewServer(destinyService)
+	server := NewServer(destinyService, d2AuthAService)
 
 	defer firestore.Close()
 	// Load OpenAPI spec file
