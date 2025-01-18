@@ -8573,8 +8573,7 @@
         "type": "object",
         "properties": {
           "membershipId": {
-            "type": "integer",
-            "format": "int64"
+            "type": "string"
           },
           "uniqueName": {
             "type": "string"
@@ -8598,8 +8597,7 @@
             "format": "int32"
           },
           "successMessageFlags": {
-            "type": "integer",
-            "format": "int64"
+            "type": "string"
           },
           "isDeleted": {
             "type": "boolean"
@@ -8895,6 +8893,7 @@
         }
       },
       "User.UserMembershipData": {
+        "x-go-name": "MembershipData",
         "type": "object",
         "properties": {
           "destinyMemberships": {
@@ -8905,9 +8904,8 @@
             "description": "this allows you to see destiny memberships that are visible and linked to this account (regardless of whether or not they have characters on the world server)"
           },
           "primaryMembershipId": {
-            "type": "integer",
+            "type": "string",
             "description": "If this property is populated, it will have the membership ID of the account considered to be \"primary\" in this user's cross save relationship.\r\n If null, this user has no cross save relationship, nor primary account.",
-            "format": "int64",
             "nullable": true
           },
           "bungieNetUser": {
@@ -8975,9 +8973,8 @@
             "x-enum-is-bitmask": false
           },
           "membershipId": {
-            "type": "integer",
+            "type": "string",
             "description": "Membership ID as they user is known in the Accounts service",
-            "format": "int64"
           },
           "displayName": {
             "type": "string",

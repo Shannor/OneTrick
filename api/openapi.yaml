@@ -15,6 +15,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Pong'
+  /profile:
+    get:
+      parameters:
+        - in: header
+          name: X-Membership-ID
+          schema:
+            type: string
+          required: true
+      operationId: Profile
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: "Current user info"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
   /login:
     post:
       operationId: Login
@@ -146,7 +164,25 @@ paths:
                       $ref: "#/components/schemas/WeaponStats"
 
 components:
+  securitySchemes:
+    bearerAuth: # arbitrary name for the security scheme
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
+    Profile:
+      type: object
+      required:
+        - id
+        - displayName
+        - uniqueName
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        uniqueName:
+          type: string
     CharacterSnapshot:
       type: object
       required:

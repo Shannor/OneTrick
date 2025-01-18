@@ -16,6 +16,10 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+const (
+	Oauth2Scopes = "oauth2.Scopes"
+)
+
 // Defines values for CurrentActivityModeType.
 const (
 	CurrentActivityModeTypeAllDoubles              CurrentActivityModeType = 49
@@ -2465,6 +2469,52 @@ type DictionaryComponentResponseOfuint32AndDestinyItemPlugComponent struct {
 	Privacy  *int32 `json:"privacy,omitempty"`
 }
 
+// GroupsV2GroupUserInfoCard defines model for GroupsV2.GroupUserInfoCard.
+type GroupsV2GroupUserInfoCard struct {
+	// LastSeenDisplayName This will be the display name the clan server last saw the user as. If the account is an active cross save override, this will be the display name to use. Otherwise, this will match the displayName property.
+	LastSeenDisplayName *string `json:"LastSeenDisplayName,omitempty"`
+
+	// LastSeenDisplayNameType The platform of the LastSeenDisplayName
+	LastSeenDisplayNameType *int32 `json:"LastSeenDisplayNameType,omitempty"`
+
+	// ApplicableMembershipTypes The list of Membership Types indicating the platforms on which this Membership can be used.
+	//  Not in Cross Save = its original membership type. Cross Save Primary = Any membership types it is overridding, and its original membership type Cross Save Overridden = Empty list
+	ApplicableMembershipTypes *[]int32 `json:"applicableMembershipTypes,omitempty"`
+
+	// BungieGlobalDisplayName The bungie global display name, if set.
+	BungieGlobalDisplayName *string `json:"bungieGlobalDisplayName,omitempty"`
+
+	// BungieGlobalDisplayNameCode The bungie global display name code, if set.
+	BungieGlobalDisplayNameCode *int16 `json:"bungieGlobalDisplayNameCode"`
+
+	// CrossSaveOverride If there is a cross save override in effect, this value will tell you the type that is overridding this one.
+	CrossSaveOverride *int32 `json:"crossSaveOverride,omitempty"`
+
+	// DisplayName Display Name the player has chosen for themselves. The display name is optional when the data type is used as input to a platform API.
+	DisplayName *string `json:"displayName,omitempty"`
+
+	// IconPath URL the Icon if available.
+	IconPath *string `json:"iconPath,omitempty"`
+
+	// IsPublic If True, this is a public user membership.
+	IsPublic *bool `json:"isPublic,omitempty"`
+
+	// MembershipId Membership ID as they user is known in the Accounts service
+	MembershipId *string `json:"membershipId,omitempty"`
+
+	// MembershipType Type of the membership. Not necessarily the native type.
+	MembershipType *int32 `json:"membershipType,omitempty"`
+
+	// SupplementalDisplayName A platform specific additional display name - ex: psn Real Name, bnet Unique Name, etc.
+	SupplementalDisplayName *string `json:"supplementalDisplayName,omitempty"`
+}
+
+// IgnoresIgnoreResponse defines model for Ignores.IgnoreResponse.
+type IgnoresIgnoreResponse struct {
+	IgnoreFlags *int32 `json:"ignoreFlags,omitempty"`
+	IsIgnored   *bool  `json:"isIgnored,omitempty"`
+}
+
 // SingleComponentResponseOfDestinyInventoryComponent defines model for SingleComponentResponseOfDestinyInventoryComponent.
 type SingleComponentResponseOfDestinyInventoryComponent struct {
 	// Data A list of minimal information for items in an inventory: be it a character's inventory, or a Profile's inventory. (Note that the Vault is a collection of inventory buckets in the Profile's inventory)
@@ -2753,6 +2803,46 @@ type TrendingTrendingEntry struct {
 	Weight *float64 `json:"weight,omitempty"`
 }
 
+// UserGeneralUser defines model for User.GeneralUser.
+type UserGeneralUser struct {
+	About                             *string                `json:"about,omitempty"`
+	BlizzardDisplayName               *string                `json:"blizzardDisplayName,omitempty"`
+	CachedBungieGlobalDisplayName     *string                `json:"cachedBungieGlobalDisplayName,omitempty"`
+	CachedBungieGlobalDisplayNameCode *int16                 `json:"cachedBungieGlobalDisplayNameCode"`
+	Context                           *UserUserToUserContext `json:"context,omitempty"`
+	DisplayName                       *string                `json:"displayName,omitempty"`
+	EgsDisplayName                    *string                `json:"egsDisplayName,omitempty"`
+	FbDisplayName                     *string                `json:"fbDisplayName,omitempty"`
+	FirstAccess                       *time.Time             `json:"firstAccess"`
+	IsDeleted                         *bool                  `json:"isDeleted,omitempty"`
+	LastBanReportId                   *int64                 `json:"lastBanReportId"`
+	LastUpdate                        *time.Time             `json:"lastUpdate"`
+	LegacyPortalUID                   *int64                 `json:"legacyPortalUID"`
+	Locale                            *string                `json:"locale,omitempty"`
+	LocaleInheritDefault              *bool                  `json:"localeInheritDefault,omitempty"`
+	MembershipId                      *string                `json:"membershipId,omitempty"`
+	NormalizedName                    *string                `json:"normalizedName,omitempty"`
+	ProfileBanExpire                  *time.Time             `json:"profileBanExpire"`
+	ProfilePicture                    *int32                 `json:"profilePicture,omitempty"`
+	ProfilePicturePath                *string                `json:"profilePicturePath,omitempty"`
+	ProfilePictureWidePath            *string                `json:"profilePictureWidePath,omitempty"`
+	ProfileTheme                      *int32                 `json:"profileTheme,omitempty"`
+	ProfileThemeName                  *string                `json:"profileThemeName,omitempty"`
+	PsnDisplayName                    *string                `json:"psnDisplayName,omitempty"`
+	ShowActivity                      *bool                  `json:"showActivity"`
+	ShowGroupMessaging                *bool                  `json:"showGroupMessaging,omitempty"`
+	StadiaDisplayName                 *string                `json:"stadiaDisplayName,omitempty"`
+	StatusDate                        *time.Time             `json:"statusDate,omitempty"`
+	StatusText                        *string                `json:"statusText,omitempty"`
+	SteamDisplayName                  *string                `json:"steamDisplayName,omitempty"`
+	SuccessMessageFlags               *string                `json:"successMessageFlags,omitempty"`
+	TwitchDisplayName                 *string                `json:"twitchDisplayName,omitempty"`
+	UniqueName                        *string                `json:"uniqueName,omitempty"`
+	UserTitle                         *int32                 `json:"userTitle,omitempty"`
+	UserTitleDisplay                  *string                `json:"userTitleDisplay,omitempty"`
+	XboxDisplayName                   *string                `json:"xboxDisplayName,omitempty"`
+}
+
 // UserUserInfoCard This contract supplies basic information commonly used to display a minimal amount of information about a user. Take care to not add more properties here unless the property applies in all (or at least the majority) of the situations where UserInfoCard is used. Avoid adding game specific or platform specific details here. In cases where UserInfoCard is a subset of the data needed in a contract, use UserInfoCard as a property of other contracts.
 type UserUserInfoCard struct {
 	// ApplicableMembershipTypes The list of Membership Types indicating the platforms on which this Membership can be used.
@@ -2785,6 +2875,25 @@ type UserUserInfoCard struct {
 
 	// SupplementalDisplayName A platform specific additional display name - ex: psn Real Name, bnet Unique Name, etc.
 	SupplementalDisplayName *string `json:"supplementalDisplayName,omitempty"`
+}
+
+// MembershipData defines model for User.UserMembershipData.
+type MembershipData struct {
+	BungieNetUser *UserGeneralUser `json:"bungieNetUser,omitempty"`
+
+	// DestinyMemberships this allows you to see destiny memberships that are visible and linked to this account (regardless of whether or not they have characters on the world server)
+	DestinyMemberships *[]GroupsV2GroupUserInfoCard `json:"destinyMemberships,omitempty"`
+
+	// PrimaryMembershipId If this property is populated, it will have the membership ID of the account considered to be "primary" in this user's cross save relationship.
+	//  If null, this user has no cross save relationship, nor primary account.
+	PrimaryMembershipId *string `json:"primaryMembershipId"`
+}
+
+// UserUserToUserContext defines model for User.UserToUserContext.
+type UserUserToUserContext struct {
+	GlobalIgnoreEndDate *time.Time             `json:"globalIgnoreEndDate"`
+	IgnoreStatus        *IgnoresIgnoreResponse `json:"ignoreStatus,omitempty"`
+	IsFollowing         *bool                  `json:"isFollowing,omitempty"`
 }
 
 // DestinyActivityHistoryResults defines model for Destiny.HistoricalStats.DestinyActivityHistoryResults.
@@ -2833,6 +2942,17 @@ type DestinyProfileResponse struct {
 	// Response The response for GetDestinyProfile, with components for character and item-level data.
 	Response        *DestinyResponsesDestinyProfileResponse `json:"Response,omitempty"`
 	ThrottleSeconds *int32                                  `json:"ThrottleSeconds,omitempty"`
+}
+
+// UserUserMembershipData defines model for User.UserMembershipData.
+type UserUserMembershipData struct {
+	DetailedErrorTrace *string            `json:"DetailedErrorTrace,omitempty"`
+	ErrorCode          *int32             `json:"ErrorCode,omitempty"`
+	ErrorStatus        *string            `json:"ErrorStatus,omitempty"`
+	Message            *string            `json:"Message,omitempty"`
+	MessageData        *map[string]string `json:"MessageData,omitempty"`
+	MembershipData     *MembershipData    `json:"Response,omitempty"`
+	ThrottleSeconds    *int32             `json:"ThrottleSeconds,omitempty"`
 }
 
 // Destiny2GetActivityHistoryParams defines parameters for Destiny2GetActivityHistory.
@@ -2943,6 +3063,9 @@ type ClientInterface interface {
 
 	// Destiny2GetItem request
 	Destiny2GetItem(ctx context.Context, membershipType int32, destinyMembershipId int64, itemInstanceId int64, params *Destiny2GetItemParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UserGetMembershipDataForCurrentUser request
+	UserGetMembershipDataForCurrentUser(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) Destiny2GetPostGameCarnageReport(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -2983,6 +3106,18 @@ func (c *Client) Destiny2GetProfile(ctx context.Context, membershipType int32, d
 
 func (c *Client) Destiny2GetItem(ctx context.Context, membershipType int32, destinyMembershipId int64, itemInstanceId int64, params *Destiny2GetItemParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewDestiny2GetItemRequest(c.Server, membershipType, destinyMembershipId, itemInstanceId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UserGetMembershipDataForCurrentUser(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUserGetMembershipDataForCurrentUserRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -3262,6 +3397,33 @@ func NewDestiny2GetItemRequest(server string, membershipType int32, destinyMembe
 	return req, nil
 }
 
+// NewUserGetMembershipDataForCurrentUserRequest generates requests for UserGetMembershipDataForCurrentUser
+func NewUserGetMembershipDataForCurrentUserRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/User/GetMembershipsForCurrentUser/")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -3316,6 +3478,9 @@ type ClientWithResponsesInterface interface {
 
 	// Destiny2GetItemWithResponse request
 	Destiny2GetItemWithResponse(ctx context.Context, membershipType int32, destinyMembershipId int64, itemInstanceId int64, params *Destiny2GetItemParams, reqEditors ...RequestEditorFn) (*Destiny2GetItemResponse, error)
+
+	// UserGetMembershipDataForCurrentUserWithResponse request
+	UserGetMembershipDataForCurrentUserWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*UserGetMembershipDataForCurrentUserResponse, error)
 }
 
 type Destiny2GetPostGameCarnageReportResponse struct {
@@ -3406,6 +3571,28 @@ func (r Destiny2GetItemResponse) StatusCode() int {
 	return 0
 }
 
+type UserGetMembershipDataForCurrentUserResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *UserUserMembershipData
+}
+
+// Status returns HTTPResponse.Status
+func (r UserGetMembershipDataForCurrentUserResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UserGetMembershipDataForCurrentUserResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // Destiny2GetPostGameCarnageReportWithResponse request returning *Destiny2GetPostGameCarnageReportResponse
 func (c *ClientWithResponses) Destiny2GetPostGameCarnageReportWithResponse(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*Destiny2GetPostGameCarnageReportResponse, error) {
 	rsp, err := c.Destiny2GetPostGameCarnageReport(ctx, activityId, reqEditors...)
@@ -3440,6 +3627,15 @@ func (c *ClientWithResponses) Destiny2GetItemWithResponse(ctx context.Context, m
 		return nil, err
 	}
 	return ParseDestiny2GetItemResponse(rsp)
+}
+
+// UserGetMembershipDataForCurrentUserWithResponse request returning *UserGetMembershipDataForCurrentUserResponse
+func (c *ClientWithResponses) UserGetMembershipDataForCurrentUserWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*UserGetMembershipDataForCurrentUserResponse, error) {
+	rsp, err := c.UserGetMembershipDataForCurrentUser(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUserGetMembershipDataForCurrentUserResponse(rsp)
 }
 
 // ParseDestiny2GetPostGameCarnageReportResponse parses an HTTP response from a Destiny2GetPostGameCarnageReportWithResponse call
@@ -3536,6 +3732,32 @@ func ParseDestiny2GetItemResponse(rsp *http.Response) (*Destiny2GetItemResponse,
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest DestinyItemResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUserGetMembershipDataForCurrentUserResponse parses an HTTP response from a UserGetMembershipDataForCurrentUserWithResponse call
+func ParseUserGetMembershipDataForCurrentUserResponse(rsp *http.Response) (*UserGetMembershipDataForCurrentUserResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UserGetMembershipDataForCurrentUserResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest UserUserMembershipData
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

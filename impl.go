@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
+	"oneTrick/services/user"
+	"oneTrick/validator"
 	"strconv"
 )
 
@@ -15,6 +17,27 @@ var _ api.StrictServerInterface = (*Server)(nil)
 type Server struct {
 	D2Service     destiny.Service
 	D2AuthService destiny.AuthService
+	UserService   user.Service
+}
+
+func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (api.ProfileResponseObject, error) {
+	token, ok := validator.FromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("missing access token")
+	}
+	if ok, err := s.D2AuthService.HasAccess(ctx, request.Params.XMembershipID, token); !ok || err != nil {
+		return nil, fmt.Errorf("invalid access token")
+	}
+
+	u, err := s.UserService.GetUser(ctx, request.Params.XMembershipID)
+	if err != nil {
+		return nil, err
+	}
+	return api.Profile200JSONResponse{
+		DisplayName: u.DisplayName,
+		UniqueName:  u.UniqueName,
+		Id:          u.ID,
+	}, nil
 }
 
 func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.LoginResponseObject, error) {
@@ -25,7 +48,56 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return nil, err
 	}
 
-	// TODO: Create account in DB based on Membership ID, in a separate service maybe
+	existingUser, err := s.UserService.GetUser(ctx, resp.MembershipID)
+	if err != nil {
+		return nil, err
+	}
+	if existingUser != nil {
+		result := api.AuthResponse{
+			AccessToken:      resp.AccessToken,
+			ExpiresIn:        resp.ExpiresIn,
+			MembershipId:     resp.MembershipID,
+			RefreshExpiresIn: resp.RefreshExpiresIn,
+			RefreshToken:     resp.RefreshToken,
+			TokenType:        resp.TokenType,
+		}
+		return api.Login200JSONResponse(result), nil
+	}
+
+	// TODO: Split into it's own function, when no account exists
+	bUser, err := s.D2AuthService.GetCurrentUser(ctx, resp.AccessToken)
+	if err != nil {
+		return nil, err
+	}
+	if bUser.BungieNetUser == nil && bUser.DestinyMemberships == nil {
+		return nil, fmt.Errorf("failed to fetch user data")
+	}
+	m := make([]user.Membership, 0)
+	u := user.User{
+		ID:          *bUser.BungieNetUser.MembershipId,
+		DisplayName: *bUser.BungieNetUser.DisplayName,
+		UniqueName:  *bUser.BungieNetUser.UniqueName,
+	}
+	if bUser.PrimaryMembershipId != nil {
+		u.PrimaryMembershipID = *bUser.PrimaryMembershipId
+	}
+	for i, mem := range *bUser.DestinyMemberships {
+		if i == 0 && bUser.PrimaryMembershipId == nil {
+			u.PrimaryMembershipID = *mem.MembershipId
+		}
+		m = append(m, user.Membership{
+			ID:          *mem.MembershipId,
+			Type:        int64(*mem.MembershipType),
+			DisplayName: *mem.DisplayName,
+		})
+	}
+	u.Memberships = m
+
+	_, err = s.UserService.CreateUser(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+
 	result := api.AuthResponse{
 		AccessToken:      resp.AccessToken,
 		ExpiresIn:        resp.ExpiresIn,
@@ -48,10 +120,11 @@ func (s Server) GetPing(ctx context.Context, request api.GetPingRequestObject) (
 	}, nil
 }
 
-func NewServer(service destiny.Service, authService destiny.AuthService) Server {
+func NewServer(service destiny.Service, authService destiny.AuthService, userService user.Service) Server {
 	return Server{
 		D2Service:     service,
 		D2AuthService: authService,
+		UserService:   userService,
 	}
 }
 
