@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
+	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"strconv"
@@ -15,28 +17,58 @@ import (
 var _ api.StrictServerInterface = (*Server)(nil)
 
 type Server struct {
-	D2Service     destiny.Service
-	D2AuthService destiny.AuthService
-	UserService   user.Service
+	D2Service       destiny.Service
+	D2AuthService   destiny.AuthService
+	UserService     user.Service
+	SnapshotService snapshot.Service
 }
 
 func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (api.ProfileResponseObject, error) {
-	token, ok := validator.FromContext(ctx)
+	access, ok := validator.FromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing access token")
+		return nil, fmt.Errorf("missing access info")
 	}
-	if ok, err := s.D2AuthService.HasAccess(ctx, request.Params.XMembershipID, token); !ok || err != nil {
+	if ok, err := s.D2AuthService.HasAccess(ctx, request.Params.XMembershipID, access.AccessToken); !ok || err != nil {
 		return nil, fmt.Errorf("invalid access token")
 	}
 
-	u, err := s.UserService.GetUser(ctx, request.Params.XMembershipID)
+	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
 	if err != nil {
 		return nil, err
+	}
+	t := int64(0)
+	for _, membership := range u.Memberships {
+		if membership.ID == u.PrimaryMembershipID {
+			t = membership.Type
+			break
+		}
+	}
+	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse primary membership id")
+	}
+	characters, err := s.D2Service.GetCharacters(pmId, t)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch characters: %w", err)
+	}
+
+	c := make([]api.Character, 0)
+	for _, character := range characters {
+		c = append(c, api.Character{
+			ClassId:              int(*character.ClassHash),
+			EmblemBackgroundPath: *character.EmblemBackgroundPath,
+			EmblemPath:           *character.EmblemPath,
+			Id:                   *character.CharacterId,
+			Light:                int64(*character.Light),
+			RaceId:               int(*character.RaceHash),
+			TitleId:              int64(*character.TitleRecordHash),
+		})
 	}
 	return api.Profile200JSONResponse{
 		DisplayName: u.DisplayName,
 		UniqueName:  u.UniqueName,
 		Id:          u.ID,
+		Characters:  c,
 	}, nil
 }
 
@@ -49,17 +81,19 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 	}
 
 	existingUser, err := s.UserService.GetUser(ctx, resp.MembershipID)
-	if err != nil {
+	if err != nil && !errors.Is(err, user.NotFound) {
 		return nil, err
 	}
 	if existingUser != nil {
 		result := api.AuthResponse{
-			AccessToken:      resp.AccessToken,
-			ExpiresIn:        resp.ExpiresIn,
-			MembershipId:     resp.MembershipID,
-			RefreshExpiresIn: resp.RefreshExpiresIn,
-			RefreshToken:     resp.RefreshToken,
-			TokenType:        resp.TokenType,
+			AccessToken:         resp.AccessToken,
+			ExpiresIn:           resp.ExpiresIn,
+			MembershipId:        resp.MembershipID,
+			RefreshExpiresIn:    resp.RefreshExpiresIn,
+			RefreshToken:        resp.RefreshToken,
+			TokenType:           resp.TokenType,
+			Id:                  existingUser.ID,
+			PrimaryMembershipId: existingUser.PrimaryMembershipID,
 		}
 		return api.Login200JSONResponse(result), nil
 	}
@@ -74,7 +108,7 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 	}
 	m := make([]user.Membership, 0)
 	u := user.User{
-		ID:          *bUser.BungieNetUser.MembershipId,
+		MemberID:    *bUser.BungieNetUser.MembershipId,
 		DisplayName: *bUser.BungieNetUser.DisplayName,
 		UniqueName:  *bUser.BungieNetUser.UniqueName,
 	}
@@ -93,18 +127,20 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 	}
 	u.Memberships = m
 
-	_, err = s.UserService.CreateUser(ctx, u)
+	newUser, err := s.UserService.CreateUser(ctx, &u)
 	if err != nil {
 		return nil, err
 	}
 
 	result := api.AuthResponse{
-		AccessToken:      resp.AccessToken,
-		ExpiresIn:        resp.ExpiresIn,
-		MembershipId:     resp.MembershipID,
-		RefreshExpiresIn: resp.RefreshExpiresIn,
-		RefreshToken:     resp.RefreshToken,
-		TokenType:        resp.TokenType,
+		AccessToken:         resp.AccessToken,
+		ExpiresIn:           resp.ExpiresIn,
+		MembershipId:        resp.MembershipID,
+		RefreshExpiresIn:    resp.RefreshExpiresIn,
+		RefreshToken:        resp.RefreshToken,
+		TokenType:           resp.TokenType,
+		Id:                  newUser.ID,
+		PrimaryMembershipId: newUser.PrimaryMembershipID,
 	}
 	return api.Login200JSONResponse(result), nil
 }
@@ -120,18 +156,24 @@ func (s Server) GetPing(ctx context.Context, request api.GetPingRequestObject) (
 	}, nil
 }
 
-func NewServer(service destiny.Service, authService destiny.AuthService, userService user.Service) Server {
+func NewServer(
+	service destiny.Service,
+	authService destiny.AuthService,
+	userService user.Service,
+	snapshotService snapshot.Service,
+) Server {
 	return Server{
-		D2Service:     service,
-		D2AuthService: authService,
-		UserService:   userService,
+		D2Service:       service,
+		D2AuthService:   authService,
+		UserService:     userService,
+		SnapshotService: snapshotService,
 	}
 }
 
 const characterID = "2305843009261519028"
 
 func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsRequestObject) (api.GetSnapshotsResponseObject, error) {
-	snapshots, err := s.D2Service.GetAllCharacterSnapshots()
+	snapshots, err := s.SnapshotService.GetAllByCharacter(ctx, request.Params.XUserID, request.Params.CharacterId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch snapshots: %w", err)
 	}
@@ -139,7 +181,11 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 }
 
 func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRequestObject) (api.CreateSnapshotResponseObject, error) {
-	items, timestamp, err := s.D2Service.GetCurrentInventory(primaryMembershipId)
+	memID, err := strconv.ParseInt(request.Params.XMembershipID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid membership id: %w", err)
+	}
+	items, timestamp, err := s.D2Service.GetCurrentInventory(memID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profile data: %w", err)
 	}
@@ -158,7 +204,7 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 			InstanceId: *item.ItemInstanceId,
 			Timestamp:  *timestamp,
 		}
-		details, err := s.D2Service.GetWeaponDetails(ctx, strconv.Itoa(primaryMembershipId), *item.ItemInstanceId)
+		details, err := s.D2Service.GetWeaponDetails(ctx, request.Params.XMembershipID, *item.ItemInstanceId)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't find an item with item hash %d", item.ItemHash)
 		}
@@ -169,9 +215,10 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 	}
 
 	result.Items = itemSnapshots
-	err = s.D2Service.SaveCharacterSnapshot(result)
+	result.CharacterId = request.Body.CharacterId
+	_, err = s.SnapshotService.Create(ctx, request.Params.XUserID, result)
 	if err != nil {
-		return nil, fmt.Errorf("failed to save character snapshot: %w", err)
+		return nil, fmt.Errorf("failed to create snapshot: %w", err)
 	}
 	return api.CreateSnapshot201JSONResponse(result), nil
 }

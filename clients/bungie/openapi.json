@@ -11937,20 +11937,16 @@
         "type": "object",
         "properties": {
           "red": {
-            "type": "string",
-            "format": "byte"
+            "type": "integer"
           },
           "green": {
-            "type": "string",
-            "format": "byte"
+            "type": "integer"
           },
           "blue": {
-            "type": "string",
-            "format": "byte"
+            "type": "integer"
           },
           "alpha": {
-            "type": "string",
-            "format": "byte"
+            "type": "integer"
           }
         },
         "description": "Represents a color whose RGBA values are all represented as values between 0 and 255."
@@ -32414,11 +32410,11 @@
       },
       "Destiny.Entities.Characters.DestinyCharacterComponent": {
         "type": "object",
+        "x-go-name": "CharacterComponent",
         "properties": {
           "membershipId": {
-            "type": "integer",
+            "type": "string",
             "description": "Every Destiny Profile has a membershipId. This is provided on the character as well for convenience.",
-            "format": "int64"
           },
           "membershipType": {
             "type": "integer",
@@ -32430,9 +32426,8 @@
             "x-enum-is-bitmask": false
           },
           "characterId": {
-            "type": "integer",
-            "description": "The unique identifier for the character.",
-            "format": "int64"
+            "type": "string",
+            "description": "The unique identifier for the character."
           },
           "dateLastPlayed": {
             "type": "string",
@@ -32440,14 +32435,12 @@
             "format": "date-time"
           },
           "minutesPlayedThisSession": {
-            "type": "integer",
-            "description": "If the user is currently playing, this is how long they've been playing.",
-            "format": "int64"
+            "type": "string",
+            "description": "If the user is currently playing, this is how long they've been playing."
           },
           "minutesPlayedTotal": {
-            "type": "integer",
-            "description": "If this value is 525,600, then they played Destiny for a year. Or they're a very dedicated Rent fan. Note that this includes idle time, not just time spent actually in activities shooting things.",
-            "format": "int64"
+            "type": "string",
+            "description": "If this value is 525,600, then they played Destiny for a year. Or they're a very dedicated Rent fan. Note that this includes idle time, not just time spent actually in activities shooting things."
           },
           "light": {
             "type": "integer",

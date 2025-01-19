@@ -1090,13 +1090,13 @@ type CharacterActivitiesComponent struct {
 	LastCompletedStoryHash *uint32 `json:"lastCompletedStoryHash,omitempty"`
 }
 
-// DestinyEntitiesCharactersDestinyCharacterComponent This component contains base properties of the character. You'll probably want to always request this component, but hey you do you.
-type DestinyEntitiesCharactersDestinyCharacterComponent struct {
+// CharacterComponent This component contains base properties of the character. You'll probably want to always request this component, but hey you do you.
+type CharacterComponent struct {
 	// BaseCharacterLevel The "base" level of your character, not accounting for any light level.
 	BaseCharacterLevel *int32 `json:"baseCharacterLevel,omitempty"`
 
 	// CharacterId The unique identifier for the character.
-	CharacterId *int64 `json:"characterId,omitempty"`
+	CharacterId *string `json:"characterId,omitempty"`
 
 	// ClassHash Use this hash to look up the character's DestinyClassDefinition.
 	ClassHash *uint32 `json:"classHash,omitempty"`
@@ -1134,16 +1134,16 @@ type DestinyEntitiesCharactersDestinyCharacterComponent struct {
 	Light *int32 `json:"light,omitempty"`
 
 	// MembershipId Every Destiny Profile has a membershipId. This is provided on the character as well for convenience.
-	MembershipId *int64 `json:"membershipId,omitempty"`
+	MembershipId *string `json:"membershipId,omitempty"`
 
 	// MembershipType membershipType tells you the platform on which the character plays. Examine the BungieMembershipType enumeration for possible values.
 	MembershipType *int32 `json:"membershipType,omitempty"`
 
 	// MinutesPlayedThisSession If the user is currently playing, this is how long they've been playing.
-	MinutesPlayedThisSession *int64 `json:"minutesPlayedThisSession,omitempty"`
+	MinutesPlayedThisSession *string `json:"minutesPlayedThisSession,omitempty"`
 
 	// MinutesPlayedTotal If this value is 525,600, then they played Destiny for a year. Or they're a very dedicated Rent fan. Note that this includes idle time, not just time spent actually in activities shooting things.
-	MinutesPlayedTotal *int64 `json:"minutesPlayedTotal,omitempty"`
+	MinutesPlayedTotal *string `json:"minutesPlayedTotal,omitempty"`
 
 	// PercentToNextLevel A number between 0 and 100, indicating the whole and fractional % remaining to get to the next character level.
 	PercentToNextLevel *float32 `json:"percentToNextLevel,omitempty"`
@@ -1818,10 +1818,10 @@ type DestinyMilestonesDestinyMilestoneVendor struct {
 
 // DestinyMiscDestinyColor Represents a color whose RGBA values are all represented as values between 0 and 255.
 type DestinyMiscDestinyColor struct {
-	Alpha *[]byte `json:"alpha,omitempty"`
-	Blue  *[]byte `json:"blue,omitempty"`
-	Green *[]byte `json:"green,omitempty"`
-	Red   *[]byte `json:"red,omitempty"`
+	Alpha *int `json:"alpha,omitempty"`
+	Blue  *int `json:"blue,omitempty"`
+	Green *int `json:"green,omitempty"`
+	Red   *int `json:"red,omitempty"`
 }
 
 // DestinyPerksDestinyPerkReference The list of perks to display in an item tooltip - and whether or not they have been activated.
@@ -2246,7 +2246,7 @@ type DictionaryComponentResponseOfint64AndDestinyCharacterActivitiesComponent st
 
 // DictionaryComponentResponseOfint64AndDestinyCharacterComponent defines model for DictionaryComponentResponseOfint64AndDestinyCharacterComponent.
 type DictionaryComponentResponseOfint64AndDestinyCharacterComponent struct {
-	Data *map[string]DestinyEntitiesCharactersDestinyCharacterComponent `json:"data,omitempty"`
+	Data *map[string]CharacterComponent `json:"data,omitempty"`
 
 	// Disabled If true, this component is disabled.
 	Disabled *bool  `json:"disabled"`

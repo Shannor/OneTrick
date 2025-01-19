@@ -50,10 +50,14 @@ type AuthResponse struct {
 	AccessToken string `json:"accessToken"`
 
 	// ExpiresIn The time duration in which the access token will be expired.
-	ExpiresIn int `json:"expiresIn"`
+	ExpiresIn int    `json:"expiresIn"`
+	Id        string `json:"id"`
 
 	// MembershipId Membership identification value.
 	MembershipId string `json:"membershipId"`
+
+	// PrimaryMembershipId Membership that is mainly used
+	PrimaryMembershipId string `json:"primaryMembershipId"`
 
 	// RefreshExpiresIn The time duration in which the refresh token will be expired.
 	RefreshExpiresIn int `json:"refreshExpiresIn"`
@@ -67,48 +71,62 @@ type AuthResponse struct {
 
 // BaseItemInfo defines model for BaseItemInfo.
 type BaseItemInfo struct {
-	BucketHash int64       `json:"bucketHash"`
-	Damage     *DamageInfo `json:"damage,omitempty"`
-	InstanceId string      `json:"instanceId"`
-	ItemHash   int64       `json:"itemHash"`
-	Name       string      `json:"name"`
+	BucketHash int64       `firestore:"bucketHash" json:"bucketHash"`
+	Damage     *DamageInfo `firestore:"damageInfo" json:"damage,omitempty"`
+	InstanceId string      `firestore:"instanceId" json:"instanceId"`
+	ItemHash   int64       `firestore:"itemHash" json:"itemHash"`
+	Name       string      `firestore:"name" json:"name"`
+}
+
+// Character defines model for Character.
+type Character struct {
+	ClassId              int    `firestore:"classId" json:"classId"`
+	EmblemBackgroundPath string `firestore:"emblemBackgroundPath" json:"emblemBackgroundPath"`
+	EmblemPath           string `firestore:"emblemPath" json:"emblemPath"`
+	Id                   string `firestore:"id" json:"id"`
+	Light                int64  `firestore:"light" json:"light"`
+	RaceId               int    `firestore:"raceId" json:"raceId"`
+	TitleId              int64  `firestore:"titleId" json:"titleId"`
 }
 
 // CharacterSnapshot defines model for CharacterSnapshot.
 type CharacterSnapshot struct {
+	// CharacterId Id of the character being recorded
+	CharacterId string `firestore:"characterId" json:"characterId"`
+
 	// Items All items that we currently care about, Kinetic, Energy, Heavy and Class for now
-	Items []ItemSnapshot `json:"items"`
+	Items []ItemSnapshot `firestore:"items" json:"items"`
 
 	// Timestamp Timestamp that the items were equipped turning
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp time.Time `firestore:"timestamp" json:"timestamp"`
 }
 
 // Color defines model for Color.
 type Color struct {
-	Alpha int `json:"alpha"`
-	Blue  int `json:"blue"`
-	Green int `json:"green"`
-	Red   int `json:"red"`
+	Alpha int `firestore:"alpha" json:"alpha"`
+	Blue  int `firestore:"blue" json:"blue"`
+	Green int `firestore:"green" json:"green"`
+	Red   int `firestore:"red" json:"red"`
 }
 
 // DamageInfo defines model for DamageInfo.
 type DamageInfo struct {
-	Color           Color  `json:"color"`
-	DamageIcon      string `json:"damageIcon"`
-	DamageType      string `json:"damageType"`
-	TransparentIcon string `json:"transparentIcon"`
+	Color           Color  `firestore:"color" json:"color"`
+	DamageIcon      string `firestore:"damageIcon" json:"damageIcon"`
+	DamageType      string `firestore:"damageType" json:"damageType"`
+	TransparentIcon string `firestore:"transparentIcon" json:"transparentIcon"`
 }
 
 // GunStat defines model for GunStat.
 type GunStat struct {
-	Description string `json:"description"`
+	Description string `firestore:"description" json:"description"`
 
 	// Hash The hash ID of the stat.
-	Hash int64  `json:"hash"`
-	Name string `json:"name"`
+	Hash int64  `firestore:"hash" json:"hash"`
+	Name string `firestore:"name" json:"name"`
 
 	// Value The value of the stat.
-	Value int64 `json:"value"`
+	Value int64 `firestore:"value" json:"value"`
 }
 
 // HistoricalStats defines model for HistoricalStats.
@@ -116,49 +134,49 @@ type HistoricalStats = []UniqueStatValue
 
 // ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
 type ItemDetails struct {
-	BaseInfo BaseItemInfo `json:"baseInfo"`
+	BaseInfo BaseItemInfo `firestore:"baseItemInfo" json:"baseInfo"`
 
 	// CharacterId If the item is on a character, this will return the ID of the character that is holding the item.
-	CharacterId *string `json:"characterId"`
+	CharacterId *string `firestore:"characterId" json:"characterId"`
 
 	// Perks Information specifically about the perks currently active on the item. COMPONENT TYPE: ItemPerks
-	Perks []Perk `json:"perks"`
+	Perks []Perk `firestore:"perks" json:"perks"`
 
 	// Sockets Information about the sockets of the item: which are currently active, what potential sockets you could have and the stats/abilities/perks you can gain from them. COMPONENT TYPE: ItemSockets
-	Sockets *[]Socket `json:"sockets,omitempty"`
+	Sockets *[]Socket `firestore:"sockets" json:"sockets,omitempty"`
 
 	// Stats Information about the computed stats of the item: power, defense, etc... COMPONENT TYPE: ItemStats
-	Stats Stats `json:"stats"`
+	Stats Stats `firestore:"stats" json:"stats"`
 }
 
 // ItemSnapshot defines model for ItemSnapshot.
 type ItemSnapshot struct {
 	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
-	ItemDetails ItemDetails `json:"details"`
+	ItemDetails ItemDetails `firestore:"itemDetails" json:"details"`
 
 	// InstanceId Specific instance id for the item
-	InstanceId string `json:"instanceId"`
+	InstanceId string `firestore:"instanceId" json:"instanceId"`
 
 	// ItemHash Id used to find the definition of the item
-	ItemHash int64 `json:"itemHash"`
+	ItemHash int64 `firestore:"itemHash" json:"itemHash"`
 
 	// Name Name of the particular item
-	Name string `json:"name"`
+	Name string `firestore:"name" json:"name"`
 
 	// Timestamp Time the data was grabbed
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp time.Time `firestore:"timestamp" json:"timestamp"`
 }
 
 // Perk defines model for Perk.
 type Perk struct {
-	Description *string `json:"description,omitempty"`
+	Description *string `firestore:"description" json:"description,omitempty"`
 
 	// Hash The hash ID of the perk
-	Hash int64 `json:"hash"`
+	Hash int64 `firestore:"hash" json:"hash"`
 
 	// IconPath link to icon
-	IconPath *string `json:"iconPath,omitempty"`
-	Name     string  `json:"name"`
+	IconPath *string `firestore:"iconPath" json:"iconPath,omitempty"`
+	Name     string  `firestore:"name" json:"name"`
 }
 
 // Pong defines model for Pong.
@@ -168,25 +186,27 @@ type Pong struct {
 
 // Profile defines model for Profile.
 type Profile struct {
-	DisplayName string `json:"displayName"`
-	Id          string `json:"id"`
-	UniqueName  string `json:"uniqueName"`
+	Characters  []Character `json:"characters"`
+	DisplayName string      `json:"displayName"`
+	Id          string      `json:"id"`
+	MemberId    *string     `json:"memberId,omitempty"`
+	UniqueName  string      `json:"uniqueName"`
 }
 
 // Socket defines model for Socket.
 type Socket struct {
-	Description string  `json:"description"`
-	Icon        *string `json:"icon,omitempty"`
+	Description string  `firestore:"description" json:"description"`
+	Icon        *string `firestore:"icon" json:"icon,omitempty"`
 
 	// IsEnabled Whether the socket plug is enabled or not.
-	IsEnabled *bool `json:"isEnabled,omitempty"`
+	IsEnabled *bool `firestore:"isEnabled" json:"isEnabled,omitempty"`
 
 	// IsVisible Whether the socket plug is visible or not.
-	IsVisible *bool  `json:"isVisible,omitempty"`
-	Name      string `json:"name"`
+	IsVisible *bool  `firestore:"isVisible" json:"isVisible,omitempty"`
+	Name      string `firestore:"name" json:"name"`
 
 	// PlugHash The hash ID of the socket plug.
-	PlugHash int `json:"plugHash"`
+	PlugHash int `firestore:"plugHash" json:"plugHash"`
 }
 
 // Stats defines model for Stats.
@@ -220,12 +240,18 @@ type UniqueStatValue struct {
 // WeaponStats defines model for WeaponStats.
 type WeaponStats struct {
 	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
-	ItemDetails *ItemDetails `json:"details,omitempty"`
+	ItemDetails *ItemDetails `firestore:"itemDetails" json:"details,omitempty"`
 
 	// ReferenceId The hash ID of the item definition that describes the weapon.
 	ReferenceId *int64           `json:"referenceId,omitempty"`
 	Stats       *HistoricalStats `json:"stats,omitempty"`
 }
+
+// XMembershipID defines model for X-Membership-ID.
+type XMembershipID = string
+
+// XUserID defines model for X-User-ID.
+type XUserID = string
 
 // GetActivitiesParams defines parameters for GetActivities.
 type GetActivitiesParams struct {
@@ -240,7 +266,8 @@ type LoginJSONBody struct {
 
 // ProfileParams defines parameters for Profile.
 type ProfileParams struct {
-	XMembershipID string `json:"X-Membership-ID"`
+	XUserID       XUserID       `json:"X-User-ID"`
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
 }
 
 // RefreshTokenJSONBody defines parameters for RefreshToken.
@@ -250,8 +277,21 @@ type RefreshTokenJSONBody struct {
 
 // GetSnapshotsParams defines parameters for GetSnapshots.
 type GetSnapshotsParams struct {
-	Count int64 `form:"count" json:"count"`
-	Page  int64 `form:"page" json:"page"`
+	Count       int64   `form:"count" json:"count"`
+	Page        int64   `form:"page" json:"page"`
+	CharacterId string  `form:"characterId" json:"characterId"`
+	XUserID     XUserID `json:"X-User-ID"`
+}
+
+// CreateSnapshotJSONBody defines parameters for CreateSnapshot.
+type CreateSnapshotJSONBody struct {
+	CharacterId string `json:"characterId"`
+}
+
+// CreateSnapshotParams defines parameters for CreateSnapshot.
+type CreateSnapshotParams struct {
+	XUserID       XUserID       `json:"X-User-ID"`
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
 }
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
@@ -259,6 +299,9 @@ type LoginJSONRequestBody LoginJSONBody
 
 // RefreshTokenJSONRequestBody defines body for RefreshToken for application/json ContentType.
 type RefreshTokenJSONRequestBody RefreshTokenJSONBody
+
+// CreateSnapshotJSONRequestBody defines body for CreateSnapshot for application/json ContentType.
+type CreateSnapshotJSONRequestBody CreateSnapshotJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -285,7 +328,7 @@ type ServerInterface interface {
 	GetSnapshots(c *gin.Context, params GetSnapshotsParams)
 
 	// (POST /snapshots)
-	CreateSnapshot(c *gin.Context)
+	CreateSnapshot(c *gin.Context, params CreateSnapshotParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -407,9 +450,31 @@ func (siw *ServerInterfaceWrapper) Profile(c *gin.Context) {
 
 	headers := c.Request.Header
 
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
 	// ------------- Required header parameter "X-Membership-ID" -------------
 	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
-		var XMembershipID string
+		var XMembershipID XMembershipID
 		n := len(valueList)
 		if n != 1 {
 			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
@@ -457,6 +522,8 @@ func (siw *ServerInterfaceWrapper) GetSnapshots(c *gin.Context) {
 
 	var err error
 
+	c.Set(BearerAuthScopes, []string{})
+
 	// Parameter object where we will unmarshal all parameters from the context
 	var params GetSnapshotsParams
 
@@ -490,6 +557,45 @@ func (siw *ServerInterfaceWrapper) GetSnapshots(c *gin.Context) {
 		return
 	}
 
+	// ------------- Required query parameter "characterId" -------------
+
+	if paramValue := c.Query("characterId"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument characterId is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterId)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter characterId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -503,6 +609,57 @@ func (siw *ServerInterfaceWrapper) GetSnapshots(c *gin.Context) {
 // CreateSnapshot operation middleware
 func (siw *ServerInterfaceWrapper) CreateSnapshot(c *gin.Context) {
 
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateSnapshotParams
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required header parameter "X-Membership-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
+		var XMembershipID XMembershipID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XMembershipID = XMembershipID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -510,7 +667,7 @@ func (siw *ServerInterfaceWrapper) CreateSnapshot(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.CreateSnapshot(c)
+	siw.Handler.CreateSnapshot(c, params)
 }
 
 // GinServerOptions provides options for the Gin server.
@@ -672,6 +829,8 @@ func (response GetSnapshots200JSONResponse) VisitGetSnapshotsResponse(w http.Res
 }
 
 type CreateSnapshotRequestObject struct {
+	Params CreateSnapshotParams
+	Body   *CreateSnapshotJSONRequestBody
 }
 
 type CreateSnapshotResponseObject interface {
@@ -927,8 +1086,18 @@ func (sh *strictHandler) GetSnapshots(ctx *gin.Context, params GetSnapshotsParam
 }
 
 // CreateSnapshot operation middleware
-func (sh *strictHandler) CreateSnapshot(ctx *gin.Context) {
+func (sh *strictHandler) CreateSnapshot(ctx *gin.Context, params CreateSnapshotParams) {
 	var request CreateSnapshotRequestObject
+
+	request.Params = params
+
+	var body CreateSnapshotJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.Status(http.StatusBadRequest)
+		ctx.Error(err)
+		return
+	}
+	request.Body = &body
 
 	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.CreateSnapshot(ctx, request.(CreateSnapshotRequestObject))
@@ -954,47 +1123,55 @@ func (sh *strictHandler) CreateSnapshot(ctx *gin.Context) {
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

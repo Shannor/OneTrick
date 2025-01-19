@@ -17,13 +17,10 @@ paths:
                 $ref: '#/components/schemas/Pong'
   /profile:
     get:
-      parameters:
-        - in: header
-          name: X-Membership-ID
-          schema:
-            type: string
-          required: true
       operationId: Profile
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
       security:
         - bearerAuth: []
       responses:
@@ -75,6 +72,21 @@ paths:
                 $ref: '#/components/schemas/AuthResponse'
   /snapshots:
     post:
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+      requestBody:
+        description: "Provide the character to take the snapshot of"
+        required: true
+        content:
+          application/json:
+            schema:
+              required:
+                - characterId
+              type: object
+              properties:
+                characterId:
+                  type: string
       operationId: CreateSnapshot
       description: "Creates a new snapshot in the system and returns a list of "
       responses:
@@ -86,8 +98,11 @@ paths:
                 $ref: "#/components/schemas/CharacterSnapshot"
     get:
       operationId: GetSnapshots
-      description: "Returns a list of snapshots in the system"
+      security:
+        - bearerAuth: []
+      description: "Returns a list of snapshots in the system for a character"
       parameters:
+        - $ref: "#/components/parameters/X-User-ID"
         - name: count
           in: query
           required: true
@@ -100,6 +115,11 @@ paths:
           schema:
             type: integer
             format: int64
+        - name: characterId
+          in: query
+          required: true
+          schema:
+            type: string
       responses:
         200:
           description: ""
@@ -169,6 +189,19 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    X-User-ID:
+      name: X-User-ID
+      schema:
+        type: string
+      in: header
+      required: true
+    X-Membership-ID:
+      name: X-Membership-ID
+      schema:
+        type: string
+      in: header
+      required: true
   schemas:
     Profile:
       type: object
@@ -176,26 +209,44 @@ components:
         - id
         - displayName
         - uniqueName
+        - characters
       properties:
         id:
+          type: string
+        memberId:
           type: string
         displayName:
           type: string
         uniqueName:
           type: string
+        characters:
+          type: array
+          items:
+            $ref: "#/components/schemas/Character"
     CharacterSnapshot:
+      x-go-custom-tag: firestore:"characterSnapshot"
       type: object
       required:
         - items
         - timestamp
+        - characterId
       properties:
+        characterId:
+          type: string
+          description: "Id of the character being recorded"
+          x-oapi-codegen-extra-tags:
+             firestore: "characterId"
         timestamp:
           type: string
           format: date-time
           description: "Timestamp that the items were equipped turning"
+          x-oapi-codegen-extra-tags:
+            firestore: "timestamp"
         items:
           description: "All items that we currently care about, Kinetic, Energy, Heavy and Class for now"
           type: array
+          x-oapi-codegen-extra-tags:
+            firestore: "items"
           items:
             $ref: "#/components/schemas/ItemSnapshot"
     ItemSnapshot:
@@ -211,16 +262,24 @@ components:
           type: string
           format: date-time
           description: "Time the data was grabbed"
+          x-oapi-codegen-extra-tags:
+            firestore: "timestamp"
         instanceId:
           type: string
           description: "Specific instance id for the item"
+          x-oapi-codegen-extra-tags:
+            firestore: "instanceId"
         name:
           type: string
           description: "Name of the particular item"
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
         itemHash:
           type: integer
           description: "Id used to find the definition of the item"
           format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "itemHash"
         details:
           $ref: "#/components/schemas/ItemDetails"
 
@@ -267,6 +326,8 @@ components:
     AuthResponse:
       type: object
       properties:
+        id:
+          type: string
         accessToken:
           type: string
           description: Access token value.
@@ -285,6 +346,9 @@ components:
         membershipId:
           type: string
           description: Membership identification value.
+        primaryMembershipId:
+          type: string
+          description: Membership that is mainly used
       required:
         - accessToken
         - tokenType
@@ -292,6 +356,8 @@ components:
         - refreshToken
         - refreshExpiresIn
         - membershipId
+        - primaryMembershipId
+        - id
     WeaponStats:
       type: object
       properties:
@@ -349,6 +415,8 @@ components:
           type: string
           description: Localized formatted version of the value.
     Perk:
+      x-oapi-codegen-extra-tags:
+        firestore: "perks"
       type: object
       required:
         - name
@@ -356,22 +424,34 @@ components:
       properties:
         name:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
         description:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "description"
         hash:
           type: integer
           description: The hash ID of the perk
           format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "hash"
         iconPath:
           type: string
           description: "link to icon"
+          x-oapi-codegen-extra-tags:
+            firestore: "iconPath"
     Stats:
+      x-oapi-codegen-extra-tags:
+        firestore: "stats"
       type: object
       additionalProperties:
         $ref: "#/components/schemas/GunStat"
       x-dictionary-key:
         type: string
     GunStat:
+      x-oapi-codegen-extra-tags:
+        firestore: "gunStat"
       type: object
       required:
         - name
@@ -383,15 +463,25 @@ components:
           type: integer
           description: The hash ID of the stat.
           format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "hash"
         value:
           type: integer
           description: The value of the stat.
           format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "value"
         name:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
         description:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "description"
     Socket:
+      x-oapi-codegen-extra-tags:
+        firestore: "socket"
       type: object
       required:
         - plugHash
@@ -401,19 +491,33 @@ components:
         plugHash:
           type: integer
           description: The hash ID of the socket plug.
+          x-oapi-codegen-extra-tags:
+            firestore: "plugHash"
         isEnabled:
           type: boolean
           description: Whether the socket plug is enabled or not.
+          x-oapi-codegen-extra-tags:
+            firestore: "isEnabled"
         isVisible:
           type: boolean
           description: Whether the socket plug is visible or not.
+          x-oapi-codegen-extra-tags:
+            firestore: "isVisible"
         name:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
         description:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "description"
         icon:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "icon"
     BaseItemInfo:
+      x-oapi-codegen-extra-tags:
+        firestore: "baseItemInfo"
       type: object
       required:
         - name
@@ -423,17 +527,27 @@ components:
       properties:
         name:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
         itemHash:
           type: integer
           format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "itemHash"
         instanceId:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "instanceId"
         bucketHash:
           type: integer
           format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "bucketHash"
         damage:
           $ref: "#/components/schemas/DamageInfo"
     DamageInfo:
+      x-oapi-codegen-extra-tags:
+        firestore: "damageInfo"
       type: object
       required:
         - damageType
@@ -443,13 +557,21 @@ components:
       properties:
         damageType:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "damageType"
         damageIcon:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "damageIcon"
         transparentIcon:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "transparentIcon"
         color:
           $ref: "#/components/schemas/Color"
     Color:
+      x-oapi-codegen-extra-tags:
+        firestore: "color"
       type: object
       required:
         - red
@@ -460,19 +582,71 @@ components:
         red:
           type: integer
           format: int
+          x-oapi-codegen-extra-tags:
+            firestore: "red"
         green:
           type: integer
           format: int
+          x-oapi-codegen-extra-tags:
+            firestore: "green"
         blue:
           type: integer
           format: int
+          x-oapi-codegen-extra-tags:
+            firestore: "blue"
         alpha:
           type: integer
           format: int
-
+          x-oapi-codegen-extra-tags:
+            firestore: "alpha"
+    Character:
+      x-oapi-codegen-extra-tags:
+        firestore: "character"
+      type: object
+      required:
+        - id
+        - light
+        - emblemBackgroundPath
+        - emblemPath
+        - titleId
+        - raceId
+        - classId
+      properties:
+        id:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "id"
+        light:
+          type: integer
+          format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "light"
+        emblemPath:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "emblemPath"
+        emblemBackgroundPath:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "emblemBackgroundPath"
+        titleId:
+          type: integer
+          format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "titleId"
+        raceId:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: "raceId"
+        classId:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: "classId"
     ItemDetails:
       type: object
       x-go-name: ItemDetails
+      x-oapi-codegen-extra-tags:
+        firestore: "itemDetails"
       required:
         - perks
         - stats
@@ -484,6 +658,8 @@ components:
             If the item is on a character, this will return the ID of
             the character that is holding the item.
           nullable: true
+          x-oapi-codegen-extra-tags:
+            firestore: "characterId"
         baseInfo:
           $ref: "#/components/schemas/BaseItemInfo"
         perks:
@@ -493,6 +669,8 @@ components:
           description: >-
             Information specifically about the perks currently active on the item.
             COMPONENT TYPE: ItemPerks
+          x-oapi-codegen-extra-tags:
+            firestore: "perks"
         stats:
           type: object
           allOf:
@@ -500,8 +678,12 @@ components:
           description: >-
             Information about the computed stats of the item: power, defense, etc...
             COMPONENT TYPE: ItemStats
+          x-oapi-codegen-extra-tags:
+            firestore: "stats"
         sockets:
           type: array
+          x-oapi-codegen-extra-tags:
+            firestore: "sockets"
           items:
             $ref: "#/components/schemas/Socket"
           description: >-

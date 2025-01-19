@@ -30,6 +30,7 @@ const SubClass = 3284755031
 
 type Service interface {
 	GetCurrentInventory(membershipID int64) ([]bungie.ItemComponent, *time.Time, error)
+	GetCharacters(primaryMembershipId int64, membershipType int64) ([]bungie.CharacterComponent, error)
 	// SaveCharacterSnapshot TODO: Pass membershipID in the future and character ID
 	SaveCharacterSnapshot(snapshot api.CharacterSnapshot) error
 	GetAllCharacterSnapshots() ([]api.CharacterSnapshot, error)
@@ -409,6 +410,34 @@ func (a *service) GetCurrentInventory(membershipId int64) ([]bungie.ItemComponen
 	}
 	return results, timeStamp, nil
 }
+
+func (a *service) GetCharacters(primaryMembershipId int64, membershipType int64) ([]bungie.CharacterComponent, error) {
+	var components []int32
+	components = append(components, 200)
+	params := &bungie.Destiny2GetProfileParams{
+		Components: &components,
+	}
+	resp, err := a.client.Destiny2GetProfileWithResponse(context.Background(), int32(membershipType), primaryMembershipId, params)
+	if err != nil {
+		slog.With("error", err.Error()).Error("failed to get profile")
+		return nil, err
+	}
+
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("no response found")
+	}
+
+	if resp.JSON200.Response.Characters == nil {
+		return nil, fmt.Errorf("no response found")
+	}
+	var items []bungie.CharacterComponent
+	for _, c := range *resp.JSON200.Response.Characters.Data {
+		items = append(items, c)
+	}
+
+	return items, nil
+}
+
 func (a *service) EnrichWeaponStats(ctx context.Context, primaryMembershipId string, items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error) {
 	mapping := map[int64]api.ItemDetails{}
 	for _, component := range items {

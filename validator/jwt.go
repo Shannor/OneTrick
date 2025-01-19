@@ -13,14 +13,14 @@ import (
 
 type key string
 
-const accessToken key = "access_token"
+const accessToken key = "access_info"
 
-func NewContext(ctx context.Context, token string) context.Context {
-	return context.WithValue(ctx, accessToken, token)
+type Access struct {
+	AccessToken string
 }
 
-func FromContext(ctx context.Context) (string, bool) {
-	t, ok := ctx.Value(accessToken).(string)
+func FromContext(ctx context.Context) (*Access, bool) {
+	t, ok := ctx.Value(string(accessToken)).(*Access)
 	return t, ok
 }
 
@@ -63,11 +63,11 @@ func Authenticate(ctx context.Context, input *openapi3filter.AuthenticationInput
 
 	// Can't validate token because we didn't make it.
 	// But we could check for a header here maybe
-
+	ac := Access{AccessToken: jws}
 	// Set the property on the echo context so the handler is able to
 	// access the claims data we generate in here.
 	eCtx := middleware.GetGinContext(ctx)
-	NewContext(eCtx, jws)
+	eCtx.Set(string(accessToken), &ac)
 
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"oneTrick/clients/gcp"
 	"oneTrick/envvars"
 	"oneTrick/services/destiny"
+	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"oneTrick/validator"
 )
@@ -37,11 +38,12 @@ func main() {
 	)
 	firestore := gcp.CreateFirestore(context.Background())
 	rClient := resty.New()
+	snapshotService := snapshot.NewService(firestore)
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore)
 	userService := user.NewUserService(firestore)
 
-	server := NewServer(destinyService, d2AuthAService, userService)
+	server := NewServer(destinyService, d2AuthAService, userService, snapshotService)
 
 	defer firestore.Close()
 	// Load OpenAPI spec file
