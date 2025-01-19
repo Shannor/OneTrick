@@ -11,6 +11,7 @@ import (
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"strconv"
+	"time"
 )
 
 // ensure that we've conformed to the `ServerInterface` with a compile-time check
@@ -85,6 +86,7 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return nil, err
 	}
 	if existingUser != nil {
+		now := time.Now()
 		result := api.AuthResponse{
 			AccessToken:         resp.AccessToken,
 			ExpiresIn:           resp.ExpiresIn,
@@ -94,6 +96,7 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 			TokenType:           resp.TokenType,
 			Id:                  existingUser.ID,
 			PrimaryMembershipId: existingUser.PrimaryMembershipID,
+			Timestamp:           now,
 		}
 		return api.Login200JSONResponse(result), nil
 	}
@@ -132,6 +135,7 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return nil, err
 	}
 
+	now := time.Now()
 	result := api.AuthResponse{
 		AccessToken:         resp.AccessToken,
 		ExpiresIn:           resp.ExpiresIn,
@@ -141,13 +145,33 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		TokenType:           resp.TokenType,
 		Id:                  newUser.ID,
 		PrimaryMembershipId: newUser.PrimaryMembershipID,
+		Timestamp:           now,
 	}
 	return api.Login200JSONResponse(result), nil
 }
 
 func (s Server) RefreshToken(ctx context.Context, request api.RefreshTokenRequestObject) (api.RefreshTokenResponseObject, error) {
-	//TODO implement me
-	panic("implement me")
+	resp, err := s.D2AuthService.RefreshAccessToken(request.Body.Code)
+	if err != nil {
+		return nil, err
+	}
+	existingUser, err := s.UserService.GetUser(ctx, resp.MembershipID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	result := api.AuthResponse{
+		AccessToken:         resp.AccessToken,
+		ExpiresIn:           resp.ExpiresIn,
+		MembershipId:        resp.MembershipID,
+		RefreshExpiresIn:    resp.RefreshExpiresIn,
+		RefreshToken:        resp.RefreshToken,
+		TokenType:           resp.TokenType,
+		Id:                  existingUser.ID,
+		PrimaryMembershipId: existingUser.PrimaryMembershipID,
+		Timestamp:           now,
+	}
+	return api.RefreshToken200JSONResponse(result), nil
 }
 
 func (s Server) GetPing(ctx context.Context, request api.GetPingRequestObject) (api.GetPingResponseObject, error) {

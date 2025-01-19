@@ -122,6 +122,9 @@ func (a *AuthServiceImpl) HasAccess(ctx context.Context, membershipID, token str
 	if err != nil {
 		return false, err
 	}
+	if resp.JSON200 == nil {
+		return false, nil
+	}
 	if resp.JSON200.MembershipData == nil {
 		return false, nil
 	}

@@ -349,6 +349,9 @@ components:
         primaryMembershipId:
           type: string
           description: Membership that is mainly used
+        timestamp:
+          type: string
+          format: date-time
       required:
         - accessToken
         - tokenType
@@ -358,6 +361,7 @@ components:
         - membershipId
         - primaryMembershipId
         - id
+        - timestamp
     WeaponStats:
       type: object
       properties:
