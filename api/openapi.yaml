@@ -433,10 +433,12 @@ components:
         - competitive
         - quickplay
         - allPvP
+        - ironBanner
       x-enum-varnames:
         - Competitive
         - Quickplay
         - AllPvP
+        - IronBanner
     StatsValuePair:
       type: object
       properties:

@@ -276,6 +276,12 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
+	case api.IronBanner:
+		history, err = s.D2Service.GetIronBannerActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		if err != nil {
+			slog.With("error", err.Error()).Error("Failed to fetch activity data")
+			return nil, err
+		}
 	default:
 		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
 		if err != nil {
