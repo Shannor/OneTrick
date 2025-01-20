@@ -26,16 +26,12 @@ const SubClass = 3284755031
 type Service interface {
 	GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error)
 	GetCharacters(primaryMembershipId int64, membershipType int64) ([]api.Character, error)
-	// SaveCharacterSnapshot TODO: Pass membershipID in the future and character ID
-	SaveCharacterSnapshot(snapshot api.CharacterSnapshot) error
-	GetAllCharacterSnapshots() ([]api.CharacterSnapshot, error)
-	GetClosestSnapshot(membershipID int64, activityPeriod *time.Time) (*api.CharacterSnapshot, error)
-	GetWeaponDetails(ctx context.Context, membershipID string, weaponInstanceID string) (*api.ItemDetails, error)
+	GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemDetails, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error)
-	EnrichWeaponStats(ctx context.Context, primaryMembershipId string, items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
+	EnrichWeaponStats(items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
 }
 
 type service struct {
@@ -44,8 +40,6 @@ type service struct {
 	DB       *firestore.Client
 }
 
-const accessToken = "CPjuBhKGAgAgPaFF75otR0QMEd5aiJ9/Zwm9DEam9oZfHluU556o3mbgAAAACMiTGscENoFDeffOB30j3GhPHUhp1ZbXJsdzjOFhGLw8HFA7triZ5s0wx965nNXdn3IDxjBjxjd65Xg+2b6yM0cgRzQAnIhPy/uvq/oBT2s9lIkPKripHs5yCOmSbZXnOHLCOr0ZvN1Dx3aWBtXDd8bgZEJrAfmnTHnBsZhTWmHMLT6A8CoNJJHJiRLgAI0EsGcbYZDTAZzt+OVur1CLS+/F/yQnhNwKzP1cmVHnu02Zq2meNcQQazkxNUPEwFcxPRycTMXEHNQH0T0pbGvX0Q3FJe9OuNLS+5VyCvJPdpo="
-
 func NewService(apiKey string, firestore *firestore.Client) Service {
 	hc := http.Client{}
 	cli, err := bungie.NewClientWithResponses(
@@ -53,7 +47,6 @@ func NewService(apiKey string, firestore *firestore.Client) Service {
 		bungie.WithHTTPClient(&hc),
 		bungie.WithRequestEditorFn(func(ctx context.Context, req *http.Request) error {
 			req.Header.Add("X-API-KEY", apiKey)
-			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 			req.Header.Add("Accept", "application/json")
 			req.Header.Add("Content-Type", "application/json")
 			req.Header.Add("User-Agent", "oneTrick-backend")
@@ -215,59 +208,6 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	return TransformPeriodGroups(*resp.JSON200.Response.Activities, *a.Manifest), nil
 }
 
-const profileFile = "profile_data.json"
-
-func (a *service) SaveCharacterSnapshot(snapshot api.CharacterSnapshot) error {
-	existingData := make(map[string]api.CharacterSnapshot)
-	stat, err := os.Stat(profileFile)
-	if err == nil && !stat.IsDir() {
-		content, readErr := os.ReadFile(profileFile)
-		if readErr == nil {
-			_ = json.Unmarshal(content, &existingData) // Ignore error for simplicity
-		} else {
-			slog.With("error", readErr.Error()).Error("Failed to read file")
-		}
-	}
-
-	file, err := os.OpenFile(profileFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
-	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to open file")
-		return err
-	}
-	defer file.Close()
-
-	existingData[snapshot.Timestamp.Format(time.RFC3339)] = snapshot
-	// Marshal the updated data
-	data, err := json.MarshalIndent(existingData, "", "  ")
-	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to marshal items")
-		return err
-	}
-
-	if _, err := file.Write(data); err != nil {
-		slog.With("error", err.Error()).Error("Failed to write to file")
-		return err
-	}
-	return nil
-}
-
-func (a *service) GetAllCharacterSnapshots() ([]api.CharacterSnapshot, error) {
-	existingData := make(map[string]api.CharacterSnapshot)
-	stat, err := os.Stat(profileFile)
-	if err == nil && !stat.IsDir() {
-		content, readErr := os.ReadFile(profileFile)
-		if readErr == nil {
-			_ = json.Unmarshal(content, &existingData) // Ignore error for simplicity
-		} else {
-			slog.With("error", readErr.Error()).Error("Failed to read file")
-		}
-	}
-	var results []api.CharacterSnapshot
-	for _, snapshot := range existingData {
-		results = append(results, snapshot)
-	}
-	return results, nil
-}
 func (a *service) GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error) {
 
 	resp, err := a.client.Destiny2GetPostGameCarnageReportWithResponse(ctx, activityID)
@@ -306,47 +246,6 @@ func (a *service) GetActivity(ctx context.Context, characterID string, activityI
 	return TransformHistoricActivity(data.ActivityDetails, *a.Manifest), weapons, data.Period, nil
 }
 
-func (a *service) GetClosestSnapshot(membershipID int64, activityPeriod *time.Time) (*api.CharacterSnapshot, error) {
-	existingData := make(map[string]api.CharacterSnapshot)
-	stat, err := os.Stat(profileFile)
-	if err == nil && !stat.IsDir() {
-		content, readErr := os.ReadFile(profileFile)
-		if readErr == nil {
-			_ = json.Unmarshal(content, &existingData) // Ignore error for simplicity
-		} else {
-			slog.With("error", readErr.Error()).Error("Failed to read file")
-		}
-	}
-
-	var closestSnapshot string
-	minDuration := time.Duration(1<<63 - 1) // Max duration value
-
-	for snapshot := range existingData {
-		t, err := time.Parse(time.RFC3339, snapshot)
-		if err != nil {
-			slog.With("error", err.Error(), "snapshot", snapshot).Error("Failed to parse snapshot time")
-			continue
-		}
-
-		duration := t.Sub(*activityPeriod)
-		if duration < 0 {
-			duration = -duration
-		}
-
-		if duration < minDuration {
-			minDuration = duration
-			closestSnapshot = snapshot
-		}
-	}
-
-	if closestSnapshot == "" {
-		return nil, fmt.Errorf("no matching snapshot found for membership ID %d", membershipID)
-	}
-
-	snap := existingData[closestSnapshot]
-	return &snap, nil
-}
-
 const (
 	ItemPerks      = 302
 	ItemStatsCode  = 304
@@ -354,7 +253,7 @@ const (
 	ItemCommonData = 307
 )
 
-func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, weaponInstanceID string) (*api.ItemDetails, error) {
+func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemDetails, error) {
 	components := []int32{ItemPerks, ItemStatsCode, ItemSockets, ItemCommonData}
 	membershipIdInt64, err := strconv.ParseInt(membershipID, 10, 64)
 	if err != nil {
@@ -367,7 +266,7 @@ func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, wea
 	params := bungie.Destiny2GetItemParams{Components: &components}
 	response, err := a.client.Destiny2GetItemWithResponse(
 		ctx,
-		2,
+		int32(membershipType),
 		membershipIdInt64,
 		weaponInstanceIDInt64,
 		&params,
@@ -461,7 +360,7 @@ func (a *service) GetCharacters(primaryMembershipId int64, membershipType int64)
 	return results, nil
 }
 
-func (a *service) EnrichWeaponStats(ctx context.Context, primaryMembershipId string, items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error) {
+func (a *service) EnrichWeaponStats(items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error) {
 	mapping := map[int64]api.ItemDetails{}
 	for _, component := range items {
 		mapping[component.ItemHash] = component.ItemDetails

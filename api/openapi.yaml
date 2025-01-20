@@ -170,6 +170,13 @@ paths:
     get:
       operationId: GetActivity
       parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+        - name: characterId
+          in: query
+          required: true
+          schema:
+           type: string
         - name: activityId
           in: path
           required: true

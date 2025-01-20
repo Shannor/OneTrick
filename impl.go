@@ -223,7 +223,7 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 			InstanceId: *item.ItemInstanceId,
 			Timestamp:  *timestamp,
 		}
-		details, err := s.D2Service.GetWeaponDetails(ctx, request.Params.XMembershipID, *item.ItemInstanceId)
+		details, err := s.D2Service.GetWeaponDetails(ctx, request.Params.XMembershipID, membershipType, *item.ItemInstanceId)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't find an item with item hash %d", item.ItemHash)
 		}
@@ -292,7 +292,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	if err != nil {
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
-	activityDetails, weaponStats, period, err := s.D2Service.GetActivity(ctx, characterID, id)
+	activityDetails, weaponStats, period, err := s.D2Service.GetActivity(ctx, request.Params.CharacterId, id)
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
 		return nil, fmt.Errorf("failed to fetch weapon data for activity: %w", err)
@@ -300,15 +300,15 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	if activityDetails == nil {
 		return nil, fmt.Errorf("no activity details found for activity ID: %s", activityId)
 	}
-	// 1. Get the closet snapshot(s)
+
 	// TODO: Maybe add a warning when the snapshot is more than 30 minutes away since that may not be accurate anymore
-	characterSnapshot, err := s.D2Service.GetClosestSnapshot(primaryMembershipId, period)
+	characterSnapshot, err := s.SnapshotService.GetClosestSnapshot(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to fetch snapshot")
 		return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
 	}
 
-	stats, err := s.D2Service.EnrichWeaponStats(ctx, strconv.Itoa(primaryMembershipId), characterSnapshot.Items, weaponStats)
+	stats, err := s.D2Service.EnrichWeaponStats(characterSnapshot.Items, weaponStats)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed enriching")
 		return nil, fmt.Errorf("failed to enrich weapon stats: %w", err)
