@@ -198,15 +198,9 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 		return nil, fmt.Errorf("invalid membership id: %w", err)
 	}
 
-	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
+	membershipType, err := s.UserService.GetMembershipType(ctx, request.Params.XUserID, request.Params.XMembershipID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch user: %w", err)
-	}
-	membershipType := int64(0)
-	for _, membership := range u.Memberships {
-		if membership.ID == request.Params.XMembershipID {
-			membershipType = membership.Type
-		}
+		return nil, fmt.Errorf("failed to fetch membership type: %w", err)
 	}
 
 	items, timestamp, err := s.D2Service.GetCurrentInventory(ctx, memID, membershipType, request.Body.CharacterId)
@@ -248,18 +242,48 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 }
 
 func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequestObject) (api.GetActivitiesResponseObject, error) {
-	id, err := strconv.ParseInt(characterID, 10, 64)
-	if err != nil {
-		return nil, err
-	}
 	params := request.Params
-	resp, err := s.D2Service.GetAllPVPActivity(primaryMembershipId, id, params.Count, params.Page)
+
+	membershipType, err := s.UserService.GetMembershipType(ctx, params.XUserID, params.XMembershipID)
 	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to fetch activity data")
 		return nil, err
 	}
 
-	return api.GetActivities200JSONResponse(resp), nil
+	mode := api.AllPvP
+	if request.Params.Mode != nil {
+		mode = *request.Params.Mode
+	}
+
+	history := make([]api.ActivityHistory, 0)
+	switch mode {
+	case api.AllPvP:
+		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		if err != nil {
+			slog.With("error", err.Error()).Error("Failed to fetch activity data")
+			return nil, err
+		}
+	case api.Competitive:
+		history, err = s.D2Service.GetCompetitiveActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		if err != nil {
+			slog.With("error", err.Error()).Error("Failed to fetch activity data")
+			return nil, err
+		}
+
+	case api.Quickplay:
+		history, err = s.D2Service.GetQuickPlayActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		if err != nil {
+			slog.With("error", err.Error()).Error("Failed to fetch activity data")
+			return nil, err
+		}
+	default:
+		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		if err != nil {
+			slog.With("error", err.Error()).Error("Failed to fetch activity data")
+			return nil, err
+		}
+	}
+
+	return api.GetActivities200JSONResponse(history), nil
 }
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
 	activityId := request.ActivityId

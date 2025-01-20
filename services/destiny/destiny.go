@@ -18,11 +18,6 @@ import (
 	"time"
 )
 
-const characterID = "2305843009261519028"
-
-// Reference ID == ItemHash
-const referenceID = "882778888"
-
 const Kinetic = 1498876634
 const Energy = 2465295065
 const Power = 953998645
@@ -36,9 +31,9 @@ type Service interface {
 	GetAllCharacterSnapshots() ([]api.CharacterSnapshot, error)
 	GetClosestSnapshot(membershipID int64, activityPeriod *time.Time) (*api.CharacterSnapshot, error)
 	GetWeaponDetails(ctx context.Context, membershipID string, weaponInstanceID string) (*api.ItemDetails, error)
-	GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error)
-	GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error)
-	GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error)
+	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
+	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
+	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error)
 	EnrichWeaponStats(ctx context.Context, primaryMembershipId string, items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
 }
@@ -154,27 +149,43 @@ func getManifest() (*Manifest, error) {
 	return manifest, nil
 }
 
-func (a *service) GetQuickPlayActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error) {
-	return getActivity(a, membershipID, characterID, count, int64(bungie.CurrentActivityModeTypePvPQuickplay), page)
+func (a *service) GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error) {
+	return getActivity(a, ctx, membershipID, membershipType, characterID, count, int64(bungie.CurrentActivityModeTypePvPQuickplay), page)
 }
 
-func (a *service) GetAllPVPActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error) {
-	return getActivity(a, membershipID, characterID, count, int64(bungie.CurrentActivityModeTypeAllPvP), page)
+func (a *service) GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error) {
+	return getActivity(a, ctx, membershipID, membershipType, characterID, count, int64(bungie.CurrentActivityModeTypeAllPvP), page)
 }
 
-func (a *service) GetCompetitiveActivity(membershipID, characterID int64, count int64, page int64) ([]api.ActivityHistory, error) {
-	return getActivity(a, membershipID, characterID, count, int64(bungie.CurrentActivityModeTypePvPCompetitive), page)
+func (a *service) GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error) {
+	return getActivity(a, ctx, membershipID, membershipType, characterID, count, int64(bungie.CurrentActivityModeTypePvPCompetitive), page)
 }
 
-func getActivity(a *service, membershipID, characterID int64, count int64, mode int64, page int64) (
+func getActivity(a *service, ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, mode int64, page int64) (
 	[]api.ActivityHistory,
 	error,
 ) {
+	cID, err := strconv.ParseInt(characterID, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	mID, err := strconv.ParseInt(membershipID, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	s := slog.With(
+		"membershipID", membershipID,
+		"membershipType", membershipType,
+		"characterID", characterID,
+		"count", count,
+		"mode", mode,
+		"page", page,
+	)
 	resp, err := a.client.Destiny2GetActivityHistoryWithResponse(
-		context.Background(),
-		2,
-		membershipID,
-		characterID,
+		ctx,
+		int32(membershipType),
+		mID,
+		cID,
 		&bungie.Destiny2GetActivityHistoryParams{
 			Count: utils.ToPointer(int32(count)),
 			Mode:  utils.ToPointer(int32(mode)),
@@ -182,10 +193,21 @@ func getActivity(a *service, membershipID, characterID int64, count int64, mode 
 		},
 	)
 	if err != nil {
+		s.With("error", err.Error()).Error("Failed to get activity history")
 		return nil, err
 	}
+	if resp.StatusCode() != http.StatusOK {
+		s.With("status", resp.Status(), "status code", resp.StatusCode()).Error("Failed to get activity history")
+		return nil, fmt.Errorf("failed to get activity history")
+	}
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("no response found")
+	}
+	if resp.JSON200.Response == nil {
+		return nil, fmt.Errorf("no response found")
+	}
 	if resp.JSON200.Response.Activities == nil {
-		return nil, nil
+		return nil, fmt.Errorf("no activities found")
 	}
 	if a.Manifest == nil {
 		return nil, fmt.Errorf("manifest is not provided")

@@ -4,6 +4,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"context"
 	"errors"
+	"fmt"
 	"google.golang.org/api/iterator"
 	"time"
 )
@@ -11,6 +12,7 @@ import (
 type Service interface {
 	GetUser(ctx context.Context, ID string) (*User, error)
 	CreateUser(ctx context.Context, user *User) (*User, error)
+	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
 }
 type userService struct {
 	DB *firestore.Client
@@ -84,4 +86,18 @@ func (s *userService) CreateUser(ctx context.Context, user *User) (*User, error)
 		return nil, err
 	}
 	return user, nil
+}
+
+func (s *userService) GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error) {
+	u, err := s.GetUser(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch user: %w", err)
+	}
+	membershipType := int64(0)
+	for _, membership := range u.Memberships {
+		if membership.ID == membershipID {
+			membershipType = membership.Type
+		}
+	}
+	return membershipType, nil
 }

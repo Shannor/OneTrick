@@ -133,6 +133,8 @@ paths:
   /activities:
     get:
       parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
         - name: count
           in: query
           required: true
@@ -145,6 +147,15 @@ paths:
           schema:
             type: integer
             format: int64
+        - name: characterId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: mode
+          in: query
+          schema:
+            $ref: "#/components/schemas/ActivityMode"
       operationId: GetActivities
       responses:
         200:
@@ -408,6 +419,16 @@ components:
             personal best was established is available on this property.
           format: int64
           nullable: true
+    ActivityMode:
+      type: string
+      enum:
+        - competitive
+        - quickplay
+        - allPvP
+      x-enum-varnames:
+        - Competitive
+        - Quickplay
+        - AllPvP
     StatsValuePair:
       type: object
       properties:
