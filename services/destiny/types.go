@@ -9,7 +9,7 @@ type Manifest struct {
 	ClassDefinition                          map[string]ClassDefinition           `json:"DestinyClassDefinition"`
 	GenderDefinition                         map[string]any                       `json:"DestinyGenderDefinition"`
 	InventoryBucketDefinition                map[string]InventoryBucketDefinition `json:"DestinyInventoryBucketDefinition"`
-	RaceDefinition                           map[string]any                       `json:"DestinyRaceDefinition"`
+	RaceDefinition                           map[string]RaceDefinition            `json:"DestinyRaceDefinition"`
 	UnlockDefinition                         map[string]any                       `json:"DestinyUnlockDefinition"`
 	StatGroupDefinition                      map[string]any                       `json:"DestinyStatGroupDefinition"`
 	ProgressionMappingDefinition             map[string]any                       `json:"DestinyProgressionMappingDefinition"`
@@ -59,7 +59,7 @@ type Manifest struct {
 	PresentationNodeDefinition               map[string]any                       `json:"DestinyPresentationNodeDefinition"`
 	ProgressionDefinition                    map[string]any                       `json:"DestinyProgressionDefinition"`
 	ProgressionLevelRequirementDefinition    map[string]any                       `json:"DestinyProgressionLevelRequirementDefinition"`
-	RecordDefinition                         map[string]any                       `json:"DestinyRecordDefinition"`
+	RecordDefinition                         map[string]RecordDefinition          `json:"DestinyRecordDefinition"`
 	RewardAdjusterPointerDefinition          map[string]any                       `json:"DestinyRewardAdjusterPointerDefinition"`
 	RewardAdjusterProgressionMapDefinition   map[string]any                       `json:"DestinyRewardAdjusterProgressionMapDefinition"`
 	RewardItemListDefinition                 map[string]any                       `json:"DestinyRewardItemListDefinition"`
@@ -374,4 +374,93 @@ type AuthResponse struct {
 	RefreshToken     string `json:"refresh_token"`
 	RefreshExpiresIn int    `json:"refresh_expires_in"`
 	MembershipID     string `json:"membership_id"`
+}
+
+type RaceDisplayProperties struct {
+	Description string `json:"description"`
+	HasIcon     bool   `json:"hasIcon"`
+	Name        string `json:"name"`
+}
+
+type GenderedRaceNames struct {
+	Female string `json:"Female"`
+	Male   string `json:"Male"`
+}
+
+type RaceDefinition struct {
+	Blacklisted                   bool                  `json:"blacklisted"`
+	DisplayProperties             RaceDisplayProperties `json:"displayProperties"`
+	GenderedRaceNames             GenderedRaceNames     `json:"genderedRaceNames"`
+	GenderedRaceNamesByGenderHash GenderedRaceNames     `json:"genderedRaceNamesByGenderHash"`
+	Hash                          float64               `json:"hash"`
+	Index                         int                   `json:"index"`
+	RaceType                      int                   `json:"raceType"`
+	Redacted                      bool                  `json:"redacted"`
+}
+
+type RecordDefinition struct {
+	DisplayProperties struct {
+		Description   string `json:"description"`
+		Name          string `json:"name"`
+		Icon          string `json:"icon"`
+		IconSequences []struct {
+			Frames []string `json:"frames"`
+		} `json:"iconSequences"`
+		HasIcon bool `json:"hasIcon"`
+	} `json:"displayProperties"`
+	Scope                int   `json:"scope"`
+	ObjectiveHashes      []int `json:"objectiveHashes"`
+	RecordValueStyle     int   `json:"recordValueStyle"`
+	ForTitleGilding      bool  `json:"forTitleGilding"`
+	ShouldShowLargeIcons bool  `json:"shouldShowLargeIcons"`
+	TitleInfo            struct {
+		HasTitle       bool `json:"hasTitle"`
+		TitlesByGender struct {
+			Male   string `json:"Male"`
+			Female string `json:"Female"`
+		} `json:"titlesByGender"`
+		TitlesByGenderHash struct {
+			Num2204441813 string `json:"2204441813"`
+			Num3111576190 string `json:"3111576190"`
+		} `json:"titlesByGenderHash"`
+		GildingTrackingRecordHash int64 `json:"gildingTrackingRecordHash"`
+	} `json:"titleInfo"`
+	CompletionInfo struct {
+		PartialCompletionObjectiveCountThreshold int  `json:"partialCompletionObjectiveCountThreshold"`
+		ScoreValue                               int  `json:"ScoreValue"`
+		ShouldFireToast                          bool `json:"shouldFireToast"`
+		ToastStyle                               int  `json:"toastStyle"`
+	} `json:"completionInfo"`
+	StateInfo struct {
+		FeaturedPriority                int64  `json:"featuredPriority"`
+		ObscuredName                    string `json:"obscuredName"`
+		ObscuredDescription             string `json:"obscuredDescription"`
+		CompleteUnlockHash              int    `json:"completeUnlockHash"`
+		ClaimedUnlockHash               int    `json:"claimedUnlockHash"`
+		CompletedCounterUnlockValueHash int    `json:"completedCounterUnlockValueHash"`
+	} `json:"stateInfo"`
+	Requirements struct {
+		EntitlementUnavailableMessage string `json:"entitlementUnavailableMessage"`
+	} `json:"requirements"`
+	ExpirationInfo struct {
+		HasExpiration bool   `json:"hasExpiration"`
+		Description   string `json:"description"`
+	} `json:"expirationInfo"`
+	IntervalInfo struct {
+		IntervalObjectives                   []interface{} `json:"intervalObjectives"`
+		IntervalRewards                      []interface{} `json:"intervalRewards"`
+		OriginalObjectiveArrayInsertionIndex int           `json:"originalObjectiveArrayInsertionIndex"`
+		IsIntervalVersionedFromNormalRecord  bool          `json:"isIntervalVersionedFromNormalRecord"`
+	} `json:"intervalInfo"`
+	RewardItems                       []interface{} `json:"rewardItems"`
+	AnyRewardHasConditionalVisibility bool          `json:"anyRewardHasConditionalVisibility"`
+	RecordTypeName                    string        `json:"recordTypeName"`
+	PresentationNodeType              int           `json:"presentationNodeType"`
+	TraitIds                          []interface{} `json:"traitIds"`
+	TraitHashes                       []interface{} `json:"traitHashes"`
+	ParentNodeHashes                  []interface{} `json:"parentNodeHashes"`
+	Hash                              int           `json:"hash"`
+	Index                             int           `json:"index"`
+	Redacted                          bool          `json:"redacted"`
+	Blacklisted                       bool          `json:"blacklisted"`
 }

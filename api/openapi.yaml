@@ -610,11 +610,11 @@ components:
       required:
         - id
         - light
-        - emblemBackgroundPath
-        - emblemPath
-        - titleId
-        - raceId
-        - classId
+        - emblemBackgroundURL
+        - emblemURL
+        - currentTitle
+        - race
+        - class
       properties:
         id:
           type: string
@@ -625,27 +625,26 @@ components:
           format: int64
           x-oapi-codegen-extra-tags:
             firestore: "light"
-        emblemPath:
+        emblemURL:
           type: string
           x-oapi-codegen-extra-tags:
-            firestore: "emblemPath"
-        emblemBackgroundPath:
+            firestore: "emblemURL"
+        emblemBackgroundURL:
           type: string
           x-oapi-codegen-extra-tags:
-            firestore: "emblemBackgroundPath"
-        titleId:
-          type: integer
-          format: int64
+            firestore: "emblemBackgroundURL"
+        currentTitle:
+          type: string
           x-oapi-codegen-extra-tags:
-            firestore: "titleId"
-        raceId:
-          type: integer
+            firestore: "currentTitle"
+        race:
+          type: string
           x-oapi-codegen-extra-tags:
-            firestore: "raceId"
-        classId:
-          type: integer
+            firestore: "race"
+        class:
+          type: string
           x-oapi-codegen-extra-tags:
-            firestore: "classId"
+            firestore: "class"
     ItemDetails:
       type: object
       x-go-name: ItemDetails

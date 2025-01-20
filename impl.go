@@ -53,23 +53,11 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 		return nil, fmt.Errorf("failed to fetch characters: %w", err)
 	}
 
-	c := make([]api.Character, 0)
-	for _, character := range characters {
-		c = append(c, api.Character{
-			ClassId:              int(*character.ClassHash),
-			EmblemBackgroundPath: *character.EmblemBackgroundPath,
-			EmblemPath:           *character.EmblemPath,
-			Id:                   *character.CharacterId,
-			Light:                int64(*character.Light),
-			RaceId:               int(*character.RaceHash),
-			TitleId:              int64(*character.TitleRecordHash),
-		})
-	}
 	return api.Profile200JSONResponse{
 		DisplayName: u.DisplayName,
 		UniqueName:  u.UniqueName,
 		Id:          u.ID,
-		Characters:  c,
+		Characters:  characters,
 	}, nil
 }
 

@@ -30,7 +30,7 @@ const SubClass = 3284755031
 
 type Service interface {
 	GetCurrentInventory(membershipID int64) ([]bungie.ItemComponent, *time.Time, error)
-	GetCharacters(primaryMembershipId int64, membershipType int64) ([]bungie.CharacterComponent, error)
+	GetCharacters(primaryMembershipId int64, membershipType int64) ([]api.Character, error)
 	// SaveCharacterSnapshot TODO: Pass membershipID in the future and character ID
 	SaveCharacterSnapshot(snapshot api.CharacterSnapshot) error
 	GetAllCharacterSnapshots() ([]api.CharacterSnapshot, error)
@@ -411,7 +411,7 @@ func (a *service) GetCurrentInventory(membershipId int64) ([]bungie.ItemComponen
 	return results, timeStamp, nil
 }
 
-func (a *service) GetCharacters(primaryMembershipId int64, membershipType int64) ([]bungie.CharacterComponent, error) {
+func (a *service) GetCharacters(primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
 	var components []int32
 	components = append(components, 200)
 	params := &bungie.Destiny2GetProfileParams{
@@ -430,12 +430,12 @@ func (a *service) GetCharacters(primaryMembershipId int64, membershipType int64)
 	if resp.JSON200.Response.Characters == nil {
 		return nil, fmt.Errorf("no response found")
 	}
-	var items []bungie.CharacterComponent
+	results := make([]api.Character, 0)
 	for _, c := range *resp.JSON200.Response.Characters.Data {
-		items = append(items, c)
+		r := TransformCharacter(&c, *a.Manifest)
+		results = append(results, r)
 	}
-
-	return items, nil
+	return results, nil
 }
 
 func (a *service) EnrichWeaponStats(ctx context.Context, primaryMembershipId string, items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error) {

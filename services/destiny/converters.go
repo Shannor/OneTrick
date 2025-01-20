@@ -1,12 +1,15 @@
 package destiny
 
 import (
+	"fmt"
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/utils"
 	"strconv"
 )
+
+const baseBungieURL = "https://www.bungie.net/"
 
 func TransformItemToDetails(item *bungie.DestinyItem, manifest Manifest) *api.ItemDetails {
 	if item == nil {
@@ -37,6 +40,21 @@ func TransformItemToDetails(item *bungie.DestinyItem, manifest Manifest) *api.It
 	return &result
 }
 
+func TransformCharacter(item *bungie.CharacterComponent, manifest Manifest) api.Character {
+	class := manifest.ClassDefinition[strconv.Itoa(int(*item.ClassHash))]
+	race := manifest.RaceDefinition[strconv.Itoa(int(*item.RaceHash))]
+	title := manifest.RecordDefinition[strconv.Itoa(int(*item.TitleRecordHash))]
+	return api.Character{
+		Class:               class.DisplayProperties.Name,
+		EmblemBackgroundURL: fmt.Sprintf("%s%s", baseBungieURL, *item.EmblemBackgroundPath),
+		EmblemURL:           fmt.Sprintf("%s%s", baseBungieURL, *item.EmblemPath),
+		Id:                  *item.CharacterId,
+		Light:               int64(*item.Light),
+		Race:                race.DisplayProperties.Name,
+		CurrentTitle:        title.TitleInfo.TitlesByGender.Male,
+	}
+
+}
 func generateBaseInfo(item *bungie.DestinyItem, manifest Manifest) api.BaseItemInfo {
 	c := *item.Item.ItemComponent
 	hash := strconv.Itoa(int(*c.ItemHash))
