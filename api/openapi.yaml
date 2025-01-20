@@ -220,11 +220,12 @@ components:
         - id
         - displayName
         - uniqueName
+        - membershipId
         - characters
       properties:
         id:
           type: string
-        memberId:
+        membershipId:
           type: string
         displayName:
           type: string

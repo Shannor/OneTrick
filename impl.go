@@ -54,10 +54,11 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 	}
 
 	return api.Profile200JSONResponse{
-		DisplayName: u.DisplayName,
-		UniqueName:  u.UniqueName,
-		Id:          u.ID,
-		Characters:  characters,
+		DisplayName:  u.DisplayName,
+		UniqueName:   u.UniqueName,
+		Id:           u.ID,
+		MembershipId: u.PrimaryMembershipID,
+		Characters:   characters,
 	}, nil
 }
 
