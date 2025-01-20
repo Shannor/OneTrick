@@ -29,7 +29,7 @@ const Power = 953998645
 const SubClass = 3284755031
 
 type Service interface {
-	GetCurrentInventory(membershipID int64) ([]bungie.ItemComponent, *time.Time, error)
+	GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error)
 	GetCharacters(primaryMembershipId int64, membershipType int64) ([]api.Character, error)
 	// SaveCharacterSnapshot TODO: Pass membershipID in the future and character ID
 	SaveCharacterSnapshot(snapshot api.CharacterSnapshot) error
@@ -367,23 +367,24 @@ func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, wea
 	}
 	return TransformItemToDetails(response.JSON200.DestinyItem, *a.Manifest), nil
 }
-func (a *service) GetCurrentInventory(membershipId int64) ([]bungie.ItemComponent, *time.Time, error) {
+func (a *service) GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error) {
 	var components []int32
 	components = append(components, 205)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
-	test, err := a.client.Destiny2GetProfileWithResponse(context.Background(), 2, membershipId, params)
+	test, err := a.client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params)
 	if err != nil {
-		slog.With(err).Error(err.Error())
 		return nil, nil, err
 	}
+
 	// TODO: Update snapshot to include the guns information as it is now, since mods and perks could change on the same gun.
 
 	if test.JSON200 == nil {
 		return nil, nil, fmt.Errorf("no response found")
 	}
 
+	// TODO: Update this function to take a snapshot for all characters at once
 	timeStamp := test.JSON200.Response.ResponseMintedTimestamp
 	var items []bungie.ItemComponent
 	if test.JSON200.Response.CharacterEquipment.Data != nil {

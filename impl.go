@@ -197,7 +197,19 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 	if err != nil {
 		return nil, fmt.Errorf("invalid membership id: %w", err)
 	}
-	items, timestamp, err := s.D2Service.GetCurrentInventory(memID)
+
+	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user: %w", err)
+	}
+	membershipType := int64(0)
+	for _, membership := range u.Memberships {
+		if membership.ID == request.Params.XMembershipID {
+			membershipType = membership.Type
+		}
+	}
+
+	items, timestamp, err := s.D2Service.GetCurrentInventory(ctx, memID, membershipType, request.Body.CharacterId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profile data: %w", err)
 	}
