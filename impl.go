@@ -24,6 +24,17 @@ type Server struct {
 	SnapshotService snapshot.Service
 }
 
+func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
+
+	result, err := s.SnapshotService.Get(ctx, request.Params.XUserID, request.Params.CharacterId, request.SnapshotId)
+	if err != nil {
+		slog.With("error", err.Error()).Error("Failed to fetch snapshot")
+		return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
+	}
+
+	return api.GetSnapshot200JSONResponse(*result), nil
+}
+
 func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (api.ProfileResponseObject, error) {
 	access, ok := validator.FromContext(ctx)
 	if !ok {
@@ -183,8 +194,6 @@ func NewServer(
 	}
 }
 
-const characterID = "2305843009261519028"
-
 func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsRequestObject) (api.GetSnapshotsResponseObject, error) {
 	snapshots, err := s.SnapshotService.GetAllByCharacter(ctx, request.Params.XUserID, request.Params.CharacterId)
 	if err != nil {
@@ -308,7 +317,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	}
 
 	// TODO: Maybe add a warning when the snapshot is more than 30 minutes away since that may not be accurate anymore
-	characterSnapshot, err := s.SnapshotService.GetClosestSnapshot(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
+	characterSnapshot, err := s.SnapshotService.GetClosest(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to fetch snapshot")
 		return nil, fmt.Errorf("failed to fetch snapshot: %w", err)

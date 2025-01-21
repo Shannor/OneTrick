@@ -12,7 +12,8 @@ import (
 type Service interface {
 	Create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error)
 	GetAllByCharacter(ctx context.Context, userID string, characterID string) ([]api.CharacterSnapshot, error)
-	GetClosestSnapshot(ctx context.Context, userID string, characterID string, activityPeriod time.Time) (*api.CharacterSnapshot, error)
+	Get(ctx context.Context, userID string, characterID string, snapshotID string) (*api.CharacterSnapshot, error)
+	GetClosest(ctx context.Context, userID string, characterID string, activityPeriod time.Time) (*api.CharacterSnapshot, error)
 }
 
 const (
@@ -28,7 +29,7 @@ type service struct {
 	DB *firestore.Client
 }
 
-func (s *service) GetClosestSnapshot(ctx context.Context, userID string, characterID string, activityPeriod time.Time) (*api.CharacterSnapshot, error) {
+func (s *service) GetClosest(ctx context.Context, userID string, characterID string, activityPeriod time.Time) (*api.CharacterSnapshot, error) {
 	iter := s.DB.Collection(snapShotCollection).Doc(userID).Collection(characterID).Documents(ctx)
 	var snapshot *api.CharacterSnapshot
 	minDuration := time.Duration(1<<63 - 1) // Max duration value
@@ -75,6 +76,7 @@ func NewService(db *firestore.Client) Service {
 func (s *service) Create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error) {
 	ref := s.DB.Collection(snapShotCollection).Doc(userID).Collection(snapshot.CharacterId).NewDoc()
 	id := ref.ID
+	snapshot.Id = ref.ID
 	_, err := ref.Set(ctx, snapshot)
 	if err != nil {
 		return nil, err
@@ -83,7 +85,7 @@ func (s *service) Create(ctx context.Context, userID string, snapshot api.Charac
 }
 
 func (s *service) GetAllByCharacter(ctx context.Context, userID string, characterID string) ([]api.CharacterSnapshot, error) {
-	iter := s.DB.Collection(snapShotCollection).Doc(userID).Collection(characterID).Documents(ctx)
+	iter := s.DB.Collection(snapShotCollection).Doc(userID).Collection(characterID).OrderBy("timestamp", firestore.Desc).Documents(ctx)
 	snapshots := make([]api.CharacterSnapshot, 0)
 	defer iter.Stop()
 	for {
@@ -102,4 +104,17 @@ func (s *service) GetAllByCharacter(ctx context.Context, userID string, characte
 		snapshots = append(snapshots, s)
 	}
 	return snapshots, nil
+}
+
+func (s *service) Get(ctx context.Context, userID string, characterID string, snapshotID string) (*api.CharacterSnapshot, error) {
+	var result *api.CharacterSnapshot
+	data, err := s.DB.Collection(snapShotCollection).Doc(userID).Collection(characterID).Doc(snapshotID).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	err = data.DataTo(&result)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }

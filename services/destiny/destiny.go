@@ -254,14 +254,15 @@ func (a *service) GetActivity(ctx context.Context, characterID string, activityI
 }
 
 const (
-	ItemPerks      = 302
-	ItemStatsCode  = 304
-	ItemSockets    = 305
-	ItemCommonData = 307
+	ItemInstanceCode   = 300
+	ItemPerksCode      = 302
+	ItemStatsCode      = 304
+	ItemSocketsCode    = 305
+	ItemCommonDataCode = 307
 )
 
 func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemDetails, error) {
-	components := []int32{ItemPerks, ItemStatsCode, ItemSockets, ItemCommonData}
+	components := []int32{ItemPerksCode, ItemStatsCode, ItemSocketsCode, ItemCommonDataCode, ItemInstanceCode}
 	membershipIdInt64, err := strconv.ParseInt(membershipID, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert membershipId to int64: %v", err)
