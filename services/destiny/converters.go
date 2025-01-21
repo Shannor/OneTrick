@@ -69,20 +69,22 @@ func generateBaseInfo(item *bungie.DestinyItem, manifest Manifest) api.BaseItemI
 
 	if item.Instance != nil {
 		instance := *item.Instance.ItemInstanceComponent
-		hash := strconv.Itoa(int(*instance.DamageTypeHash))
-		def := manifest.DamageTypeDefinition[hash]
-		dc := def.Color
+		if instance.DamageTypeHash != nil {
+			hash := strconv.Itoa(int(*instance.DamageTypeHash))
+			def := manifest.DamageTypeDefinition[hash]
+			dc := def.Color
 
-		base.Damage = &api.DamageInfo{
-			Color: api.Color{
-				Alpha: dc.Alpha,
-				Blue:  dc.Blue,
-				Green: dc.Green,
-				Red:   dc.Red,
-			},
-			DamageIcon:      def.DisplayProperties.Icon,
-			DamageType:      def.DisplayProperties.Name,
-			TransparentIcon: def.TransparentIconPath,
+			base.Damage = &api.DamageInfo{
+				Color: api.Color{
+					Alpha: dc.Alpha,
+					Blue:  dc.Blue,
+					Green: dc.Green,
+					Red:   dc.Red,
+				},
+				DamageIcon:      def.DisplayProperties.Icon,
+				DamageType:      def.DisplayProperties.Name,
+				TransparentIcon: def.TransparentIconPath,
+			}
 		}
 	}
 	return base
