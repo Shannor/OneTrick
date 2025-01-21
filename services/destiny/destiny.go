@@ -14,7 +14,9 @@ import (
 	"oneTrick/envvars"
 	"oneTrick/utils"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -362,6 +364,12 @@ func (a *service) GetCharacters(primaryMembershipId int64, membershipType int64)
 		r := TransformCharacter(&c, *a.Manifest)
 		results = append(results, r)
 	}
+	slices.SortFunc(results, func(a, b api.Character) int {
+		if a.Light != b.Light {
+			return int(b.Light - a.Light)
+		}
+		return strings.Compare(a.Class, b.Class)
+	})
 	return results, nil
 }
 
