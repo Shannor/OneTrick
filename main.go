@@ -20,8 +20,6 @@ import (
 	"oneTrick/validator"
 )
 
-const primaryMembershipId = 4611686018434106050
-
 func main() {
 	env := envvars.GetEvn()
 	hc := http.Client{}
@@ -54,7 +52,7 @@ func main() {
 	}
 	// Clear out the servers array in the swagger spec, that skips validating
 	// that server names match. We don't know how this thing will be run.
-	//swagger.Servers = nil
+	swagger.Servers = nil
 
 	r := gin.Default()
 	r.Use(cors.Default())
@@ -75,9 +73,7 @@ func main() {
 	}))
 
 	h := api.NewStrictHandler(server, nil)
-	api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
-		BaseURL: "/api/v1",
-	})
+	api.RegisterHandlers(r, h)
 	s := &http.Server{
 		Handler: r,
 		Addr:    "0.0.0.0:8080",
