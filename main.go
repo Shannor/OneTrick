@@ -54,7 +54,7 @@ func main() {
 	}
 	// Clear out the servers array in the swagger spec, that skips validating
 	// that server names match. We don't know how this thing will be run.
-	swagger.Servers = nil
+	//swagger.Servers = nil
 
 	r := gin.Default()
 	r.Use(cors.Default())
