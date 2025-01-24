@@ -75,7 +75,9 @@ func main() {
 	}))
 
 	h := api.NewStrictHandler(server, nil)
-	api.RegisterHandlers(r, h)
+	api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+		BaseURL: "/api/v1",
+	})
 	s := &http.Server{
 		Handler: r,
 		Addr:    "0.0.0.0:8080",
