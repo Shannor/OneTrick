@@ -244,10 +244,10 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(history.Mode))
 	return &api.ActivityHistory{
 		ActivityHash: *uintToInt64(history.DirectorActivityHash),
-		InstanceId:   *history.InstanceId,
+		InstanceID:   *history.InstanceId,
 		IsPrivate:    history.IsPrivate,
 		Mode:         &mode,
-		ReferenceId:  *uintToInt64(history.ReferenceId),
+		ReferenceID:  *uintToInt64(history.ReferenceId),
 		Location:     definition.DisplayProperties.Name,
 		Description:  definition.DisplayProperties.Description,
 		Activity:     activity.DisplayProperties.Name,
@@ -281,10 +281,10 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
 	return &api.ActivityHistory{
 		ActivityHash: *uintToInt64(period.ActivityDetails.DirectorActivityHash),
-		InstanceId:   *period.ActivityDetails.InstanceId,
+		InstanceID:   *period.ActivityDetails.InstanceId,
 		IsPrivate:    period.ActivityDetails.IsPrivate,
 		Mode:         &mode,
-		ReferenceId:  *uintToInt64(period.ActivityDetails.ReferenceId),
+		ReferenceID:  *uintToInt64(period.ActivityDetails.ReferenceId),
 		Location:     definition.DisplayProperties.Name,
 		Description:  definition.DisplayProperties.Description,
 		Activity:     activity.DisplayProperties.Name,

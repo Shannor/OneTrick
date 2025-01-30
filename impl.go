@@ -229,7 +229,7 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 			return nil, fmt.Errorf("missing instance id for item hash: %d", item.ItemHash)
 		}
 		snap := api.ItemSnapshot{
-			InstanceId: *item.ItemInstanceId,
+			InstanceID: *item.ItemInstanceId,
 			Timestamp:  *timestamp,
 		}
 		details, err := s.D2Service.GetWeaponDetails(ctx, request.Params.XMembershipID, membershipType, *item.ItemInstanceId)
@@ -243,7 +243,7 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 	}
 
 	result.Items = itemSnapshots
-	result.CharacterId = request.Body.CharacterId
+	result.CharacterID = request.Body.CharacterId
 	_, err = s.SnapshotService.Create(ctx, request.Params.XUserID, result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot: %w", err)
@@ -303,33 +303,66 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 }
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
 	activityId := request.ActivityId
+	userID := request.Params.XUserID
+	characterID := request.Params.CharacterId
+
+	l := slog.With("activityId", activityId).With("userID", userID).With("characterID", characterID)
 	id, err := strconv.ParseInt(activityId, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
 	activityDetails, weaponStats, period, err := s.D2Service.GetActivity(ctx, request.Params.CharacterId, id)
 	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
+		l.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
 		return nil, fmt.Errorf("failed to fetch weapon data for activity: %w", err)
 	}
 	if activityDetails == nil {
 		return nil, fmt.Errorf("no activity details found for activity ID: %s", activityId)
 	}
 
-	// TODO: Maybe add a warning when the snapshot is more than 30 minutes away since that may not be accurate anymore
-	characterSnapshot, err := s.SnapshotService.GetClosest(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
+	agg, err := s.SnapshotService.GetAggregate(ctx, activityId)
 	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to fetch snapshot")
-		return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
+		if errors.Is(err, snapshot.NotFound) {
+			l.Info("No aggregation found for activity")
+		} else {
+			l.With("error", err.Error()).Error("unexpected error fetching aggregation")
+			return nil, err
+		}
 	}
 
-	stats, err := s.D2Service.EnrichWeaponStats(characterSnapshot.Items, weaponStats)
+	var snap *api.CharacterSnapshot
+	if agg != nil {
+		snapshotMapping, ok := agg.Mapping[characterID]
+		if ok {
+			snap, err = s.SnapshotService.Get(ctx, userID, characterID, snapshotMapping.SnapshotID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if snap == nil {
+		// TODO: In the future this may move to it's own separate details function
+		snap, err = s.SnapshotService.FindClosest(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
+		if err != nil {
+			l.With("error", err.Error()).Error("Failed to fetch snapshot")
+			return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
+		}
+
+		agg, err = s.SnapshotService.AddAggregate(ctx, userID, snap.ID, activityId, characterID, api.MediumConfidenceLevel, api.SystemConfidenceSource)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	stats, err := s.D2Service.EnrichWeaponStats(snap.Items, weaponStats)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed enriching")
 		return nil, fmt.Errorf("failed to enrich weapon stats: %w", err)
 	}
 	return api.GetActivity200JSONResponse{
-		Activity: *activityDetails,
-		Stats:    stats,
+		Activity:  *activityDetails,
+		Stats:     stats,
+		Aggregate: *agg,
 	}, nil
 }

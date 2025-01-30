@@ -221,6 +221,7 @@ paths:
                 required:
                   - activity
                   - stats
+                  - aggregate
                 properties:
                   activity:
                     $ref: "#/components/schemas/ActivityHistory"
@@ -228,6 +229,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/WeaponStats"
+                  aggregate:
+                    $ref: "#/components/schemas/Aggregate"
 
 components:
   securitySchemes:
@@ -281,11 +284,13 @@ components:
       properties:
         id:
           type: string
+          x-go-name: "ID"
           description: "Id of the snapshot"
           x-oapi-codegen-extra-tags:
             firestore: "id"
         characterId:
           type: string
+          x-go-name: "characterID"
           description: "Id of the character being recorded"
           x-oapi-codegen-extra-tags:
             firestore: "characterId"
@@ -318,6 +323,7 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: "timestamp"
         instanceId:
+          x-go-name: "instanceID"
           type: string
           description: "Specific instance id for the item"
           x-oapi-codegen-extra-tags:
@@ -353,6 +359,7 @@ components:
         description:
           type: string
         referenceId:
+          x-go-name: "referenceID"
           type: integer
           format: int64
         activityHash:
@@ -360,6 +367,7 @@ components:
           format: int64
           description: "Hash id of the type of activity: Strike, Competitive, QuickPlay, etc. "
         instanceId:
+          x-go-name: "instanceID"
           type: string
           description: "Id to get more details about the particular game"
         isPrivate:
@@ -376,6 +384,95 @@ components:
         ping:
           type: string
           example: pong
+
+    ConfidenceSource:
+      type: string
+      enum: [system, user]
+      x-oapi-codegen-extra-tags:
+        firestore: "confidenceSource"
+      x-enum-varnames:
+        - SystemConfidenceSource
+        - UserConfidenceSource
+    ConfidenceLevel:
+      type: string
+      enum: [low, medium, high]
+      x-enum-varnames:
+        - LowConfidenceLevel
+        - MediumConfidenceLevel
+        - HighConfidenceLevel
+      x-oapi-codegen-extra-tags:
+        firestore: "confidenceLevel"
+    SnapshotSnippet:
+      type: object
+      required:
+        - primaryWeapon
+      x-oapi-codegen-extra-tags:
+        firestore: "snapshotSnippet"
+      properties:
+        primaryWeapon:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "primaryWeapon"
+    CharacterMapping:
+      type: object
+      required:
+        - characterId
+        - confidenceLevel
+        - confidenceSource
+        - snapshotId
+        - snippet
+        - createdAt
+      properties:
+        characterId:
+          x-go-name: "CharacterID"
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "characterId"
+        snapshotId:
+          x-go-name: 'snapshotID'
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "snapshotId"
+        confidenceLevel:
+          $ref: '#/components/schemas/ConfidenceLevel'
+        confidenceSource:
+          $ref: '#/components/schemas/ConfidenceSource'
+        snippet:
+          $ref: '#/components/schemas/SnapshotSnippet'
+        createdAt:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: "createdAt"
+    Aggregate:
+      type: object
+      required:
+        - id
+        - activityId
+        - mapping
+        - createdAt
+      properties:
+        id:
+          type: string
+          x-go-name: "ID"
+          x-oapi-codegen-extra-tags:
+            firestore: "id"
+        activityId:
+          type: string
+          x-go-name: "activityID"
+          x-oapi-codegen-extra-tags:
+            firestore: 'activityId'
+        mapping:
+          type: object
+          x-oapi-codegen-extra-tags:
+            firestore: 'mapping'
+          additionalProperties:
+            $ref: '#/components/schemas/CharacterMapping'
+        createdAt:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: "createdAt"
     AuthResponse:
       type: object
       properties:
