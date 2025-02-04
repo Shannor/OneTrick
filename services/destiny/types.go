@@ -1,5 +1,9 @@
 package destiny
 
+import "errors"
+
+var ErrDestinyServerDown = errors.New("destiny server is down")
+
 type Manifest struct {
 	ArtDyeChannelDefinition                  map[string]any                       `json:"DestinyArtDyeChannelDefinition"`
 	ArtDyeReferenceDefinition                map[string]any                       `json:"DestinyArtDyeReferenceDefinition"`

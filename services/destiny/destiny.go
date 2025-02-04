@@ -27,7 +27,7 @@ const SubClass = 3284755031
 
 type Service interface {
 	GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error)
-	GetCharacters(primaryMembershipId int64, membershipType int64) ([]api.Character, error)
+	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
 	GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemDetails, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
@@ -38,7 +38,7 @@ type Service interface {
 }
 
 type service struct {
-	client   *bungie.ClientWithResponses
+	Client   *bungie.ClientWithResponses
 	Manifest *Manifest
 	DB       *firestore.Client
 }
@@ -65,7 +65,7 @@ func NewService(apiKey string, firestore *firestore.Client) Service {
 	}
 	slog.Info("Manifest loaded")
 	return &service{
-		client:   cli,
+		Client:   cli,
 		Manifest: manifest,
 		DB:       firestore,
 	}
@@ -181,7 +181,7 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		"mode", mode,
 		"page", page,
 	)
-	resp, err := a.client.Destiny2GetActivityHistoryWithResponse(
+	resp, err := a.Client.Destiny2GetActivityHistoryWithResponse(
 		ctx,
 		int32(membershipType),
 		mID,
@@ -217,7 +217,7 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 
 func (a *service) GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error) {
 
-	resp, err := a.client.Destiny2GetPostGameCarnageReportWithResponse(ctx, activityID)
+	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, activityID)
 	if err != nil {
 		slog.With(
 			"error",
@@ -272,7 +272,7 @@ func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, mem
 		return nil, fmt.Errorf("failed to convert membershipId to int64: %v", err)
 	}
 	params := bungie.Destiny2GetItemParams{Components: &components}
-	response, err := a.client.Destiny2GetItemWithResponse(
+	response, err := a.Client.Destiny2GetItemWithResponse(
 		ctx,
 		int32(membershipType),
 		membershipIdInt64,
@@ -302,7 +302,7 @@ func (a *service) GetCurrentInventory(ctx context.Context, membershipID int64, m
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
-	test, err := a.client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params)
+	test, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -341,16 +341,23 @@ func (a *service) GetCurrentInventory(ctx context.Context, membershipID int64, m
 	return results, timeStamp, nil
 }
 
-func (a *service) GetCharacters(primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
+func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
 	var components []int32
 	components = append(components, 200)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
-	resp, err := a.client.Destiny2GetProfileWithResponse(context.Background(), int32(membershipType), primaryMembershipId, params)
+	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), primaryMembershipId, params)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed to get profile")
 		return nil, err
+	}
+	if resp.StatusCode() != http.StatusOK {
+		if resp.StatusCode() == http.StatusServiceUnavailable {
+			return nil, ErrDestinyServerDown
+		}
+		slog.With("status", resp.Status(), "status code", resp.StatusCode()).Error("failed to get profile")
+		return nil, fmt.Errorf("failed to get characters")
 	}
 
 	if resp.JSON200 == nil {

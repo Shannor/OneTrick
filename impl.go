@@ -59,8 +59,14 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse primary membership id")
 	}
-	characters, err := s.D2Service.GetCharacters(pmId, t)
+	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
 	if err != nil {
+		if errors.Is(err, destiny.ErrDestinyServerDown) {
+			return api.Profile503JSONResponse{
+				Message: "Destiny Server is down. Please wait while they get it back up and running",
+				Status:  api.ErrDestinyServerDown,
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to fetch characters: %w", err)
 	}
 
@@ -311,6 +317,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	if err != nil {
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
+	// TODO: Can be updated for way more information about the game
 	activityDetails, weaponStats, period, err := s.D2Service.GetActivity(ctx, request.Params.CharacterId, id)
 	if err != nil {
 		l.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
@@ -331,31 +338,48 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	}
 
 	var snap *api.CharacterSnapshot
+	skipAgg := false
 	if agg != nil {
 		snapshotMapping, ok := agg.Mapping[characterID]
 		if ok {
-			snap, err = s.SnapshotService.Get(ctx, userID, characterID, snapshotMapping.SnapshotID)
+			if snapshotMapping.ConfidenceLevel == api.NotFoundConfidenceLevel {
+				skipAgg = true
+			} else {
+				snap, err = s.SnapshotService.Get(ctx, userID, characterID, snapshotMapping.SnapshotData.SnapshotID)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	if snap == nil && skipAgg == false {
+		snap, err = s.SnapshotService.FindClosest(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
+		if err != nil && !errors.Is(err, snapshot.NotFound) {
+			l.With("error", err.Error()).Error("Failed to fetch snapshot")
+			return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
+		}
+
+		if snap == nil {
+			agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityId, nil, api.NotFoundConfidenceLevel, api.SystemConfidenceSource)
 			if err != nil {
+				l.With("error", err.Error()).Error("Failed to add aggregate")
+				return nil, err
+			}
+		} else {
+			agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityId, &snap.ID, api.MediumConfidenceLevel, api.SystemConfidenceSource)
+			if err != nil {
+				l.With("error", err.Error()).Error("Failed to add aggregate")
 				return nil, err
 			}
 		}
 	}
 
-	if snap == nil {
-		// TODO: In the future this may move to it's own separate details function
-		snap, err = s.SnapshotService.FindClosest(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
-		if err != nil {
-			l.With("error", err.Error()).Error("Failed to fetch snapshot")
-			return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
-		}
-
-		agg, err = s.SnapshotService.AddAggregate(ctx, userID, snap.ID, activityId, characterID, api.MediumConfidenceLevel, api.SystemConfidenceSource)
-		if err != nil {
-			return nil, err
-		}
+	items := make([]api.ItemSnapshot, 0)
+	if snap != nil {
+		items = snap.Items
 	}
-
-	stats, err := s.D2Service.EnrichWeaponStats(snap.Items, weaponStats)
+	stats, err := s.D2Service.EnrichWeaponStats(items, weaponStats)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed enriching")
 		return nil, fmt.Errorf("failed to enrich weapon stats: %w", err)

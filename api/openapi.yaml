@@ -31,6 +31,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Profile'
+        503:
+          description: "Server is down"
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                  - status
+                properties:
+                  message:
+                    type: string
+                    description: "User friendly description of the error"
+                  status:
+                    $ref: "#/components/schemas/InternalError"
   /login:
     post:
       operationId: Login
@@ -252,6 +267,16 @@ components:
       in: header
       required: true
   schemas:
+    InternalError:
+      type: string
+      enum:
+        - DestinyServerDown
+        - InternalSystemDown
+        - UnknownError
+      x-enum-varnames:
+        - ErrDestinyServerDown
+        - ErrInternalSystemDown
+        - ErrUnknownError
     Profile:
       type: object
       required:
@@ -395,8 +420,9 @@ components:
         - UserConfidenceSource
     ConfidenceLevel:
       type: string
-      enum: [low, medium, high]
+      enum: [notFound, low, medium, high]
       x-enum-varnames:
+        - NotFoundConfidenceLevel
         - LowConfidenceLevel
         - MediumConfidenceLevel
         - HighConfidenceLevel
@@ -413,14 +439,27 @@ components:
           type: string
           x-oapi-codegen-extra-tags:
             firestore: "primaryWeapon"
+    SnapshotData:
+      type: object
+      required:
+        - snippet
+        - snapshotId
+      x-oapi-codegen-extra-tags:
+        firestore: "snapshotData"
+      properties:
+        snapshotId:
+          x-go-name: 'snapshotID'
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "snapshotId"
+        snippet:
+          $ref: '#/components/schemas/SnapshotSnippet'
     CharacterMapping:
       type: object
       required:
         - characterId
         - confidenceLevel
         - confidenceSource
-        - snapshotId
-        - snippet
         - createdAt
       properties:
         characterId:
@@ -428,17 +467,12 @@ components:
           type: string
           x-oapi-codegen-extra-tags:
             firestore: "characterId"
-        snapshotId:
-          x-go-name: 'snapshotID'
-          type: string
-          x-oapi-codegen-extra-tags:
-            firestore: "snapshotId"
+        snapshotData:
+          $ref: '#/components/schemas/SnapshotData'
         confidenceLevel:
           $ref: '#/components/schemas/ConfidenceLevel'
         confidenceSource:
           $ref: '#/components/schemas/ConfidenceSource'
-        snippet:
-          $ref: '#/components/schemas/SnapshotSnippet'
         createdAt:
           type: string
           format: date-time

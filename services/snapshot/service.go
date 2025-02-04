@@ -4,7 +4,6 @@ import (
 	"cloud.google.com/go/firestore"
 	"context"
 	"errors"
-	"fmt"
 	"google.golang.org/api/iterator"
 	"oneTrick/api"
 	"time"
@@ -43,7 +42,7 @@ type Service interface {
 	// If the aggregate already exists, it performs a partial update with the new data.
 	// Takes context, user ID, snapshot ID, activity ID, character ID, confidence level, and confidence source as input.
 	// Returns the updated or newly created Aggregate or an error if the operation fails.
-	AddAggregate(ctx context.Context, userID string, snapshotID string, activityID string, characterID string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error)
+	AddAggregate(ctx context.Context, characterID string, activityID string, snapshotID *string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error)
 }
 
 const (
@@ -145,17 +144,20 @@ func (s *service) Get(ctx context.Context, userID string, characterID string, sn
 	return result, nil
 }
 
-func (s *service) AddAggregate(ctx context.Context, userID string, snapshotID string, activityID string, characterID string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error) {
+func (s *service) AddAggregate(ctx context.Context, characterID string, activityID string, snapshotID *string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error) {
 	now := time.Now()
 	mapping := api.CharacterMapping{
 		CharacterID:      characterID,
-		SnapshotID:       snapshotID,
 		ConfidenceLevel:  level,
 		ConfidenceSource: source,
-		Snippet: api.SnapshotSnippet{
-			PrimaryWeapon: "Test Weapon",
-		},
-		CreatedAt: now,
+		CreatedAt:        now,
+	}
+	if level != api.NotFoundConfidenceLevel && snapshotID != nil {
+		// TODO: Add logic here to get whatever a "Snapshot Snippet" is
+		mapping.SnapshotData = &api.SnapshotData{
+			SnapshotID: *snapshotID,
+			Snippet:    api.SnapshotSnippet{PrimaryWeapon: "Test Weapon"},
+		}
 	}
 	aggregate := api.Aggregate{
 		ActivityID: activityID,
