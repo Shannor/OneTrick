@@ -33,7 +33,7 @@ type Service interface {
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetIronBannerActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
-	GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error)
+	GetActivity(ctx context.Context, characterID string, activityID string) (*ActivityData, error)
 	EnrichWeaponStats(items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
 }
 
@@ -215,9 +215,12 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	return TransformPeriodGroups(*resp.JSON200.Response.Activities, *a.Manifest), nil
 }
 
-func (a *service) GetActivity(ctx context.Context, characterID string, activityID int64) (*api.ActivityHistory, []bungie.HistoricalWeaponStats, *time.Time, error) {
-
-	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, activityID)
+func (a *service) GetActivity(ctx context.Context, characterID string, activityID string) (*ActivityData, error) {
+	id, err := strconv.ParseInt(activityID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid activity ID: %w", err)
+	}
+	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
 		slog.With(
 			"error",
@@ -225,19 +228,21 @@ func (a *service) GetActivity(ctx context.Context, characterID string, activityI
 			"activity id",
 			activityID,
 		).Error("Failed to get post game carnage report")
-		return nil, nil, nil, err
+		return nil, err
 	}
 	data := resp.JSON200.PostGameCarnageReportData
 	if data.Entries == nil || data.ActivityDetails == nil {
 		slog.With("activity id", activityID).Error("No data found for activity")
-		return nil, nil, nil, nil
+		return nil, nil
 	}
 
+	// TODO: Remove in the future, since we pass all entries
 	var weapons []bungie.HistoricalWeaponStats
 	for _, entry := range *data.Entries {
 		if entry.CharacterId == nil {
 			continue
 		}
+		// Only getting it for one character. Change for everyone
 		if *entry.CharacterId == characterID {
 			weapons = *entry.Extended.Weapons
 			break
@@ -245,12 +250,19 @@ func (a *service) GetActivity(ctx context.Context, characterID string, activityI
 
 	}
 	if weapons == nil {
-		return nil, nil, nil, fmt.Errorf("no data found for characterID: %s", characterID)
+		return nil, fmt.Errorf("no data found for characterID: %s", characterID)
 	}
 	if a.Manifest == nil {
-		return nil, nil, nil, fmt.Errorf("manifest is not provided")
+		return nil, fmt.Errorf("manifest is not provided")
 	}
-	return TransformHistoricActivity(data.ActivityDetails, *a.Manifest), weapons, data.Period, nil
+	result := ActivityData{
+		Period:          data.Period,
+		Activity:        TransformHistoricActivity(data.ActivityDetails, *a.Manifest),
+		WeaponStats:     weapons,
+		Teams:           TransformTeams(data.Teams),
+		PostGameEntries: *data.Entries,
+	}
+	return &result, nil
 }
 
 const (

@@ -40832,11 +40832,13 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportTeamEntry": {
         "type": "object",
+        "x-go-name": "TeamEntry",
         "properties": {
           "teamId": {
             "type": "integer",
             "description": "Integer ID for the team.",
-            "format": "int32"
+            "format": "int32",
+            "x-go-name": "teamID"
           },
           "standing": {
             "type": "object",

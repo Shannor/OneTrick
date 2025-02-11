@@ -273,61 +273,79 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 	history := make([]api.ActivityHistory, 0)
 	switch mode {
 	case api.AllPvP:
-		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
 			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	case api.Competitive:
-		history, err = s.D2Service.GetCompetitiveActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		history, err = s.D2Service.GetCompetitiveActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
 			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 
 	case api.Quickplay:
-		history, err = s.D2Service.GetQuickPlayActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		history, err = s.D2Service.GetQuickPlayActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
 			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	case api.IronBanner:
-		history, err = s.D2Service.GetIronBannerActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		history, err = s.D2Service.GetIronBannerActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
 			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	default:
-		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterId, params.Count, params.Page)
+		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
 			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	}
+	activityIDs := make([]string, 0)
+	for _, activityHistory := range history {
+		activityIDs = append(activityIDs, activityHistory.InstanceID)
+	}
+	aggregates, err := s.SnapshotService.GetAggregates(ctx, activityIDs)
+	if err != nil {
+		return nil, err
+	}
+	aggMap := make(map[string]api.Aggregate)
+	for _, agg := range aggregates {
+		aggMap[agg.ActivityID] = agg
+	}
 
-	return api.GetActivities200JSONResponse(history), nil
+	result := make([]api.DetailActivity, 0)
+	for _, h := range history {
+		a := api.DetailActivity{
+			Activity: h,
+		}
+		agg, ok := aggMap[h.InstanceID]
+		if ok {
+			a.Aggregate = &agg
+		}
+		result = append(result, a)
+	}
+	return api.GetActivities200JSONResponse(result), nil
 }
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
-	activityId := request.ActivityId
+	activityID := request.ActivityId
 	userID := request.Params.XUserID
 	characterID := request.Params.CharacterId
 
-	l := slog.With("activityId", activityId).With("userID", userID).With("characterID", characterID)
-	id, err := strconv.ParseInt(activityId, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid activity ID: %w", err)
-	}
-	// TODO: Can be updated for way more information about the game
-	activityDetails, weaponStats, period, err := s.D2Service.GetActivity(ctx, request.Params.CharacterId, id)
+	l := slog.With("activityID", activityID).With("userID", userID).With("characterID", characterID)
+	activityDetails, err := s.D2Service.GetActivity(ctx, request.Params.CharacterId, activityID)
 	if err != nil {
 		l.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
 		return nil, fmt.Errorf("failed to fetch weapon data for activity: %w", err)
 	}
 	if activityDetails == nil {
-		return nil, fmt.Errorf("no activity details found for activity ID: %s", activityId)
+		return nil, fmt.Errorf("no activity details found for activity ID: %s", activityID)
 	}
 
-	agg, err := s.SnapshotService.GetAggregate(ctx, activityId)
+	agg, err := s.SnapshotService.GetAggregate(ctx, activityID)
 	if err != nil {
 		if errors.Is(err, snapshot.NotFound) {
 			l.Info("No aggregation found for activity")
@@ -337,12 +355,29 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		}
 	}
 
+	characterInGame := false
+	for _, entry := range activityDetails.PostGameEntries {
+		if entry.CharacterId != nil && *entry.CharacterId == characterID {
+			characterInGame = true
+			break
+		}
+	}
+	if !characterInGame {
+		return api.GetActivity200JSONResponse{
+			Activity:  *activityDetails.Activity,
+			Teams:     activityDetails.Teams,
+			Aggregate: *agg,
+		}, nil
+	}
+
+	// TODO: Start splitting out this logic, it's getting out of hand
+
 	var snap *api.CharacterSnapshot
 	skipAgg := false
 	if agg != nil {
 		snapshotMapping, ok := agg.Mapping[characterID]
 		if ok {
-			if snapshotMapping.ConfidenceLevel == api.NotFoundConfidenceLevel {
+			if snapshotMapping.ConfidenceLevel == api.NotFoundConfidenceLevel || snapshotMapping.ConfidenceLevel == api.NoMatchConfidenceLevel {
 				skipAgg = true
 			} else {
 				snap, err = s.SnapshotService.Get(ctx, userID, characterID, snapshotMapping.SnapshotData.SnapshotID)
@@ -354,39 +389,52 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	}
 
 	if snap == nil && skipAgg == false {
-		snap, err = s.SnapshotService.FindClosest(ctx, request.Params.XUserID, request.Params.CharacterId, *period)
+		snap, err = s.SnapshotService.FindClosest(
+			ctx,
+			request.Params.XUserID,
+			request.Params.CharacterId,
+			*activityDetails.Period,
+		)
 		if err != nil && !errors.Is(err, snapshot.NotFound) {
 			l.With("error", err.Error()).Error("Failed to fetch snapshot")
 			return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
 		}
-
-		if snap == nil {
-			agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityId, nil, api.NotFoundConfidenceLevel, api.SystemConfidenceSource)
-			if err != nil {
-				l.With("error", err.Error()).Error("Failed to add aggregate")
-				return nil, err
-			}
-		} else {
-			agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityId, &snap.ID, api.MediumConfidenceLevel, api.SystemConfidenceSource)
-			if err != nil {
-				l.With("error", err.Error()).Error("Failed to add aggregate")
-				return nil, err
-			}
-		}
 	}
-
+	// TODO: Move this logic to it's own function for a future easy button that will try and match things up for you.
 	items := make([]api.ItemSnapshot, 0)
 	if snap != nil {
 		items = snap.Items
 	}
-	stats, err := s.D2Service.EnrichWeaponStats(items, weaponStats)
+	characterWeaponStats, err := s.D2Service.EnrichWeaponStats(items, activityDetails.WeaponStats)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed enriching")
-		return nil, fmt.Errorf("failed to enrich weapon stats: %w", err)
+		return nil, fmt.Errorf("failed to enrich weapon characterWeaponStats: %w", err)
 	}
+
+	if snap != nil && len(characterWeaponStats) > 0 {
+		agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityID, &snap.ID, api.MediumConfidenceLevel, api.SystemConfidenceSource)
+		if err != nil {
+			l.With("error", err.Error()).Error("Failed to add aggregate")
+			return nil, err
+		}
+	} else if snap != nil {
+		agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityID, nil, api.NoMatchConfidenceLevel, api.SystemConfidenceSource)
+		if err != nil {
+			l.With("error", err.Error()).Error("Failed to add aggregate")
+			return nil, err
+		}
+	} else {
+		agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityID, nil, api.NotFoundConfidenceLevel, api.SystemConfidenceSource)
+		if err != nil {
+			l.With("error", err.Error()).Error("Failed to add aggregate")
+			return nil, err
+		}
+	}
+
 	return api.GetActivity200JSONResponse{
-		Activity:  *activityDetails,
-		Stats:     stats,
-		Aggregate: *agg,
+		Activity:       *activityDetails.Activity,
+		CharacterStats: &characterWeaponStats,
+		Teams:          activityDetails.Teams,
+		Aggregate:      *agg,
 	}, nil
 }

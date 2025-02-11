@@ -43,6 +43,8 @@ type Service interface {
 	// Takes context, user ID, snapshot ID, activity ID, character ID, confidence level, and confidence source as input.
 	// Returns the updated or newly created Aggregate or an error if the operation fails.
 	AddAggregate(ctx context.Context, characterID string, activityID string, snapshotID *string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error)
+
+	GetAggregates(ctx context.Context, activityIDs []string) ([]api.Aggregate, error)
 }
 
 const (
@@ -231,4 +233,28 @@ func (s *service) GetAggregate(ctx context.Context, activityID string) (*api.Agg
 		return &agg, nil
 	}
 	return nil, NotFound
+}
+
+func (s *service) GetAggregates(ctx context.Context, activityIDs []string) ([]api.Aggregate, error) {
+	results := make([]api.Aggregate, 0)
+	iter := s.DB.
+		Collection(aggregateCollection).
+		Where("activityId", "in", activityIDs).
+		Documents(ctx)
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		agg := api.Aggregate{}
+		err = doc.DataTo(&agg)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, agg)
+	}
+	return results, nil
 }

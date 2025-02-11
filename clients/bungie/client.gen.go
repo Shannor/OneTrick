@@ -1609,7 +1609,7 @@ type PostGameCarnageReportData struct {
 	StartingPhaseIndex *int32 `json:"startingPhaseIndex"`
 
 	// Teams Collection of stats for the player in this activity.
-	Teams *[]DestinyHistoricalStatsDestinyPostGameCarnageReportTeamEntry `json:"teams,omitempty"`
+	Teams *[]TeamEntry `json:"teams,omitempty"`
 }
 
 // PostGameCarnageReportEntry defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry.
@@ -1642,16 +1642,16 @@ type PostGameCarnageReportExtendedData struct {
 	Weapons *[]HistoricalWeaponStats `json:"weapons,omitempty"`
 }
 
-// DestinyHistoricalStatsDestinyPostGameCarnageReportTeamEntry defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportTeamEntry.
-type DestinyHistoricalStatsDestinyPostGameCarnageReportTeamEntry struct {
+// TeamEntry defines model for Destiny.HistoricalStats.DestinyPostGameCarnageReportTeamEntry.
+type TeamEntry struct {
 	// Score Score earned by the team
 	Score *HistoricalStatsValue `json:"score,omitempty"`
 
 	// Standing Team's standing relative to other teams.
 	Standing *HistoricalStatsValue `json:"standing,omitempty"`
 
-	// TeamId Integer ID for the team.
-	TeamId *int32 `json:"teamId,omitempty"`
+	// TeamID Integer ID for the team.
+	TeamID *int32 `json:"teamId,omitempty"`
 
 	// TeamName Alpha or Bravo
 	TeamName *string `json:"teamName,omitempty"`

@@ -1,6 +1,11 @@
 package destiny
 
-import "errors"
+import (
+	"errors"
+	"oneTrick/api"
+	"oneTrick/clients/bungie"
+	"time"
+)
 
 var ErrDestinyServerDown = errors.New("destiny server is down")
 
@@ -25,7 +30,7 @@ type Manifest struct {
 	RewardSheetDefinition                    map[string]any                       `json:"DestinyRewardSheetDefinition"`
 	ItemCategoryDefinition                   map[string]ItemCategory              `json:"DestinyItemCategoryDefinition"`
 	DamageTypeDefinition                     map[string]DamageType                `json:"DestinyDamageTypeDefinition"`
-	ActivityModeDefinition                   map[string]any                       `json:"DestinyActivityModeDefinition"`
+	ActivityModeDefinition                   map[string]ActivityModeDefinition    `json:"DestinyActivityModeDefinition"`
 	MedalTierDefinition                      map[string]any                       `json:"DestinyMedalTierDefinition"`
 	AchievementDefinition                    map[string]any                       `json:"DestinyAchievementDefinition"`
 	ActivityGraphDefinition                  map[string]any                       `json:"DestinyActivityGraphDefinition"`
@@ -467,4 +472,38 @@ type RecordDefinition struct {
 	Index                             int           `json:"index"`
 	Redacted                          bool          `json:"redacted"`
 	Blacklisted                       bool          `json:"blacklisted"`
+}
+
+type ModeDisplayProperties struct {
+	Description string `json:"description"`
+	Name        string `json:"name"`
+	Icon        string `json:"icon"`
+	HasIcon     bool   `json:"hasIcon"`
+}
+
+type ActivityModeDefinition struct {
+	DisplayProperties     ModeDisplayProperties `json:"displayProperties"`
+	PgcrImage             string                `json:"pgcrImage"`
+	ModeType              int                   `json:"modeType"`
+	ActivityModeCategory  int                   `json:"activityModeCategory"`
+	IsTeamBased           bool                  `json:"isTeamBased"`
+	Tier                  int                   `json:"tier"`
+	IsAggregateMode       bool                  `json:"isAggregateMode"`
+	ParentHashes          []int64               `json:"parentHashes"`
+	FriendlyName          string                `json:"friendlyName"`
+	SupportsFeedFiltering bool                  `json:"supportsFeedFiltering"`
+	Display               bool                  `json:"display"`
+	Order                 int                   `json:"order"`
+	Hash                  int64                 `json:"hash"`
+	Index                 int                   `json:"index"`
+	Redacted              bool                  `json:"redacted"`
+	Blacklisted           bool                  `json:"blacklisted"`
+}
+
+type ActivityData struct {
+	Activity        *api.ActivityHistory                `json:"activity"`
+	WeaponStats     []bungie.HistoricalWeaponStats      `json:"weaponStats"`
+	Teams           []api.Team                          `json:"teams"`
+	Period          *time.Time                          `json:"period"`
+	PostGameEntries []bungie.PostGameCarnageReportEntry `json:"postGameEntries"`
 }

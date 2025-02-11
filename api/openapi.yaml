@@ -184,13 +184,17 @@ paths:
           schema:
             type: integer
             format: int64
+            maximum: 30
+            minimum: 1
         - name: page
           in: query
           required: true
           schema:
             type: integer
             format: int64
+            minimum: 0
         - name: characterId
+          x-go-name: characterID
           in: query
           required: true
           schema:
@@ -208,7 +212,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/ActivityHistory"
+                  $ref: "#/components/schemas/DetailActivity"
   /activities/{activityId}:
     get:
       operationId: GetActivity
@@ -235,12 +239,16 @@ paths:
                 type: object
                 required:
                   - activity
-                  - stats
                   - aggregate
+                  - teams
                 properties:
                   activity:
                     $ref: "#/components/schemas/ActivityHistory"
-                  stats:
+                  teams:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Team"
+                  characterStats:
                     type: array
                     items:
                       $ref: "#/components/schemas/WeaponStats"
@@ -298,6 +306,15 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Character"
+    DetailActivity:
+      type: object
+      required:
+        - activity
+      properties:
+        activity:
+          $ref: "#/components/schemas/ActivityHistory"
+        aggregate:
+          $ref: "#/components/schemas/Aggregate"
     CharacterSnapshot:
       x-go-custom-tag: firestore:"characterSnapshot"
       type: object
@@ -376,6 +393,8 @@ components:
         - location
         - description
         - activity
+        - imageUrl
+        - activityIcon
       properties:
         location:
           type: string
@@ -391,15 +410,24 @@ components:
           type: integer
           format: int64
           description: "Hash id of the type of activity: Strike, Competitive, QuickPlay, etc. "
+        activityIcon:
+          type: string
+          description: "URL to the icon for the type of activity, IB, Crucible, etc."
         instanceId:
           x-go-name: "instanceID"
           type: string
           description: "Id to get more details about the particular game"
         isPrivate:
           type: boolean
+        imageUrl:
+          type: string
+          x-go-name: "imageURL"
+          description: "URL for the image of the destination activity"
         mode:
           type: string
           description: "Name of the Destiny Activity Mode"
+        personalValues:
+          $ref: "#/components/schemas/ActivityValues"
 
     Pong:
       type: object
@@ -420,9 +448,10 @@ components:
         - UserConfidenceSource
     ConfidenceLevel:
       type: string
-      enum: [notFound, low, medium, high]
+      enum: [notFound, noMatch, low, medium, high]
       x-enum-varnames:
         - NotFoundConfidenceLevel
+        - NoMatchConfidenceLevel
         - LowConfidenceLevel
         - MediumConfidenceLevel
         - HighConfidenceLevel
@@ -841,6 +870,22 @@ components:
           type: string
           x-oapi-codegen-extra-tags:
             firestore: "class"
+    Team:
+      type: object
+      required:
+        - id
+        - standing
+        - score
+      properties:
+        id:
+          type: string
+          x-go-name: "ID"
+        standing:
+          type: string
+        score:
+          type: string
+        teamName:
+          type: string
     ItemDetails:
       type: object
       x-go-name: ItemDetails
@@ -895,3 +940,26 @@ components:
         these components are relevant for an item that doesn't have an
         "itemInstanceId": for those, get your information from the
         DestinyInventoryDefinition.
+    ActivityValues:
+      type: object
+      properties:
+        kills:
+          $ref: "#/components/schemas/StatsValuePair"
+        assists:
+          $ref: "#/components/schemas/StatsValuePair"
+        deaths:
+          $ref: "#/components/schemas/StatsValuePair"
+        kd:
+          $ref: "#/components/schemas/StatsValuePair"
+        kda:
+          $ref: "#/components/schemas/StatsValuePair"
+        standing:
+          $ref: "#/components/schemas/StatsValuePair"
+        team:
+          $ref: "#/components/schemas/StatsValuePair"
+        fireTeamId:
+          $ref: "#/components/schemas/StatsValuePair"
+        timePlayed:
+          $ref: "#/components/schemas/StatsValuePair"
+
+

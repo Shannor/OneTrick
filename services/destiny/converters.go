@@ -241,6 +241,7 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest
 		slog.Warn("Activity Directory not found in manifest: ", history.DirectorActivityHash)
 		return nil
 	}
+	activityMode := manifest.ActivityModeDefinition[strconv.Itoa(definition.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(history.Mode))
 	return &api.ActivityHistory{
 		ActivityHash: *uintToInt64(history.DirectorActivityHash),
@@ -251,8 +252,39 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest
 		Location:     definition.DisplayProperties.Name,
 		Description:  definition.DisplayProperties.Description,
 		Activity:     activity.DisplayProperties.Name,
+		ImageURL:     fmt.Sprintf("%s%s", baseBungieURL, definition.PgcrImage),
+		ActivityIcon: fmt.Sprintf("%s%s", baseBungieURL, activityMode.DisplayProperties.Icon),
 	}
 }
+
+func TransformTeams(teams *[]bungie.TeamEntry) []api.Team {
+	if teams == nil {
+		return nil
+	}
+	if *teams == nil {
+		return nil
+	}
+	var result []api.Team
+	for _, team := range *teams {
+		if team.TeamID == nil {
+			continue
+		}
+
+		t := api.Team{
+			ID:       strconv.Itoa(int(*team.TeamID)),
+			TeamName: team.TeamName,
+		}
+		if team.Score != nil {
+			t.Score = *team.Score.Basic.DisplayValue
+		}
+		if team.Standing != nil {
+			t.Standing = *team.Standing.Basic.DisplayValue
+		}
+		result = append(result, t)
+	}
+	return result
+}
+
 func TransformPeriodGroups(period []bungie.StatsPeriodGroup, manifest Manifest) []api.ActivityHistory {
 	if period == nil {
 		return nil
@@ -263,6 +295,7 @@ func TransformPeriodGroups(period []bungie.StatsPeriodGroup, manifest Manifest) 
 	}
 	return result
 }
+
 func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *api.ActivityHistory {
 	if period == nil {
 		return nil
@@ -278,16 +311,45 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		slog.Warn("Activity Directory not found in manifest: ", period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
+	var personalValues *api.ActivityValues
+	if period.Values != nil {
+		personalValues = &api.ActivityValues{}
+		for key, value := range *period.Values {
+			switch key {
+			case "kills":
+				personalValues.Kills = (*api.StatsValuePair)(value.Basic)
+			case "assists":
+				personalValues.Assists = (*api.StatsValuePair)(value.Basic)
+			case "deaths":
+				personalValues.Deaths = (*api.StatsValuePair)(value.Basic)
+			case "killsDeathsRatio":
+				personalValues.Kd = (*api.StatsValuePair)(value.Basic)
+			case "killsDeathsAssists":
+				personalValues.Kda = (*api.StatsValuePair)(value.Basic)
+			case "standing":
+				personalValues.Standing = (*api.StatsValuePair)(value.Basic)
+			case "fireteamId":
+				personalValues.FireTeamId = (*api.StatsValuePair)(value.Basic)
+			case "timePlayedSeconds":
+				personalValues.TimePlayed = (*api.StatsValuePair)(value.Basic)
+			}
+		}
+	}
+
+	activityMode := manifest.ActivityModeDefinition[strconv.Itoa(activity.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
 	return &api.ActivityHistory{
-		ActivityHash: *uintToInt64(period.ActivityDetails.DirectorActivityHash),
-		InstanceID:   *period.ActivityDetails.InstanceId,
-		IsPrivate:    period.ActivityDetails.IsPrivate,
-		Mode:         &mode,
-		ReferenceID:  *uintToInt64(period.ActivityDetails.ReferenceId),
-		Location:     definition.DisplayProperties.Name,
-		Description:  definition.DisplayProperties.Description,
-		Activity:     activity.DisplayProperties.Name,
+		ActivityHash:   *uintToInt64(period.ActivityDetails.DirectorActivityHash),
+		InstanceID:     *period.ActivityDetails.InstanceId,
+		IsPrivate:      period.ActivityDetails.IsPrivate,
+		Mode:           &mode,
+		ReferenceID:    *uintToInt64(period.ActivityDetails.ReferenceId),
+		Location:       definition.DisplayProperties.Name,
+		Description:    definition.DisplayProperties.Description,
+		Activity:       activity.DisplayProperties.Name,
+		ImageURL:       fmt.Sprintf("%s%s", baseBungieURL, definition.PgcrImage),
+		ActivityIcon:   fmt.Sprintf("%s%s", baseBungieURL, activityMode.DisplayProperties.Icon),
+		PersonalValues: personalValues,
 	}
 }
 
