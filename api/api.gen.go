@@ -58,51 +58,43 @@ const (
 
 // ActivityHistory defines model for ActivityHistory.
 type ActivityHistory struct {
-	Activity string `json:"activity"`
+	Activity string `firebase:"activity" json:"activity"`
 
 	// ActivityHash Hash id of the type of activity: Strike, Competitive, QuickPlay, etc.
-	ActivityHash int64 `json:"activityHash"`
+	ActivityHash int64 `firebase:"activityHash" json:"activityHash"`
 
 	// ActivityIcon URL to the icon for the type of activity, IB, Crucible, etc.
-	ActivityIcon string `json:"activityIcon"`
-	Description  string `json:"description"`
+	ActivityIcon string `firebase:"activityIcon" json:"activityIcon"`
+	Description  string `firebase:"description" json:"description"`
 
 	// ImageURL URL for the image of the destination activity
-	ImageURL string `json:"imageUrl"`
+	ImageURL string `firebase:"imageUrl" json:"imageUrl"`
 
 	// InstanceID Id to get more details about the particular game
-	InstanceID string `json:"instanceId"`
-	IsPrivate  *bool  `json:"isPrivate,omitempty"`
-	Location   string `json:"location"`
+	InstanceID string `firebase:"instanceId" json:"instanceId"`
+	IsPrivate  *bool  `firebase:"isPrivate" json:"isPrivate,omitempty"`
+	Location   string `firebase:"location" json:"location"`
 
-	// Mode Name of the Destiny Activity Mode
-	Mode           *string         `json:"mode,omitempty"`
-	PersonalValues *ActivityValues `json:"personalValues,omitempty"`
-	ReferenceID    int64           `json:"referenceId"`
+	// Mode Name
+	Mode   *string   `firebase:"mode" json:"mode,omitempty"`
+	Period time.Time `firebase:"period" json:"period"`
+
+	// PersonalValues All Player Stats from a match that we currently care about
+	PersonalValues *PlayerStats `json:"personalValues,omitempty"`
+	ReferenceID    int64        `firebase:"reference_id" json:"referenceId"`
 }
 
 // ActivityMode defines model for ActivityMode.
 type ActivityMode string
 
-// ActivityValues defines model for ActivityValues.
-type ActivityValues struct {
-	Assists    *StatsValuePair `json:"assists,omitempty"`
-	Deaths     *StatsValuePair `json:"deaths,omitempty"`
-	FireTeamId *StatsValuePair `json:"fireTeamId,omitempty"`
-	Kd         *StatsValuePair `json:"kd,omitempty"`
-	Kda        *StatsValuePair `json:"kda,omitempty"`
-	Kills      *StatsValuePair `json:"kills,omitempty"`
-	Standing   *StatsValuePair `json:"standing,omitempty"`
-	Team       *StatsValuePair `json:"team,omitempty"`
-	TimePlayed *StatsValuePair `json:"timePlayed,omitempty"`
-}
-
 // Aggregate defines model for Aggregate.
 type Aggregate struct {
-	ActivityID string                      `firestore:"activityId" json:"activityId"`
-	CreatedAt  time.Time                   `firestore:"createdAt" json:"createdAt"`
-	ID         string                      `firestore:"id" json:"id"`
-	Mapping    map[string]CharacterMapping `firestore:"mapping" json:"mapping"`
+	ActivityDetails ActivityHistory                `json:"activityDetails"`
+	ActivityID      string                         `firestore:"activityId" json:"activityId"`
+	CreatedAt       time.Time                      `firestore:"createdAt" json:"createdAt"`
+	ID              string                         `firestore:"id" json:"id"`
+	Performance     map[string]InstancePerformance `firestore:"performance" json:"performance"`
+	Snapshots       map[string]SnapshotLink        `firestore:"snapshots" json:"snapshots"`
 }
 
 // AuthResponse defines model for AuthResponse.
@@ -149,15 +141,6 @@ type Character struct {
 	Id                  string `firestore:"id" json:"id"`
 	Light               int64  `firestore:"light" json:"light"`
 	Race                string `firestore:"race" json:"race"`
-}
-
-// CharacterMapping defines model for CharacterMapping.
-type CharacterMapping struct {
-	CharacterID      string           `firestore:"characterId" json:"characterId"`
-	ConfidenceLevel  ConfidenceLevel  `firestore:"confidenceLevel" json:"confidenceLevel"`
-	ConfidenceSource ConfidenceSource `firestore:"confidenceSource" json:"confidenceSource"`
-	CreatedAt        time.Time        `firestore:"createdAt" json:"createdAt"`
-	SnapshotData     *SnapshotData    `firestore:"snapshotData" json:"snapshotData,omitempty"`
 }
 
 // CharacterSnapshot defines model for CharacterSnapshot.
@@ -233,8 +216,21 @@ type GunStat struct {
 	Value int64 `firestore:"value" json:"value"`
 }
 
-// HistoricalStats defines model for HistoricalStats.
-type HistoricalStats = []UniqueStatValue
+// InstancePerformance defines model for InstancePerformance.
+type InstancePerformance struct {
+	Abilities *map[string]UniqueStatValue `json:"abilities,omitempty"`
+
+	// Overall All Player Stats from a match that we currently care about
+	Overall PlayerStats    `json:"overall"`
+	Weapons InstanceWeapon `json:"weapons"`
+}
+
+// InstanceWeapon defines model for InstanceWeapon.
+type InstanceWeapon struct {
+	// ReferenceID The hash ID of the item definition that describes the weapon.
+	ReferenceID *int64                      `json:"referenceId,omitempty"`
+	Stats       *map[string]UniqueStatValue `json:"stats,omitempty"`
+}
 
 // InternalError defines model for InternalError.
 type InternalError string
@@ -289,6 +285,19 @@ type Perk struct {
 	Name     string  `firestore:"name" json:"name"`
 }
 
+// PlayerStats All Player Stats from a match that we currently care about
+type PlayerStats struct {
+	Assists    *StatsValuePair `firestore:"statsValuePair" json:"assists,omitempty"`
+	Deaths     *StatsValuePair `firestore:"statsValuePair" json:"deaths,omitempty"`
+	FireTeamId *StatsValuePair `firestore:"statsValuePair" json:"fireTeamId,omitempty"`
+	Kd         *StatsValuePair `firestore:"statsValuePair" json:"kd,omitempty"`
+	Kda        *StatsValuePair `firestore:"statsValuePair" json:"kda,omitempty"`
+	Kills      *StatsValuePair `firestore:"statsValuePair" json:"kills,omitempty"`
+	Standing   *StatsValuePair `firestore:"statsValuePair" json:"standing,omitempty"`
+	Team       *StatsValuePair `firestore:"statsValuePair" json:"team,omitempty"`
+	TimePlayed *StatsValuePair `firestore:"statsValuePair" json:"timePlayed,omitempty"`
+}
+
 // Pong defines model for Pong.
 type Pong struct {
 	Ping string `json:"ping"`
@@ -319,6 +328,15 @@ type SnapshotData struct {
 	Snippet    SnapshotSnippet `firestore:"snapshotSnippet" json:"snippet"`
 }
 
+// SnapshotLink defines model for SnapshotLink.
+type SnapshotLink struct {
+	CharacterID      string           `firestore:"characterId" json:"characterId"`
+	ConfidenceLevel  ConfidenceLevel  `firestore:"confidenceLevel" json:"confidenceLevel"`
+	ConfidenceSource ConfidenceSource `firestore:"confidenceSource" json:"confidenceSource"`
+	CreatedAt        time.Time        `firestore:"createdAt" json:"createdAt"`
+	SnapshotData     *SnapshotData    `firestore:"snapshotData" json:"snapshotData,omitempty"`
+}
+
 // SnapshotSnippet defines model for SnapshotSnippet.
 type SnapshotSnippet struct {
 	PrimaryWeapon string `firestore:"primaryWeapon" json:"primaryWeapon"`
@@ -346,10 +364,10 @@ type Stats map[string]GunStat
 // StatsValuePair defines model for StatsValuePair.
 type StatsValuePair struct {
 	// DisplayValue Localized formatted version of the value.
-	DisplayValue *string `json:"displayValue,omitempty"`
+	DisplayValue *string `firestore:"displayValue" json:"displayValue,omitempty"`
 
 	// Value Raw value of the statistic
-	Value *float64 `json:"value,omitempty"`
+	Value *float64 `firestore:"value" json:"value,omitempty"`
 }
 
 // Team defines model for Team.
@@ -362,18 +380,18 @@ type Team struct {
 
 // UniqueStatValue defines model for UniqueStatValue.
 type UniqueStatValue struct {
-	// ActivityId When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
-	ActivityId *int64 `json:"activityId"`
+	// ActivityID When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
+	ActivityID *int64 `firestore:"activityId" json:"activityId"`
 
 	// Basic Basic stat value.
-	Basic StatsValuePair `json:"basic"`
-	Name  string         `json:"name"`
+	Basic StatsValuePair `firestore:"basic" json:"basic"`
+	Name  *string        `firestore:"name" json:"name,omitempty"`
 
 	// Pga Per game average for the statistic, if applicable
-	Pga *StatsValuePair `json:"pga,omitempty"`
+	Pga *StatsValuePair `firestore:"pga" json:"pga,omitempty"`
 
 	// Weighted Weighted value of the stat if a weight greater than 1 has been assigned.
-	Weighted *StatsValuePair `json:"weighted,omitempty"`
+	Weighted *StatsValuePair `firestore:"weighted" json:"weighted,omitempty"`
 }
 
 // WeaponStats defines model for WeaponStats.
@@ -381,9 +399,9 @@ type WeaponStats struct {
 	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
 	ItemDetails *ItemDetails `firestore:"itemDetails" json:"details,omitempty"`
 
-	// ReferenceId The hash ID of the item definition that describes the weapon.
-	ReferenceId *int64           `json:"referenceId,omitempty"`
-	Stats       *HistoricalStats `json:"stats,omitempty"`
+	// ReferenceID The hash ID of the item definition that describes the weapon.
+	ReferenceID *int64                      `json:"referenceId,omitempty"`
+	Stats       *map[string]UniqueStatValue `json:"stats,omitempty"`
 }
 
 // XMembershipID defines model for X-Membership-ID.
@@ -2218,81 +2236,83 @@ func (sh *strictHandler) GetSnapshot(ctx *gin.Context, snapshotId string, params
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"AA==",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

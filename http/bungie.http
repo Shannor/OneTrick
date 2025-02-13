@@ -1,0 +1,40 @@
+###
+GET https://www.bungie.net/common/destiny2_content/json/en/DestinyDamageTypeDefinition-63d9dc4b-3a6e-457c-ac2a-cec9a2748073.json
+
+<> 2025-01-05T223804.200.json
+<> 2025-01-05T223518.200.json
+<> 2025-01-05T134141.200.json
+<> 2025-01-05T125325.200.json
+<> 2025-01-04T133759.200.json
+<> 2025-01-04T133711.200.json
+<> 2025-01-04T122723.200.json
+<> 2025-01-04T122558.200.json
+<> 2025-01-04T122344.200.json
+<> 2025-01-04T122111.200.json
+<> 2025-01-04T121921.200.json
+<> 2025-01-04T121626.200.json
+<> 2025-01-03T184248.200.json
+<> 2025-01-03T184229.404.html
+<> 2025-01-03T184138.404.html
+
+###
+GET http://www.bungie.net/common/destiny2_content/json/en/DestinyInventoryItemDefinition-63d9dc4b-3a6e-457c-ac2a-cec9a2748073.json
+
+<> 2025-01-03T185415.200.json
+<> 2025-01-03T185252.200.json
+###
+GET http://www.bungie.net/common/destiny2_content/json/en/DestinyInventoryItemLiteDefinition-63d9dc4b-3a6e-457c-ac2a-cec9a2748073.json/
+
+<> 2025-01-03T185520.200.json
+
+// We need this one for types of equipment
+###
+GET http://www.bungie.net/common/destiny2_content/json/en/DestinyEquipmentSlotDefinition-63d9dc4b-3a6e-457c-ac2a-cec9a2748073.json
+
+<> 2025-01-03T185312.200.json
+###
+GET http://www.bungie.net/common/destiny2_content/json/en/aggregate-63d9dc4b-3a6e-457c-ac2a-cec9a2748073.json/
+
+<> 2025-01-04T115704.200.json
+<> 2025-01-03T190136.200.json
+<> 2025-01-03T190019.200.json

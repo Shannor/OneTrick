@@ -46,7 +46,15 @@ func NewService(db *firestore.Client) Service {
 	}
 }
 
-func (s *service) AddAggregate(ctx context.Context, characterID string, activityID string, snapshotID *string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error) {
+// AddAggregate TODO: This function should massively change with the new session idea and saving activity data to an aggregate
+func (s *service) AddAggregate(
+	ctx context.Context,
+	characterID string,
+	activityID string,
+	snapshotID *string,
+	level api.ConfidenceLevel,
+	source api.ConfidenceSource,
+) (*api.Aggregate, error) {
 	now := time.Now()
 	mapping := api.CharacterMapping{
 		CharacterID:      characterID,

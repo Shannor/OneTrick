@@ -28,6 +28,31 @@ type Server struct {
 	SessionService   session.Service
 }
 
+func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRequestObject) (api.SessionCheckInResponseObject, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSessionAggregatesRequestObject) (api.GetSessionAggregatesResponseObject, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
 
 	result, err := s.SnapshotService.Get(ctx, request.SnapshotId)
@@ -382,7 +407,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	var snap *api.CharacterSnapshot
 	skipAgg := false
 	if agg != nil {
-		snapshotMapping, ok := agg.Mapping[characterID]
+		snapshotMapping, ok := agg.Snapshots[characterID]
 		if ok {
 			if snapshotMapping.ConfidenceLevel == api.NotFoundConfidenceLevel || snapshotMapping.ConfidenceLevel == api.NoMatchConfidenceLevel {
 				skipAgg = true

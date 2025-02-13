@@ -577,39 +577,65 @@ components:
         - activity
         - imageUrl
         - activityIcon
+        - period
       properties:
         location:
           type: string
+          x-oapi-codegen-extra-tags:
+            firebase: "location"
         activity:
           type: string
+          x-oapi-codegen-extra-tags:
+            firebase: "activity"
         description:
           type: string
+          x-oapi-codegen-extra-tags:
+            firebase: "description"
+        period:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firebase: "period"
         referenceId:
           x-go-name: "referenceID"
           type: integer
           format: int64
+          x-oapi-codegen-extra-tags:
+            firebase: "reference_id"
         activityHash:
           type: integer
           format: int64
           description: "Hash id of the type of activity: Strike, Competitive, QuickPlay, etc. "
+          x-oapi-codegen-extra-tags:
+            firebase: "activityHash"
         activityIcon:
           type: string
           description: "URL to the icon for the type of activity, IB, Crucible, etc."
+          x-oapi-codegen-extra-tags:
+            firebase: "activityIcon"
         instanceId:
           x-go-name: "instanceID"
           type: string
           description: "Id to get more details about the particular game"
+          x-oapi-codegen-extra-tags:
+            firebase: "instanceId"
         isPrivate:
           type: boolean
+          x-oapi-codegen-extra-tags:
+            firebase: "isPrivate"
         imageUrl:
           type: string
           x-go-name: "imageURL"
           description: "URL for the image of the destination activity"
+          x-oapi-codegen-extra-tags:
+            firebase: "imageUrl"
         mode:
           type: string
-          description: "Name of the Destiny Activity Mode"
+          description: "Name"
+          x-oapi-codegen-extra-tags:
+            firebase: "mode"
         personalValues:
-          $ref: "#/components/schemas/ActivityValues"
+          $ref: "#/components/schemas/PlayerStats"
 
     Pong:
       type: object
@@ -665,7 +691,7 @@ components:
             firestore: "snapshotId"
         snippet:
           $ref: '#/components/schemas/SnapshotSnippet'
-    CharacterMapping:
+    SnapshotLink:
       type: object
       required:
         - characterId
@@ -694,7 +720,9 @@ components:
       required:
         - id
         - activityId
-        - mapping
+        - activityDetails
+        - snapshots
+        - performance
         - createdAt
       properties:
         id:
@@ -707,12 +735,20 @@ components:
           x-go-name: "activityID"
           x-oapi-codegen-extra-tags:
             firestore: 'activityId'
-        mapping:
+        activityDetails:
+          $ref: "#/components/schemas/ActivityHistory"
+        snapshots:
           type: object
           x-oapi-codegen-extra-tags:
-            firestore: 'mapping'
+            firestore: 'snapshots'
           additionalProperties:
-            $ref: '#/components/schemas/CharacterMapping'
+            $ref: '#/components/schemas/SnapshotLink'
+        performance:
+          type: object
+          x-oapi-codegen-extra-tags:
+            firestore: 'performance'
+          additionalProperties:
+            $ref: '#/components/schemas/InstancePerformance'
         createdAt:
           type: string
           format: date-time
@@ -764,37 +800,71 @@ components:
           type: integer
           description: The hash ID of the item definition that describes the weapon.
           format: int64
+          x-go-name: referenceID
         details:
           $ref: "#/components/schemas/ItemDetails"
         stats:
-          $ref: "#/components/schemas/HistoricalStats"
-    HistoricalStats:
-      type: array
-      items:
-        $ref: "#/components/schemas/UniqueStatValue"
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UniqueStatValue"
+    InstanceWeapon:
+      type: object
+      properties:
+        referenceId:
+          type: integer
+          description: The hash ID of the item definition that describes the weapon.
+          format: int64
+          x-go-name: referenceID
+        stats:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UniqueStatValue"
+    InstancePerformance:
+      type: object
+      x-oapi-codegen-extra-tags:
+        firestore: 'instancePerformance'
+      required:
+        - overall
+        - weapons
+      properties:
+        overall:
+          $ref: "#/components/schemas/PlayerStats"
+        weapons:
+            $ref: "#/components/schemas/InstanceWeapon"
+        abilities:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UniqueStatValue"
     UniqueStatValue:
       type: object
       required:
-        - name
         - basic
       properties:
         name:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: 'name'
         basic:
           type: object
           allOf:
             - $ref: "#/components/schemas/StatsValuePair"
           description: Basic stat value.
+          x-oapi-codegen-extra-tags:
+            firestore: 'basic'
         pga:
           type: object
           allOf:
             - $ref: "#/components/schemas/StatsValuePair"
           description: Per game average for the statistic, if applicable
+          x-oapi-codegen-extra-tags:
+            firestore: 'pga'
         weighted:
           type: object
           allOf:
             - $ref: "#/components/schemas/StatsValuePair"
           description: Weighted value of the stat if a weight greater than 1 has been assigned.
+          x-oapi-codegen-extra-tags:
+            firestore: 'weighted'
         activityId:
           type: integer
           description: >-
@@ -803,6 +873,9 @@ components:
             personal best was established is available on this property.
           format: int64
           nullable: true
+          x-go-name: "activityID"
+          x-oapi-codegen-extra-tags:
+            firestore: 'activityId'
     ActivityMode:
       type: string
       enum:
@@ -817,14 +890,20 @@ components:
         - IronBanner
     StatsValuePair:
       type: object
+      x-oapi-codegen-extra-tags:
+        firestore: 'statsValuePair'
       properties:
         value:
           type: number
           description: Raw value of the statistic
           format: double
+          x-oapi-codegen-extra-tags:
+            firestore: 'value'
         displayValue:
           type: string
           description: Localized formatted version of the value.
+          x-oapi-codegen-extra-tags:
+            firestore: 'displayValue'
     Perk:
       x-oapi-codegen-extra-tags:
         firestore: "perks"
@@ -1122,8 +1201,10 @@ components:
         these components are relevant for an item that doesn't have an
         "itemInstanceId": for those, get your information from the
         DestinyInventoryDefinition.
-    ActivityValues:
+#   TODO: This may need to be merged with Weapon Stats in the near term
+    PlayerStats:
       type: object
+      description: "All Player Stats from a match that we currently care about"
       properties:
         kills:
           $ref: "#/components/schemas/StatsValuePair"
@@ -1143,7 +1224,6 @@ components:
           $ref: "#/components/schemas/StatsValuePair"
         timePlayed:
           $ref: "#/components/schemas/StatsValuePair"
-
     Session:
       type: object
       required:
