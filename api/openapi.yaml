@@ -254,6 +254,151 @@ paths:
                       $ref: "#/components/schemas/WeaponStats"
                   aggregate:
                     $ref: "#/components/schemas/Aggregate"
+  /sessions:
+    post:
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+      requestBody:
+        description: "Provide the character to start the session for"
+        required: true
+        content:
+          application/json:
+            schema:
+              required:
+                - characterId
+              type: object
+              properties:
+                characterId:
+                  type: string
+                  x-go-name: characterID
+      operationId: StartSession
+      description: "Create a new session"
+      responses:
+        201:
+          description: "Return the created session"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+    get:
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+        - name: count
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            maximum: 30
+            minimum: 1
+        - name: page
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: characterId
+          x-go-name: characterID
+          in: query
+          required: true
+          schema:
+            type: string
+      operationId: GetSessions
+      responses:
+        200:
+          description: "List of Sessions"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+  /sessions/{sessionId}:
+   put:
+     parameters:
+       - $ref: "#/components/parameters/X-User-ID"
+       - $ref: "#/components/parameters/X-Membership-ID"
+       - name: sessionId
+         in: path
+         required: true
+         schema:
+           type: string
+           x-go-name: sessionID
+     requestBody:
+       description: "Provide the character to start the session for"
+       required: true
+       content:
+         application/json:
+           schema:
+             required:
+               - characterId
+             type: object
+             properties:
+               characterId:
+                 type: string
+                 x-go-name: characterID
+               name:
+                type: string
+               completedAt:
+                 type: string
+     operationId: UpdateSession
+     description: "Complete a session"
+     responses:
+       201:
+         description: "Return the completed session"
+         content:
+           application/json:
+             schema:
+               $ref: "#/components/schemas/Session"
+  /sessions/{sessionId}/aggregates:
+    get:
+      operationId: GetSessionAggregates
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            x-go-name: sessionID
+      responses:
+        '200':
+          description: Array of aggregates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Aggregate"
+
+  /actions/session-checkin:
+      post:
+        requestBody:
+          description: ""
+          required: true
+          content:
+            application/json:
+              schema:
+                required:
+                  - sessionId
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                    x-go-name: sessionID
+        operationId: SessionCheckIn
+        description: "Perform session update logic"
+        responses:
+          200:
+            description: "Return the created session"
+            content:
+              application/json:
+                schema:
+                  type: boolean
 
 components:
   securitySchemes:
@@ -999,4 +1144,41 @@ components:
         timePlayed:
           $ref: "#/components/schemas/StatsValuePair"
 
+    Session:
+      type: object
+      required:
+        - id
+        - startedAt
+        - userId
+        - characterId
+      properties:
+        id:
+          type: string
+          x-go-name: "ID"
+          x-oapi-codegen-extra-tags:
+            firestore: "id"
+        startedAt:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: "startedAt"
+        completedAt:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: "completedAt"
+        userId:
+          type: string
+          x-go-name: userID
+          x-oapi-codegen-extra-tags:
+            firestore: "userId"
+        characterId:
+          type: string
+          x-go-name: characterID
+          x-oapi-codegen-extra-tags:
+            firestore: "characterId"
+        name:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
 

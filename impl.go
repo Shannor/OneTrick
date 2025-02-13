@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"oneTrick/api"
+	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
+	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"oneTrick/validator"
@@ -18,10 +20,12 @@ import (
 var _ api.StrictServerInterface = (*Server)(nil)
 
 type Server struct {
-	D2Service       destiny.Service
-	D2AuthService   destiny.AuthService
-	UserService     user.Service
-	SnapshotService snapshot.Service
+	D2Service        destiny.Service
+	D2AuthService    destiny.AuthService
+	UserService      user.Service
+	SnapshotService  snapshot.Service
+	AggregateService aggregate.Service
+	SessionService   session.Service
 }
 
 func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
@@ -191,12 +195,16 @@ func NewServer(
 	authService destiny.AuthService,
 	userService user.Service,
 	snapshotService snapshot.Service,
+	aggregateService aggregate.Service,
+	sessionService session.Service,
 ) Server {
 	return Server{
-		D2Service:       service,
-		D2AuthService:   authService,
-		UserService:     userService,
-		SnapshotService: snapshotService,
+		D2Service:        service,
+		D2AuthService:    authService,
+		UserService:      userService,
+		SnapshotService:  snapshotService,
+		AggregateService: aggregateService,
+		SessionService:   sessionService,
 	}
 }
 
@@ -307,7 +315,7 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 	for _, activityHistory := range history {
 		activityIDs = append(activityIDs, activityHistory.InstanceID)
 	}
-	aggregates, err := s.SnapshotService.GetAggregates(ctx, activityIDs)
+	aggregates, err := s.AggregateService.GetAggregates(ctx, activityIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +352,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		return nil, fmt.Errorf("no activity details found for activity ID: %s", activityID)
 	}
 
-	agg, err := s.SnapshotService.GetAggregate(ctx, activityID)
+	agg, err := s.AggregateService.GetAggregate(ctx, activityID)
 	if err != nil {
 		if errors.Is(err, snapshot.NotFound) {
 			l.Info("No aggregation found for activity")
@@ -411,19 +419,19 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	}
 
 	if snap != nil && len(characterWeaponStats) > 0 {
-		agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityID, &snap.ID, api.MediumConfidenceLevel, api.SystemConfidenceSource)
+		agg, err = s.AggregateService.AddAggregate(ctx, characterID, activityID, &snap.ID, api.MediumConfidenceLevel, api.SystemConfidenceSource)
 		if err != nil {
 			l.With("error", err.Error()).Error("Failed to add aggregate")
 			return nil, err
 		}
 	} else if snap != nil {
-		agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityID, nil, api.NoMatchConfidenceLevel, api.SystemConfidenceSource)
+		agg, err = s.AggregateService.AddAggregate(ctx, characterID, activityID, nil, api.NoMatchConfidenceLevel, api.SystemConfidenceSource)
 		if err != nil {
 			l.With("error", err.Error()).Error("Failed to add aggregate")
 			return nil, err
 		}
 	} else {
-		agg, err = s.SnapshotService.AddAggregate(ctx, characterID, activityID, nil, api.NotFoundConfidenceLevel, api.SystemConfidenceSource)
+		agg, err = s.AggregateService.AddAggregate(ctx, characterID, activityID, nil, api.NotFoundConfidenceLevel, api.SystemConfidenceSource)
 		if err != nil {
 			l.With("error", err.Error()).Error("Failed to add aggregate")
 			return nil, err
