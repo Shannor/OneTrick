@@ -6,6 +6,7 @@ import (
 	"errors"
 	"google.golang.org/api/iterator"
 	"oneTrick/api"
+	"oneTrick/utils"
 	"time"
 )
 
@@ -26,7 +27,7 @@ type Service interface {
 	// Get retrieves a specific snapshot for a given user, character, and snapshot ID.
 	// Takes a context, user ID, character ID, and snapshot ID as input.
 	// Returns the requested CharacterSnapshot or an error if the snapshot is not found or cannot be retrieved.
-	Get(ctx context.Context, userID string, characterID string, snapshotID string) (*api.CharacterSnapshot, error)
+	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
 
 	// FindClosest retrieves the closest snapshot to a given activity period timestamp for a specified user and character.
 	// Takes a context, user ID, character ID, and activity period (timestamp) as input.
@@ -44,6 +45,9 @@ type Service interface {
 	// Returns the updated or newly created Aggregate or an error if the operation fails.
 	AddAggregate(ctx context.Context, characterID string, activityID string, snapshotID *string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error)
 
+	// GetAggregates retrieves a list of aggregates for the given activity IDs.
+	// Takes a context and a slice of activity IDs as input.
+	// Returns a slice of Aggregates or an error if the operation fails.
 	GetAggregates(ctx context.Context, activityIDs []string) ([]api.Aggregate, error)
 }
 
@@ -57,7 +61,10 @@ type service struct {
 }
 
 func (s *service) FindClosest(ctx context.Context, userID string, characterID string, activityPeriod time.Time) (*api.CharacterSnapshot, error) {
-	iter := s.DB.Collection(snapShotCollection).Doc(userID).Collection(characterID).Documents(ctx)
+	iter := s.DB.Collection(snapShotCollection).
+		Where("userId", "==", userID).
+		Where("characterId", "==", characterID).
+		Documents(ctx)
 	var snapshot *api.CharacterSnapshot
 	minDuration := time.Duration(1<<63 - 1) // Max duration value
 
@@ -89,6 +96,18 @@ func (s *service) FindClosest(ctx context.Context, userID string, characterID st
 	if snapshot == nil {
 		return nil, NotFound
 	}
+	if !snapshot.IsOriginal {
+		if snapshot.ParentID != nil {
+			og, err := s.Get(ctx, *snapshot.ParentID)
+			if err != nil {
+				return nil, err
+			}
+			snapshot.Loadout = og.Loadout
+		} else {
+			return nil, errors.New("snapshot has no parent but is not an original")
+		}
+	}
+
 	return snapshot, nil
 }
 
@@ -101,10 +120,32 @@ func NewService(db *firestore.Client) Service {
 }
 
 func (s *service) Create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error) {
-	ref := s.DB.Collection(snapShotCollection).Doc(userID).Collection(snapshot.CharacterID).NewDoc()
+	snapshot.UserID = userID
+	snapshot.Timestamp = time.Now()
+	ref := s.DB.Collection(snapShotCollection).NewDoc()
 	id := ref.ID
 	snapshot.ID = ref.ID
-	_, err := ref.Set(ctx, snapshot)
+
+	hash, err := utils.HashMap(snapshot.Loadout)
+	if err != nil {
+		return nil, err
+	}
+	snapshot.Hash = hash
+
+	og, err := getOptionalOriginal(s.DB, ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if og == nil {
+		snapshot.IsOriginal = true
+		snapshot.ParentID = nil
+	} else {
+		// Clear Loadout because only the original snapshot will hold it
+		snapshot.ParentID = &og.ID
+		snapshot.Loadout = nil
+	}
+
+	_, err = ref.Set(ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +153,12 @@ func (s *service) Create(ctx context.Context, userID string, snapshot api.Charac
 }
 
 func (s *service) GetAllByCharacter(ctx context.Context, userID string, characterID string) ([]api.CharacterSnapshot, error) {
-	iter := s.DB.Collection(snapShotCollection).Doc(userID).Collection(characterID).OrderBy("timestamp", firestore.Desc).Documents(ctx)
+	iter := s.DB.Collection(snapShotCollection).
+		Where("userId", "==", userID).
+		Where("characterId", "==", characterID).
+		Where("isOriginal", "==", true).
+		OrderBy("timestamp", firestore.Desc).
+		Documents(ctx)
 	snapshots := make([]api.CharacterSnapshot, 0)
 	defer iter.Stop()
 	for {
@@ -133,9 +179,36 @@ func (s *service) GetAllByCharacter(ctx context.Context, userID string, characte
 	return snapshots, nil
 }
 
-func (s *service) Get(ctx context.Context, userID string, characterID string, snapshotID string) (*api.CharacterSnapshot, error) {
+func getOptionalOriginal(db *firestore.Client, ctx context.Context, hash string) (*api.CharacterSnapshot, error) {
+	og := api.CharacterSnapshot{}
+	iter := db.Collection(snapShotCollection).
+		Where("hash", "==", hash).
+		Where("isOriginal", "==", true).
+		Limit(1).
+		Documents(ctx)
+	defer iter.Stop()
+
+	for {
+		itr, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		err = itr.DataTo(&og)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if og.ID == "" {
+		return nil, nil
+	}
+	return &og, nil
+}
+func (s *service) Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error) {
 	var result *api.CharacterSnapshot
-	data, err := s.DB.Collection(snapShotCollection).Doc(userID).Collection(characterID).Doc(snapshotID).Get(ctx)
+	data, err := s.DB.Collection(snapShotCollection).Doc(snapshotID).Get(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +216,19 @@ func (s *service) Get(ctx context.Context, userID string, characterID string, sn
 	if err != nil {
 		return nil, err
 	}
+
+	if !result.IsOriginal {
+		if result.ParentID != nil {
+			og, err := s.Get(ctx, *result.ParentID)
+			if err != nil {
+				return nil, err
+			}
+			result.Loadout = og.Loadout
+		} else {
+			return nil, errors.New("snapshot has no parent but is not an original")
+		}
+	}
+
 	return result, nil
 }
 

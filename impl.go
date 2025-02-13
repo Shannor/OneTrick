@@ -26,7 +26,7 @@ type Server struct {
 
 func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
 
-	result, err := s.SnapshotService.Get(ctx, request.Params.XUserID, request.Params.CharacterId, request.SnapshotId)
+	result, err := s.SnapshotService.Get(ctx, request.SnapshotId)
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to fetch snapshot")
 		return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
@@ -180,7 +180,7 @@ func (s Server) RefreshToken(ctx context.Context, request api.RefreshTokenReques
 	return api.RefreshToken200JSONResponse(result), nil
 }
 
-func (s Server) GetPing(ctx context.Context, request api.GetPingRequestObject) (api.GetPingResponseObject, error) {
+func (s Server) GetPing(context.Context, api.GetPingRequestObject) (api.GetPingResponseObject, error) {
 	return api.GetPing200JSONResponse{
 		Ping: "pong",
 	}, nil
@@ -229,14 +229,13 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 	result := api.CharacterSnapshot{
 		Timestamp: *timestamp,
 	}
-	itemSnapshots := make([]api.ItemSnapshot, 0)
+	itemSnapshots := make(api.Loadout)
 	for _, item := range items {
 		if item.ItemInstanceId == nil {
 			return nil, fmt.Errorf("missing instance id for item hash: %d", item.ItemHash)
 		}
 		snap := api.ItemSnapshot{
 			InstanceID: *item.ItemInstanceId,
-			Timestamp:  *timestamp,
 		}
 		details, err := s.D2Service.GetWeaponDetails(ctx, request.Params.XMembershipID, membershipType, *item.ItemInstanceId)
 		if err != nil {
@@ -245,10 +244,10 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 		snap.Name = details.BaseInfo.Name
 		snap.ItemHash = details.BaseInfo.ItemHash
 		snap.ItemDetails = *details
-		itemSnapshots = append(itemSnapshots, snap)
+		itemSnapshots[strconv.FormatInt(snap.ItemDetails.BaseInfo.BucketHash, 10)] = snap
 	}
 
-	result.Items = itemSnapshots
+	result.Loadout = itemSnapshots
 	result.CharacterID = request.Body.CharacterId
 	_, err = s.SnapshotService.Create(ctx, request.Params.XUserID, result)
 	if err != nil {
@@ -380,7 +379,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 			if snapshotMapping.ConfidenceLevel == api.NotFoundConfidenceLevel || snapshotMapping.ConfidenceLevel == api.NoMatchConfidenceLevel {
 				skipAgg = true
 			} else {
-				snap, err = s.SnapshotService.Get(ctx, userID, characterID, snapshotMapping.SnapshotData.SnapshotID)
+				snap, err = s.SnapshotService.Get(ctx, snapshotMapping.SnapshotData.SnapshotID)
 				if err != nil {
 					return nil, err
 				}
@@ -401,9 +400,9 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		}
 	}
 	// TODO: Move this logic to it's own function for a future easy button that will try and match things up for you.
-	items := make([]api.ItemSnapshot, 0)
+	items := make(api.Loadout)
 	if snap != nil {
-		items = snap.Items
+		items = snap.Loadout
 	}
 	characterWeaponStats, err := s.D2Service.EnrichWeaponStats(items, activityDetails.WeaponStats)
 	if err != nil {

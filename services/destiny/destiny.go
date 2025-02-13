@@ -34,7 +34,7 @@ type Service interface {
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetIronBannerActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetActivity(ctx context.Context, characterID string, activityID string) (*ActivityData, error)
-	EnrichWeaponStats(items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
+	EnrichWeaponStats(loadout api.Loadout, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
 }
 
 type service struct {
@@ -393,9 +393,9 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 	return results, nil
 }
 
-func (a *service) EnrichWeaponStats(items []api.ItemSnapshot, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error) {
+func (a *service) EnrichWeaponStats(loadout api.Loadout, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error) {
 	mapping := map[int64]api.ItemDetails{}
-	for _, component := range items {
+	for _, component := range loadout {
 		mapping[component.ItemHash] = component.ItemDetails
 	}
 
