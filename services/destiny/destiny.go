@@ -28,13 +28,12 @@ const SubClass = 3284755031
 type Service interface {
 	GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error)
 	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
-	GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemDetails, error)
+	GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetIronBannerActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetActivity(ctx context.Context, characterID string, activityID string) (*ActivityData, error)
-	EnrichWeaponStats(loadout api.Loadout, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error)
 }
 
 type service struct {
@@ -236,29 +235,29 @@ func (a *service) GetActivity(ctx context.Context, characterID string, activityI
 		return nil, nil
 	}
 
-	// TODO: Remove in the future, since we pass all entries
-	var weapons []bungie.HistoricalWeaponStats
+	var (
+		performance *api.InstancePerformance
+	)
 	for _, entry := range *data.Entries {
 		if entry.CharacterId == nil {
 			continue
 		}
-		// Only getting it for one character. Change for everyone
+		// TODO: Only getting it for one character. Change for everyone
 		if *entry.CharacterId == characterID {
-			weapons = *entry.Extended.Weapons
+			performance = CarnageEntryToInstancePerformance(&entry)
 			break
 		}
 
 	}
-	if weapons == nil {
-		return nil, fmt.Errorf("no data found for characterID: %s", characterID)
-	}
 	if a.Manifest == nil {
 		return nil, fmt.Errorf("manifest is not provided")
 	}
+	details := TransformHistoricActivity(data.ActivityDetails, *a.Manifest)
+	details.Period = *data.Period
 	result := ActivityData{
 		Period:          data.Period,
-		Activity:        TransformHistoricActivity(data.ActivityDetails, *a.Manifest),
-		WeaponStats:     weapons,
+		Activity:        details,
+		Performance:     performance,
 		Teams:           TransformTeams(data.Teams),
 		PostGameEntries: *data.Entries,
 	}
@@ -273,7 +272,7 @@ const (
 	ItemCommonDataCode = 307
 )
 
-func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemDetails, error) {
+func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error) {
 	components := []int32{ItemPerksCode, ItemStatsCode, ItemSocketsCode, ItemCommonDataCode, ItemInstanceCode}
 	membershipIdInt64, err := strconv.ParseInt(membershipID, 10, 64)
 	if err != nil {
@@ -390,28 +389,5 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 		}
 		return strings.Compare(a.Class, b.Class)
 	})
-	return results, nil
-}
-
-func (a *service) EnrichWeaponStats(loadout api.Loadout, stats []bungie.HistoricalWeaponStats) ([]api.WeaponStats, error) {
-	mapping := map[int64]api.ItemDetails{}
-	for _, component := range loadout {
-		mapping[component.ItemHash] = component.ItemDetails
-	}
-
-	results := make([]api.WeaponStats, 0)
-	for _, stats := range stats {
-		result := api.WeaponStats{}
-		details, ok := mapping[int64(*stats.ReferenceId)]
-		if !ok {
-			slog.Warn("No instance id found for reference id: ", *stats.ReferenceId)
-			continue
-		}
-		result.ReferenceId = uintToInt64(stats.ReferenceId)
-		result.Stats = TransformD2HistoricalStatValues(stats.Values)
-		result.ItemDetails = &details
-		results = append(results, result)
-	}
-
 	return results, nil
 }

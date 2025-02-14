@@ -22,7 +22,7 @@ type Service interface {
 	// If the aggregate already exists, it performs a partial update with the new data.
 	// Takes context, user ID, snapshot ID, activity ID, character ID, confidence level, and confidence source as input.
 	// Returns the updated or newly created Aggregate or an error if the operation fails.
-	AddAggregate(ctx context.Context, characterID string, activityID string, snapshotID *string, level api.ConfidenceLevel, source api.ConfidenceSource) (*api.Aggregate, error)
+	AddAggregate(ctx context.Context, characterID string, history api.ActivityHistory, snapshotLink api.SnapshotLink, performance api.InstancePerformance) (*api.Aggregate, error)
 
 	// GetAggregates retrieves a list of aggregates for the given activity IDs.
 	// Takes a context and a slice of activity IDs as input.
@@ -46,38 +46,30 @@ func NewService(db *firestore.Client) Service {
 	}
 }
 
-// AddAggregate TODO: This function should massively change with the new session idea and saving activity data to an aggregate
 func (s *service) AddAggregate(
 	ctx context.Context,
 	characterID string,
-	activityID string,
-	snapshotID *string,
-	level api.ConfidenceLevel,
-	source api.ConfidenceSource,
+	history api.ActivityHistory,
+	snapshotLink api.SnapshotLink,
+	performance api.InstancePerformance,
 ) (*api.Aggregate, error) {
 	now := time.Now()
-	mapping := api.CharacterMapping{
-		CharacterID:      characterID,
-		ConfidenceLevel:  level,
-		ConfidenceSource: source,
-		CreatedAt:        now,
-	}
-	if level != api.NotFoundConfidenceLevel && snapshotID != nil {
-		// TODO: Add logic here to get whatever a "Snapshot Snippet" is
-		mapping.SnapshotData = &api.SnapshotData{
-			SnapshotID: *snapshotID,
-			Snippet:    api.SnapshotSnippet{PrimaryWeapon: "Test Weapon"},
-		}
-	}
 	aggregate := api.Aggregate{
-		ActivityID: activityID,
-		Mapping: map[string]api.CharacterMapping{
-			characterID: mapping,
+		ActivityID:      history.InstanceID,
+		ActivityDetails: history,
+		SnapshotLinks: map[string]api.SnapshotLink{
+			characterID: snapshotLink,
+		},
+		Performance: map[string]api.InstancePerformance{
+			characterID: performance,
 		},
 		CreatedAt: now,
 	}
 
-	iter := s.DB.Collection(collection).Where("activityId", "==", activityID).Documents(ctx)
+	iter := s.DB.Collection(collection).
+		Where("activityId", "==", history.InstanceID).
+		Limit(1).
+		Documents(ctx)
 	var (
 		existingAggregate *api.Aggregate
 	)
@@ -97,14 +89,18 @@ func (s *service) AddAggregate(
 	if existingAggregate != nil {
 		// Partial update, adding the new data
 		_, err := s.DB.Collection(collection).Doc(existingAggregate.ID).Set(ctx, map[string]any{
-			"mapping": map[string]any{
-				characterID: mapping,
+			"snapshotLinks": map[string]any{
+				characterID: snapshotLink,
+			},
+			"performance": map[string]any{
+				characterID: performance,
 			},
 		}, firestore.MergeAll)
 		if err != nil {
 			return nil, err
 		}
-		existingAggregate.Mapping[characterID] = mapping
+		existingAggregate.SnapshotLinks[characterID] = snapshotLink
+		existingAggregate.Performance[characterID] = performance
 		return existingAggregate, nil
 	} else {
 		// Create new Doc and return object

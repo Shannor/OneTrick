@@ -20,10 +20,15 @@ import (
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"oneTrick/validator"
+	"os"
 )
 
 func main() {
+
 	env := envvars.GetEvn()
+	if env.Environment != "production" {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	}
 	hc := http.Client{}
 	cli, err := bungie.NewClientWithResponses(
 		"https://www.bungie.net/Platform",
@@ -38,12 +43,12 @@ func main() {
 	)
 	firestore := gcp.CreateFirestore(context.Background())
 	rClient := resty.New()
-	snapshotService := snapshot.NewService(firestore)
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore)
 	userService := user.NewUserService(firestore)
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore)
+	snapshotService := snapshot.NewService(firestore, userService, destinyService)
 	server := NewServer(
 		destinyService,
 		d2AuthAService,
