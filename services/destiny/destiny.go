@@ -33,7 +33,7 @@ type Service interface {
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetIronBannerActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
-	GetActivity(ctx context.Context, characterID string, activityID string) (*ActivityData, error)
+	GetEnrichedActivity(ctx context.Context, characterID string, activityID string) (*EnrichedActivity, error)
 }
 
 type service struct {
@@ -214,7 +214,7 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	return TransformPeriodGroups(*resp.JSON200.Response.Activities, *a.Manifest), nil
 }
 
-func (a *service) GetActivity(ctx context.Context, characterID string, activityID string) (*ActivityData, error) {
+func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, activityID string) (*EnrichedActivity, error) {
 	id, err := strconv.ParseInt(activityID, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
@@ -254,7 +254,7 @@ func (a *service) GetActivity(ctx context.Context, characterID string, activityI
 	}
 	details := TransformHistoricActivity(data.ActivityDetails, *a.Manifest)
 	details.Period = *data.Period
-	result := ActivityData{
+	result := EnrichedActivity{
 		Period:          data.Period,
 		Activity:        details,
 		Performance:     performance,

@@ -103,58 +103,63 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 	updatedAgg := false
 	for _, history := range activityHistories {
 		agg := activityToAgg[history.InstanceID]
-		_, link, err := s.SnapshotService.OptionalSnapshotAndLink(ctx, agg, characterID)
-		if err != nil {
-			l.With("error", err.Error()).Error("Failed to find optional snapshot and link")
-			return nil, err
-		}
+		link := s.SnapshotService.LookupLink(agg, characterID)
 
 		// Already attempted to link this character to this activity so we can skip it
 		if link != nil {
-			l.With("activityID", history.InstanceID).Info("Already linked to this activity")
+			l.With("activityID", history.InstanceID).Debug("Already linked to this activity")
 			continue
 		}
 
 		updatedAgg = true
 
-		activity, err := s.D2Service.GetActivity(ctx, characterID, history.InstanceID)
+		activity, err := s.D2Service.GetEnrichedActivity(ctx, characterID, history.InstanceID)
 		if err != nil {
 			l.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
-		snap, link, err := s.SnapshotService.FindBestFit(
-			ctx,
-			userID,
-			characterID,
-			history.Period,
-		)
+		_, err = SetAggregate(ctx, s, userID, characterID, &history, history.Period, *activity.Performance)
 		if err != nil {
-			l.With("error", err.Error()).Error("Failed to find best fit snapshot and link")
-			return nil, err
-		}
-
-		updatedWeapons, err := s.SnapshotService.EnrichWeaponInstances(snap, activity.Performance.Weapons)
-		if err != nil {
-			l.With("error", err.Error()).Error("failed enriching")
-			return nil, fmt.Errorf("failed to enrich weapon stats: %w", err)
-		}
-		activity.Performance.Weapons = updatedWeapons
-
-		agg, err = s.AggregateService.AddAggregate(
-			ctx,
-			characterID,
-			*activity.Activity,
-			*link,
-			*activity.Performance,
-		)
-		if err != nil {
-			l.With("error", err.Error()).Error("Failed to add aggregate")
 			return nil, err
 		}
 	}
 
 	l.Info("Session check in complete")
 	return api.SessionCheckIn200JSONResponse(updatedAgg), nil
+}
+
+// SetAggregate will find the best fitting snapshot and link for a character.
+// Will enrich their data if a snapshot is found. And will upsert an aggregate with the characters data.
+func SetAggregate(
+	ctx context.Context,
+	s Server,
+	userID string,
+	characterID string,
+	activity *api.ActivityHistory,
+	period time.Time,
+	performance api.InstancePerformance,
+) (*api.Aggregate, error) {
+	snap, link, err := s.SnapshotService.FindBestFit(ctx, userID, characterID, period, performance.Weapons)
+	if err != nil {
+		return nil, err
+	}
+
+	enrichedPerformance, err := s.SnapshotService.EnrichInstancePerformance(snap, performance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enrich performance instance: %w", err)
+	}
+
+	agg, err := s.AggregateService.AddAggregate(
+		ctx,
+		characterID,
+		*activity,
+		*link,
+		*enrichedPerformance,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return agg, nil
 }
 
 func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
@@ -492,7 +497,8 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		With("activityID", activityID).
 		With("userID", userID).
 		With("characterID", characterID)
-	activityDetails, err := s.D2Service.GetActivity(ctx, request.Params.CharacterID, activityID)
+
+	activityDetails, err := s.D2Service.GetEnrichedActivity(ctx, request.Params.CharacterID, activityID)
 	if err != nil {
 		l.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
 		return nil, fmt.Errorf("failed to fetch weapon data for activity: %w", err)
@@ -504,7 +510,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	agg, err := s.AggregateService.GetAggregate(ctx, activityID)
 	if err != nil {
 		if errors.Is(err, aggregate.NotFound) {
-			l.Info("No aggregation found for activity")
+			l.Debug("No aggregation found for activity")
 		} else {
 			l.With("error", err.Error()).Error("unexpected error fetching aggregation")
 			return nil, err
@@ -519,7 +525,6 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		}
 	}
 
-	// TODO: What to do in the case you're viewing but no aggregate exists. It's now null and you can't make one
 	if !characterInGame {
 		return api.GetActivity200JSONResponse{
 			Activity:  *activityDetails.Activity,
@@ -528,49 +533,37 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		}, nil
 	}
 
-	snap, link, err := s.SnapshotService.OptionalSnapshotAndLink(ctx, agg, characterID)
+	link := s.SnapshotService.LookupLink(agg, characterID)
 	if err != nil {
+		l.With("error", err.Error()).Error("Failed to fetch snapshot and link")
 		return nil, err
 	}
-	linkExistsOnAgg := link != nil
-
-	if !linkExistsOnAgg {
-		snap, link, err = s.SnapshotService.FindBestFit(
-			ctx,
-			request.Params.XUserID,
-			request.Params.CharacterID,
-			activityDetails.Activity.Period,
-		)
-		if err != nil {
-			l.With("error", err.Error()).Error("Failed to fetch snapshot")
-			return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
-		}
+	if link != nil {
+		return api.GetActivity200JSONResponse{
+			Activity:  *activityDetails.Activity,
+			Teams:     activityDetails.Teams,
+			Aggregate: agg,
+		}, nil
 	}
 
-	updatedWeapons, err := s.SnapshotService.EnrichWeaponInstances(snap, activityDetails.Performance.Weapons)
+	// Backfill an aggregate on lookup when looking at an activity
+	a, err := SetAggregate(
+		ctx,
+		s,
+		userID,
+		characterID,
+		activityDetails.Activity,
+		*activityDetails.Period,
+		*activityDetails.Performance,
+	)
 	if err != nil {
-		l.With("error", err.Error()).Error("failed enriching")
-		return nil, fmt.Errorf("failed to enrich weapon stats: %w", err)
-	}
-	activityDetails.Performance.Weapons = updatedWeapons
-
-	if !linkExistsOnAgg {
-		agg, err = s.AggregateService.AddAggregate(
-			ctx,
-			characterID,
-			*activityDetails.Activity,
-			*link,
-			*activityDetails.Performance,
-		)
-		if err != nil {
-			l.With("error", err.Error()).Error("Failed to add aggregate")
-			return nil, err
-		}
+		l.With("error", err.Error()).Error("Failed to set aggregate")
+		return nil, err
 	}
 
 	return api.GetActivity200JSONResponse{
 		Activity:  *activityDetails.Activity,
 		Teams:     activityDetails.Teams,
-		Aggregate: agg,
+		Aggregate: a,
 	}, nil
 }

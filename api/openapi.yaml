@@ -472,11 +472,10 @@ components:
       type: object
       required:
         - loadout
-        - timestamp
+        - createdAt
         - characterId
         - id
         - userId
-        - isOriginal
         - hash
         - name
       properties:
@@ -503,36 +502,21 @@ components:
           description: "Hash of all the items to give us a unique key"
           x-oapi-codegen-extra-tags:
             firestore: "hash"
-        parentId:
-          type: string
-          x-go-name: "parentID"
-          x-oapi-codegen-extra-tags:
-            firestore: "parentId"
-          description: |
-            Optional ID that will link to the first ever snapshot 
-            that has the same hash. If the parent ID is provided 
-            then the snapshot data will be empty. Search by the hash
-            to find the original data.
-        isOriginal:
-          type: boolean
-          description: Will be default false for almost all Snapshots. Will only be set for the first snapshot entry with the selected items.
-          default: false
-          x-oapi-codegen-extra-tags:
-            firestore: "isOriginal"
         characterId:
           type: string
           x-go-name: "characterID"
           description: "Id of the character being recorded"
           x-oapi-codegen-extra-tags:
             firestore: "characterId"
-        timestamp:
+        createdAt:
           type: string
           format: date-time
-          description: "Timestamp for when the snapshot was taken"
+          description: "Timestamp for when the snapshot was first created"
           x-oapi-codegen-extra-tags:
-            firestore: "timestamp"
+            firestore: "createdAt"
         loadout:
           $ref: "#/components/schemas/Loadout"
+
     ItemSnapshot:
       type: object
       required:

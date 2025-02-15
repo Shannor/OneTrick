@@ -500,7 +500,7 @@ type ActivityModeDefinition struct {
 	Blacklisted           bool                  `json:"blacklisted"`
 }
 
-type ActivityData struct {
+type EnrichedActivity struct {
 	Activity        *api.ActivityHistory                `json:"activity"`
 	Performance     *api.InstancePerformance            `json:"performance"`
 	Teams           []api.Team                          `json:"teams"`
