@@ -103,6 +103,7 @@ paths:
               properties:
                 characterId:
                   type: string
+                  x-go-name: characterID
       operationId: CreateSnapshot
       description: "Creates a new snapshot in the system and returns a list of "
       responses:
@@ -133,6 +134,7 @@ paths:
             format: int64
         - name: characterId
           in: query
+          x-go-name: characterID
           required: true
           schema:
             type: string
@@ -156,12 +158,14 @@ paths:
         - $ref: "#/components/parameters/X-User-ID"
         - name: snapshotId
           in: path
+          x-go-name: snapshotID
           required: true
           schema:
             type: string
           description: The unique identifier for the snapshot.
         - name: characterId
           in: query
+          x-go-name: characterID
           required: true
           schema:
             type: string
@@ -222,11 +226,13 @@ paths:
         - name: characterId
           in: query
           required: true
+          x-go-name: characterID
           schema:
             type: string
         - name: activityId
           in: path
           required: true
+          x-go-name: activityID
           schema:
             type: string
           description: The unique identifier for the activity.
@@ -239,7 +245,6 @@ paths:
                 type: object
                 required:
                   - activity
-                  - aggregate
                   - teams
                 properties:
                   activity:
@@ -248,12 +253,155 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Team"
-                  characterStats:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/WeaponStats"
                   aggregate:
                     $ref: "#/components/schemas/Aggregate"
+  /sessions:
+    post:
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+      requestBody:
+        description: "Provide the character to start the session for"
+        required: true
+        content:
+          application/json:
+            schema:
+              required:
+                - characterId
+              type: object
+              properties:
+                characterId:
+                  type: string
+                  x-go-name: characterID
+      operationId: StartSession
+      description: "Create a new session"
+      responses:
+        201:
+          description: "Return the created session"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+    get:
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+        - name: count
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            maximum: 30
+            minimum: 1
+        - name: page
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: characterId
+          x-go-name: characterID
+          in: query
+          required: true
+          schema:
+            type: string
+      operationId: GetSessions
+      responses:
+        200:
+          description: "List of Sessions"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+  /sessions/{sessionId}:
+   put:
+     parameters:
+       - $ref: "#/components/parameters/X-User-ID"
+       - $ref: "#/components/parameters/X-Membership-ID"
+       - name: sessionId
+         in: path
+         required: true
+         schema:
+           type: string
+           x-go-name: sessionID
+     requestBody:
+       description: "Provide the character to start the session for"
+       required: true
+       content:
+         application/json:
+           schema:
+             required:
+               - characterId
+             type: object
+             properties:
+               characterId:
+                 type: string
+                 x-go-name: characterID
+               name:
+                type: string
+               completedAt:
+                 type: string
+     operationId: UpdateSession
+     description: "Complete a session"
+     responses:
+       201:
+         description: "Return the completed session"
+         content:
+           application/json:
+             schema:
+               $ref: "#/components/schemas/Session"
+  /sessions/{sessionId}/aggregates:
+    get:
+      operationId: GetSessionAggregates
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            x-go-name: sessionID
+      responses:
+        '200':
+          description: Array of aggregates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Aggregate"
+
+  /actions/session-checkin:
+      post:
+        parameters:
+          - $ref: "#/components/parameters/X-Membership-ID"
+        requestBody:
+          description: ""
+          required: true
+          content:
+            application/json:
+              schema:
+                required:
+                  - sessionId
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                    x-go-name: sessionID
+        operationId: SessionCheckIn
+        description: "Perform session update logic"
+        responses:
+          200:
+            description: "Return the created session"
+            content:
+              application/json:
+                schema:
+                  type: boolean
 
 components:
   securitySchemes:
@@ -285,6 +433,7 @@ components:
         - ErrDestinyServerDown
         - ErrInternalSystemDown
         - ErrUnknownError
+
     Profile:
       type: object
       required:
@@ -306,6 +455,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Character"
+
     DetailActivity:
       type: object
       required:
@@ -315,14 +465,19 @@ components:
           $ref: "#/components/schemas/ActivityHistory"
         aggregate:
           $ref: "#/components/schemas/Aggregate"
+
     CharacterSnapshot:
-      x-go-custom-tag: firestore:"characterSnapshot"
+      x-oapi-codegen-extra-tags:
+        firestore: "characterSnapshot"
       type: object
       required:
-        - items
-        - timestamp
+        - loadout
+        - createdAt
         - characterId
         - id
+        - userId
+        - hash
+        - name
       properties:
         id:
           type: string
@@ -330,40 +485,46 @@ components:
           description: "Id of the snapshot"
           x-oapi-codegen-extra-tags:
             firestore: "id"
+        name:
+          type: string
+          x-go-name: "name"
+          description: "Name of the snapshot, will probably be generated by default by the system but can be changed by a user"
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
+        userId:
+          type: string
+          x-go-name: "userID"
+          description: "Id of the user it belongs to"
+          x-oapi-codegen-extra-tags:
+            firestore: "userId"
+        hash:
+          type: string
+          description: "Hash of all the items to give us a unique key"
+          x-oapi-codegen-extra-tags:
+            firestore: "hash"
         characterId:
           type: string
           x-go-name: "characterID"
           description: "Id of the character being recorded"
           x-oapi-codegen-extra-tags:
             firestore: "characterId"
-        timestamp:
+        createdAt:
           type: string
           format: date-time
-          description: "Timestamp that the items were equipped turning"
+          description: "Timestamp for when the snapshot was first created"
           x-oapi-codegen-extra-tags:
-            firestore: "timestamp"
-        items:
-          description: "All items that we currently care about, Kinetic, Energy, Heavy and Class for now"
-          type: array
-          x-oapi-codegen-extra-tags:
-            firestore: "items"
-          items:
-            $ref: "#/components/schemas/ItemSnapshot"
+            firestore: "createdAt"
+        loadout:
+          $ref: "#/components/schemas/Loadout"
+
     ItemSnapshot:
       type: object
       required:
-        - timestamp
         - details
         - instanceId
         - itemHash
         - name
       properties:
-        timestamp:
-          type: string
-          format: date-time
-          description: "Time the data was grabbed"
-          x-oapi-codegen-extra-tags:
-            firestore: "timestamp"
         instanceId:
           x-go-name: "instanceID"
           type: string
@@ -381,11 +542,25 @@ components:
           format: int64
           x-oapi-codegen-extra-tags:
             firestore: "itemHash"
+        bucketHash:
+          type: integer
+          description: "Hash of which bucket this item can be equipped in"
+          format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "bucketHash"
         details:
-          $ref: "#/components/schemas/ItemDetails"
-
+          $ref: "#/components/schemas/ItemProperties"
+    Loadout:
+      description: "All buckets that we currently care about, Kinetic, Energy, Heavy and Class for now. Each will be a key in the items."
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/ItemSnapshot"
+      x-oapi-codegen-extra-tags:
+        firestore: "loadout"
     ActivityHistory:
       type: object
+      x-oapi-codegen-extra-tags:
+        firestore: "activityHistory"
       required:
         - referenceId
         - activityHash
@@ -395,39 +570,65 @@ components:
         - activity
         - imageUrl
         - activityIcon
+        - period
       properties:
         location:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "location"
         activity:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "activity"
         description:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "description"
+        period:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: "period"
         referenceId:
           x-go-name: "referenceID"
           type: integer
           format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: "referenceId"
         activityHash:
           type: integer
           format: int64
           description: "Hash id of the type of activity: Strike, Competitive, QuickPlay, etc. "
+          x-oapi-codegen-extra-tags:
+            firestore: "activityHash"
         activityIcon:
           type: string
           description: "URL to the icon for the type of activity, IB, Crucible, etc."
+          x-oapi-codegen-extra-tags:
+            firestore: "activityIcon"
         instanceId:
           x-go-name: "instanceID"
           type: string
           description: "Id to get more details about the particular game"
+          x-oapi-codegen-extra-tags:
+            firestore: "instanceId"
         isPrivate:
           type: boolean
+          x-oapi-codegen-extra-tags:
+            firestore: "isPrivate"
         imageUrl:
           type: string
           x-go-name: "imageURL"
           description: "URL for the image of the destination activity"
+          x-oapi-codegen-extra-tags:
+            firestore: "imageUrl"
         mode:
           type: string
-          description: "Name of the Destiny Activity Mode"
+          description: "Name"
+          x-oapi-codegen-extra-tags:
+            firestore: "mode"
         personalValues:
-          $ref: "#/components/schemas/ActivityValues"
+          $ref: "#/components/schemas/PlayerStats"
 
     Pong:
       type: object
@@ -446,6 +647,7 @@ components:
       x-enum-varnames:
         - SystemConfidenceSource
         - UserConfidenceSource
+
     ConfidenceLevel:
       type: string
       enum: [notFound, noMatch, low, medium, high]
@@ -457,33 +659,8 @@ components:
         - HighConfidenceLevel
       x-oapi-codegen-extra-tags:
         firestore: "confidenceLevel"
-    SnapshotSnippet:
-      type: object
-      required:
-        - primaryWeapon
-      x-oapi-codegen-extra-tags:
-        firestore: "snapshotSnippet"
-      properties:
-        primaryWeapon:
-          type: string
-          x-oapi-codegen-extra-tags:
-            firestore: "primaryWeapon"
-    SnapshotData:
-      type: object
-      required:
-        - snippet
-        - snapshotId
-      x-oapi-codegen-extra-tags:
-        firestore: "snapshotData"
-      properties:
-        snapshotId:
-          x-go-name: 'snapshotID'
-          type: string
-          x-oapi-codegen-extra-tags:
-            firestore: "snapshotId"
-        snippet:
-          $ref: '#/components/schemas/SnapshotSnippet'
-    CharacterMapping:
+
+    SnapshotLink:
       type: object
       required:
         - characterId
@@ -492,12 +669,15 @@ components:
         - createdAt
       properties:
         characterId:
-          x-go-name: "CharacterID"
+          x-go-name: characterID
           type: string
           x-oapi-codegen-extra-tags:
             firestore: "characterId"
-        snapshotData:
-          $ref: '#/components/schemas/SnapshotData'
+        snapshotId:
+          x-go-name: snapshotID
+          x-oapi-codegen-extra-tags:
+            firestore: "snapshotId"
+          type: string
         confidenceLevel:
           $ref: '#/components/schemas/ConfidenceLevel'
         confidenceSource:
@@ -507,12 +687,15 @@ components:
           format: date-time
           x-oapi-codegen-extra-tags:
             firestore: "createdAt"
+
     Aggregate:
       type: object
       required:
         - id
         - activityId
-        - mapping
+        - activityDetails
+        - snapshotLinks
+        - performance
         - createdAt
       properties:
         id:
@@ -525,17 +708,26 @@ components:
           x-go-name: "activityID"
           x-oapi-codegen-extra-tags:
             firestore: 'activityId'
-        mapping:
+        activityDetails:
+          $ref: "#/components/schemas/ActivityHistory"
+        snapshotLinks:
           type: object
           x-oapi-codegen-extra-tags:
-            firestore: 'mapping'
+            firestore: 'snapshotLinks'
           additionalProperties:
-            $ref: '#/components/schemas/CharacterMapping'
+            $ref: '#/components/schemas/SnapshotLink'
+        performance:
+          type: object
+          x-oapi-codegen-extra-tags:
+            firestore: 'performance'
+          additionalProperties:
+            $ref: '#/components/schemas/InstancePerformance'
         createdAt:
           type: string
           format: date-time
           x-oapi-codegen-extra-tags:
             firestore: "createdAt"
+
     AuthResponse:
       type: object
       properties:
@@ -575,44 +767,79 @@ components:
         - primaryMembershipId
         - id
         - timestamp
-    WeaponStats:
+
+    WeaponInstanceMetrics:
       type: object
+      x-oapi-codegen-extra-tags:
+        firestore: 'weaponInstanceMetrics'
       properties:
         referenceId:
           type: integer
           description: The hash ID of the item definition that describes the weapon.
           format: int64
-        details:
-          $ref: "#/components/schemas/ItemDetails"
+          x-go-name: referenceID
+          x-oapi-codegen-extra-tags:
+            firestore: 'referenceId'
+        properties:
+          $ref: "#/components/schemas/ItemProperties"
         stats:
-          $ref: "#/components/schemas/HistoricalStats"
-    HistoricalStats:
-      type: array
-      items:
-        $ref: "#/components/schemas/UniqueStatValue"
+          x-oapi-codegen-extra-tags:
+            firestore: 'stats'
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UniqueStatValue"
+    InstancePerformance:
+      type: object
+      x-oapi-codegen-extra-tags:
+        firestore: 'instancePerformance'
+      required:
+        - playerStats
+        - weapons
+      properties:
+        playerStats:
+          $ref: "#/components/schemas/PlayerStats"
+        weapons:
+          type: array
+          x-oapi-codegen-extra-tags:
+            firestore: 'weapons'
+          items:
+            $ref: "#/components/schemas/WeaponInstanceMetrics"
+        extra:
+          type: object
+          x-oapi-codegen-extra-tags:
+            firestore: 'extra'
+          additionalProperties:
+            $ref: "#/components/schemas/UniqueStatValue"
     UniqueStatValue:
       type: object
       required:
-        - name
         - basic
       properties:
         name:
           type: string
+          x-oapi-codegen-extra-tags:
+            firestore: 'name'
         basic:
           type: object
           allOf:
             - $ref: "#/components/schemas/StatsValuePair"
           description: Basic stat value.
+          x-oapi-codegen-extra-tags:
+            firestore: 'basic'
         pga:
           type: object
           allOf:
             - $ref: "#/components/schemas/StatsValuePair"
           description: Per game average for the statistic, if applicable
+          x-oapi-codegen-extra-tags:
+            firestore: 'pga'
         weighted:
           type: object
           allOf:
             - $ref: "#/components/schemas/StatsValuePair"
           description: Weighted value of the stat if a weight greater than 1 has been assigned.
+          x-oapi-codegen-extra-tags:
+            firestore: 'weighted'
         activityId:
           type: integer
           description: >-
@@ -621,6 +848,9 @@ components:
             personal best was established is available on this property.
           format: int64
           nullable: true
+          x-go-name: "activityID"
+          x-oapi-codegen-extra-tags:
+            firestore: 'activityId'
     ActivityMode:
       type: string
       enum:
@@ -635,14 +865,20 @@ components:
         - IronBanner
     StatsValuePair:
       type: object
+      x-oapi-codegen-extra-tags:
+        firestore: 'statsValuePair'
       properties:
         value:
           type: number
           description: Raw value of the statistic
           format: double
+          x-oapi-codegen-extra-tags:
+            firestore: 'value'
         displayValue:
           type: string
           description: Localized formatted version of the value.
+          x-oapi-codegen-extra-tags:
+            firestore: 'displayValue'
     Perk:
       x-oapi-codegen-extra-tags:
         firestore: "perks"
@@ -870,7 +1106,10 @@ components:
           type: string
           x-oapi-codegen-extra-tags:
             firestore: "class"
+
     Team:
+      x-oapi-codegen-extra-tags:
+        firestore: 'team'
       type: object
       required:
         - id
@@ -886,11 +1125,12 @@ components:
           type: string
         teamName:
           type: string
-    ItemDetails:
+
+    ItemProperties:
       type: object
-      x-go-name: ItemDetails
+      x-go-name: ItemProperties
       x-oapi-codegen-extra-tags:
-        firestore: "itemDetails"
+        firestore: "itemProperties"
       required:
         - perks
         - stats
@@ -940,8 +1180,12 @@ components:
         these components are relevant for an item that doesn't have an
         "itemInstanceId": for those, get your information from the
         DestinyInventoryDefinition.
-    ActivityValues:
+#   TODO: This may need to be merged with Weapon Stats in the near term
+    PlayerStats:
+      x-oapi-codegen-extra-tags:
+        firestore: 'playerStats,omitempty'
       type: object
+      description: "All Player Stats from a match that we currently care about"
       properties:
         kills:
           $ref: "#/components/schemas/StatsValuePair"
@@ -962,4 +1206,54 @@ components:
         timePlayed:
           $ref: "#/components/schemas/StatsValuePair"
 
-
+    Session:
+      x-oapi-codegen-extra-tags:
+        firestore: 'session'
+      type: object
+      required:
+        - id
+        - startedAt
+        - userId
+        - characterId
+      properties:
+        id:
+          type: string
+          x-go-name: "ID"
+          x-oapi-codegen-extra-tags:
+            firestore: "id"
+        startedAt:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: "startedAt"
+        completedAt:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: "completedAt"
+        userId:
+          type: string
+          x-go-name: userID
+          x-oapi-codegen-extra-tags:
+            firestore: "userId"
+        characterId:
+          type: string
+          x-go-name: characterID
+          x-oapi-codegen-extra-tags:
+            firestore: "characterId"
+        name:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: "name"
+        lastSeenActivityId:
+          type: string
+          x-go-name: lastSeenActivityID
+          writeOnly: true
+          x-oapi-codegen-extra-tags:
+            firestore: "lastSeenActivityId"
+        lastSeenTimestamp:
+          type: string
+          format: date-time
+          writeOnly: true
+          x-oapi-codegen-extra-tags:
+            firestore: "lastSeenTimestamp"

@@ -9,13 +9,13 @@ import (
 	"strconv"
 )
 
-const baseBungieURL = "https://www.bungie.net/"
+const baseBungieURL = "https://www.bungie.net"
 
-func TransformItemToDetails(item *bungie.DestinyItem, manifest Manifest) *api.ItemDetails {
+func TransformItemToDetails(item *bungie.DestinyItem, manifest Manifest) *api.ItemProperties {
 	if item == nil {
 		return nil
 	}
-	result := api.ItemDetails{CharacterId: item.CharacterId}
+	result := api.ItemProperties{CharacterId: item.CharacterId}
 
 	// Generate Base Info
 	if item.Item != nil {
@@ -160,34 +160,20 @@ func generateStats(item *bungie.DestinyItem, manifest Manifest) api.Stats {
 	return stats
 }
 
-const (
-	WeaponKillKey          = "uniqueWeaponKills"
-	PrecisionKillKey       = "uniqueWeaponPrecisionKills"
-	PrecisionPercentageKey = "uniqueWeaponKillsPrecisionKills"
-)
-
-func TransformD2HistoricalStatValues(stats *map[string]bungie.HistoricalStatsValue) *api.HistoricalStats {
+func TransformD2HistoricalStatValues(stats *map[string]bungie.HistoricalStatsValue) *map[string]api.UniqueStatValue {
 	if stats == nil {
 		return nil
 	}
-	result := make(api.HistoricalStats, 0)
-	for key, value := range *stats {
 
+	result := make(map[string]api.UniqueStatValue)
+	for key, value := range *stats {
 		values := transformD2StatValue(&value)
 		if values == nil {
 			continue
 		}
-		switch key {
-		case WeaponKillKey:
-			values.Name = "Weapon Kills"
-		case PrecisionKillKey:
-			values.Name = "Precision Kills"
-		case PrecisionPercentageKey:
-			values.Name = "Precision Percentage"
-		}
-		result = append(result, *values)
-
+		result[key] = *values
 	}
+
 	return &result
 }
 
@@ -200,7 +186,7 @@ func transformD2StatValue(item *bungie.HistoricalStatsValue) *api.UniqueStatValu
 		return nil
 	}
 	result := &api.UniqueStatValue{
-		ActivityId: item.ActivityId,
+		ActivityID: item.ActivityId,
 	}
 	if item.Basic != nil {
 		result.Basic = api.StatsValuePair{
@@ -311,31 +297,6 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		slog.Warn("Activity Directory not found in manifest: ", period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
-	var personalValues *api.ActivityValues
-	if period.Values != nil {
-		personalValues = &api.ActivityValues{}
-		for key, value := range *period.Values {
-			switch key {
-			case "kills":
-				personalValues.Kills = (*api.StatsValuePair)(value.Basic)
-			case "assists":
-				personalValues.Assists = (*api.StatsValuePair)(value.Basic)
-			case "deaths":
-				personalValues.Deaths = (*api.StatsValuePair)(value.Basic)
-			case "killsDeathsRatio":
-				personalValues.Kd = (*api.StatsValuePair)(value.Basic)
-			case "killsDeathsAssists":
-				personalValues.Kda = (*api.StatsValuePair)(value.Basic)
-			case "standing":
-				personalValues.Standing = (*api.StatsValuePair)(value.Basic)
-			case "fireteamId":
-				personalValues.FireTeamId = (*api.StatsValuePair)(value.Basic)
-			case "timePlayedSeconds":
-				personalValues.TimePlayed = (*api.StatsValuePair)(value.Basic)
-			}
-		}
-	}
-
 	activityMode := manifest.ActivityModeDefinition[strconv.Itoa(activity.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
 	return &api.ActivityHistory{
@@ -349,8 +310,82 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		Activity:       activity.DisplayProperties.Name,
 		ImageURL:       fmt.Sprintf("%s%s", baseBungieURL, definition.PgcrImage),
 		ActivityIcon:   fmt.Sprintf("%s%s", baseBungieURL, activityMode.DisplayProperties.Icon),
-		PersonalValues: personalValues,
+		PersonalValues: ToPlayerStats(period.Values),
 	}
+}
+
+func ToPlayerStats(values *map[string]bungie.HistoricalStatsValue) *api.PlayerStats {
+	if values == nil {
+		return nil
+	}
+	personalValues := &api.PlayerStats{}
+	for key, value := range *values {
+		switch key {
+		case "kills":
+			personalValues.Kills = (*api.StatsValuePair)(value.Basic)
+		case "assists":
+			personalValues.Assists = (*api.StatsValuePair)(value.Basic)
+		case "deaths":
+			personalValues.Deaths = (*api.StatsValuePair)(value.Basic)
+		case "killsDeathsRatio":
+			personalValues.Kd = (*api.StatsValuePair)(value.Basic)
+		case "killsDeathsAssists":
+			personalValues.Kda = (*api.StatsValuePair)(value.Basic)
+		case "standing":
+			personalValues.Standing = (*api.StatsValuePair)(value.Basic)
+		case "fireteamId":
+			personalValues.FireTeamId = (*api.StatsValuePair)(value.Basic)
+		case "timePlayedSeconds":
+			personalValues.TimePlayed = (*api.StatsValuePair)(value.Basic)
+		}
+	}
+	return personalValues
+}
+
+func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry) *api.InstancePerformance {
+	if entry == nil {
+		return nil
+	}
+	result := &api.InstancePerformance{}
+
+	result.Extra = BungieStatValueToUniqueStatValue(entry.Extended.Values)
+	result.PlayerStats = *ToPlayerStats(entry.Values)
+	result.Weapons = WeaponsToInstanceWeapons(entry.Extended.Weapons)
+	return result
+}
+
+func BungieStatValueToUniqueStatValue(values *map[string]bungie.HistoricalStatsValue) *map[string]api.UniqueStatValue {
+	if values == nil {
+		return nil
+	}
+	result := make(map[string]api.UniqueStatValue)
+	for key, value := range *values {
+		result[key] = api.UniqueStatValue{
+			ActivityID: value.ActivityId,
+			Basic: api.StatsValuePair{
+				DisplayValue: value.Basic.DisplayValue,
+				Value:        value.Basic.Value,
+			},
+			Name: value.StatId,
+		}
+	}
+	return &result
+}
+
+func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats) []api.WeaponInstanceMetrics {
+	if values == nil {
+		return nil
+	}
+	result := make([]api.WeaponInstanceMetrics, 0)
+	for _, v := range *values {
+		ref := int64(*v.ReferenceId)
+		r := api.WeaponInstanceMetrics{
+			ReferenceID: &ref,
+			Stats:       BungieStatValueToUniqueStatValue(v.Values),
+		}
+		result = append(result, r)
+	}
+	return result
 }
 
 func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {

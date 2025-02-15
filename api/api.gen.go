@@ -58,51 +58,43 @@ const (
 
 // ActivityHistory defines model for ActivityHistory.
 type ActivityHistory struct {
-	Activity string `json:"activity"`
+	Activity string `firestore:"activity" json:"activity"`
 
 	// ActivityHash Hash id of the type of activity: Strike, Competitive, QuickPlay, etc.
-	ActivityHash int64 `json:"activityHash"`
+	ActivityHash int64 `firestore:"activityHash" json:"activityHash"`
 
 	// ActivityIcon URL to the icon for the type of activity, IB, Crucible, etc.
-	ActivityIcon string `json:"activityIcon"`
-	Description  string `json:"description"`
+	ActivityIcon string `firestore:"activityIcon" json:"activityIcon"`
+	Description  string `firestore:"description" json:"description"`
 
 	// ImageURL URL for the image of the destination activity
-	ImageURL string `json:"imageUrl"`
+	ImageURL string `firestore:"imageUrl" json:"imageUrl"`
 
 	// InstanceID Id to get more details about the particular game
-	InstanceID string `json:"instanceId"`
-	IsPrivate  *bool  `json:"isPrivate,omitempty"`
-	Location   string `json:"location"`
+	InstanceID string `firestore:"instanceId" json:"instanceId"`
+	IsPrivate  *bool  `firestore:"isPrivate" json:"isPrivate,omitempty"`
+	Location   string `firestore:"location" json:"location"`
 
-	// Mode Name of the Destiny Activity Mode
-	Mode           *string         `json:"mode,omitempty"`
-	PersonalValues *ActivityValues `json:"personalValues,omitempty"`
-	ReferenceID    int64           `json:"referenceId"`
+	// Mode Name
+	Mode   *string   `firestore:"mode" json:"mode,omitempty"`
+	Period time.Time `firestore:"period" json:"period"`
+
+	// PersonalValues All Player Stats from a match that we currently care about
+	PersonalValues *PlayerStats `firestore:"playerStats,omitempty" json:"personalValues,omitempty"`
+	ReferenceID    int64        `firestore:"referenceId" json:"referenceId"`
 }
 
 // ActivityMode defines model for ActivityMode.
 type ActivityMode string
 
-// ActivityValues defines model for ActivityValues.
-type ActivityValues struct {
-	Assists    *StatsValuePair `json:"assists,omitempty"`
-	Deaths     *StatsValuePair `json:"deaths,omitempty"`
-	FireTeamId *StatsValuePair `json:"fireTeamId,omitempty"`
-	Kd         *StatsValuePair `json:"kd,omitempty"`
-	Kda        *StatsValuePair `json:"kda,omitempty"`
-	Kills      *StatsValuePair `json:"kills,omitempty"`
-	Standing   *StatsValuePair `json:"standing,omitempty"`
-	Team       *StatsValuePair `json:"team,omitempty"`
-	TimePlayed *StatsValuePair `json:"timePlayed,omitempty"`
-}
-
 // Aggregate defines model for Aggregate.
 type Aggregate struct {
-	ActivityID string                      `firestore:"activityId" json:"activityId"`
-	CreatedAt  time.Time                   `firestore:"createdAt" json:"createdAt"`
-	ID         string                      `firestore:"id" json:"id"`
-	Mapping    map[string]CharacterMapping `firestore:"mapping" json:"mapping"`
+	ActivityDetails ActivityHistory                `firestore:"activityHistory" json:"activityDetails"`
+	ActivityID      string                         `firestore:"activityId" json:"activityId"`
+	CreatedAt       time.Time                      `firestore:"createdAt" json:"createdAt"`
+	ID              string                         `firestore:"id" json:"id"`
+	Performance     map[string]InstancePerformance `firestore:"performance" json:"performance"`
+	SnapshotLinks   map[string]SnapshotLink        `firestore:"snapshotLinks" json:"snapshotLinks"`
 }
 
 // AuthResponse defines model for AuthResponse.
@@ -151,28 +143,28 @@ type Character struct {
 	Race                string `firestore:"race" json:"race"`
 }
 
-// CharacterMapping defines model for CharacterMapping.
-type CharacterMapping struct {
-	CharacterID      string           `firestore:"characterId" json:"characterId"`
-	ConfidenceLevel  ConfidenceLevel  `firestore:"confidenceLevel" json:"confidenceLevel"`
-	ConfidenceSource ConfidenceSource `firestore:"confidenceSource" json:"confidenceSource"`
-	CreatedAt        time.Time        `firestore:"createdAt" json:"createdAt"`
-	SnapshotData     *SnapshotData    `firestore:"snapshotData" json:"snapshotData,omitempty"`
-}
-
 // CharacterSnapshot defines model for CharacterSnapshot.
 type CharacterSnapshot struct {
 	// CharacterID Id of the character being recorded
 	CharacterID string `firestore:"characterId" json:"characterId"`
 
+	// CreatedAt Timestamp for when the snapshot was first created
+	CreatedAt time.Time `firestore:"createdAt" json:"createdAt"`
+
+	// Hash Hash of all the items to give us a unique key
+	Hash string `firestore:"hash" json:"hash"`
+
 	// ID Id of the snapshot
 	ID string `firestore:"id" json:"id"`
 
-	// Items All items that we currently care about, Kinetic, Energy, Heavy and Class for now
-	Items []ItemSnapshot `firestore:"items" json:"items"`
+	// Loadout All buckets that we currently care about, Kinetic, Energy, Heavy and Class for now. Each will be a key in the items.
+	Loadout Loadout `firestore:"loadout" json:"loadout"`
 
-	// Timestamp Timestamp that the items were equipped turning
-	Timestamp time.Time `firestore:"timestamp" json:"timestamp"`
+	// Name Name of the snapshot, will probably be generated by default by the system but can be changed by a user
+	Name string `firestore:"name" json:"name"`
+
+	// UserID Id of the user it belongs to
+	UserID string `firestore:"userId" json:"userId"`
 }
 
 // Color defines model for Color.
@@ -199,7 +191,7 @@ type DamageInfo struct {
 
 // DetailActivity defines model for DetailActivity.
 type DetailActivity struct {
-	Activity  ActivityHistory `json:"activity"`
+	Activity  ActivityHistory `firestore:"activityHistory" json:"activity"`
 	Aggregate *Aggregate      `json:"aggregate,omitempty"`
 }
 
@@ -215,14 +207,20 @@ type GunStat struct {
 	Value int64 `firestore:"value" json:"value"`
 }
 
-// HistoricalStats defines model for HistoricalStats.
-type HistoricalStats = []UniqueStatValue
+// InstancePerformance defines model for InstancePerformance.
+type InstancePerformance struct {
+	Extra *map[string]UniqueStatValue `firestore:"extra" json:"extra,omitempty"`
+
+	// PlayerStats All Player Stats from a match that we currently care about
+	PlayerStats PlayerStats             `firestore:"playerStats,omitempty" json:"playerStats"`
+	Weapons     []WeaponInstanceMetrics `firestore:"weapons" json:"weapons"`
+}
 
 // InternalError defines model for InternalError.
 type InternalError string
 
-// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
-type ItemDetails struct {
+// ItemProperties The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+type ItemProperties struct {
 	BaseInfo BaseItemInfo `firestore:"baseItemInfo" json:"baseInfo"`
 
 	// CharacterId If the item is on a character, this will return the ID of the character that is holding the item.
@@ -240,8 +238,11 @@ type ItemDetails struct {
 
 // ItemSnapshot defines model for ItemSnapshot.
 type ItemSnapshot struct {
-	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
-	ItemDetails ItemDetails `firestore:"itemDetails" json:"details"`
+	// BucketHash Hash of which bucket this item can be equipped in
+	BucketHash *int64 `firestore:"bucketHash" json:"bucketHash,omitempty"`
+
+	// ItemProperties The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+	ItemProperties ItemProperties `firestore:"itemProperties" json:"details"`
 
 	// InstanceID Specific instance id for the item
 	InstanceID string `firestore:"instanceId" json:"instanceId"`
@@ -251,10 +252,10 @@ type ItemSnapshot struct {
 
 	// Name Name of the particular item
 	Name string `firestore:"name" json:"name"`
-
-	// Timestamp Time the data was grabbed
-	Timestamp time.Time `firestore:"timestamp" json:"timestamp"`
 }
+
+// Loadout All buckets that we currently care about, Kinetic, Energy, Heavy and Class for now. Each will be a key in the items.
+type Loadout map[string]ItemSnapshot
 
 // Perk defines model for Perk.
 type Perk struct {
@@ -266,6 +267,19 @@ type Perk struct {
 	// IconPath link to icon
 	IconPath *string `firestore:"iconPath" json:"iconPath,omitempty"`
 	Name     string  `firestore:"name" json:"name"`
+}
+
+// PlayerStats All Player Stats from a match that we currently care about
+type PlayerStats struct {
+	Assists    *StatsValuePair `firestore:"statsValuePair" json:"assists,omitempty"`
+	Deaths     *StatsValuePair `firestore:"statsValuePair" json:"deaths,omitempty"`
+	FireTeamId *StatsValuePair `firestore:"statsValuePair" json:"fireTeamId,omitempty"`
+	Kd         *StatsValuePair `firestore:"statsValuePair" json:"kd,omitempty"`
+	Kda        *StatsValuePair `firestore:"statsValuePair" json:"kda,omitempty"`
+	Kills      *StatsValuePair `firestore:"statsValuePair" json:"kills,omitempty"`
+	Standing   *StatsValuePair `firestore:"statsValuePair" json:"standing,omitempty"`
+	Team       *StatsValuePair `firestore:"statsValuePair" json:"team,omitempty"`
+	TimePlayed *StatsValuePair `firestore:"statsValuePair" json:"timePlayed,omitempty"`
 }
 
 // Pong defines model for Pong.
@@ -282,15 +296,25 @@ type Profile struct {
 	UniqueName   string      `json:"uniqueName"`
 }
 
-// SnapshotData defines model for SnapshotData.
-type SnapshotData struct {
-	SnapshotID string          `firestore:"snapshotId" json:"snapshotId"`
-	Snippet    SnapshotSnippet `firestore:"snapshotSnippet" json:"snippet"`
+// Session defines model for Session.
+type Session struct {
+	CharacterID        string     `firestore:"characterId" json:"characterId"`
+	CompletedAt        *time.Time `firestore:"completedAt" json:"completedAt,omitempty"`
+	ID                 string     `firestore:"id" json:"id"`
+	LastSeenActivityID *string    `firestore:"lastSeenActivityId" json:"lastSeenActivityId,omitempty"`
+	LastSeenTimestamp  *time.Time `firestore:"lastSeenTimestamp" json:"lastSeenTimestamp,omitempty"`
+	Name               *string    `firestore:"name" json:"name,omitempty"`
+	StartedAt          time.Time  `firestore:"startedAt" json:"startedAt"`
+	UserID             string     `firestore:"userId" json:"userId"`
 }
 
-// SnapshotSnippet defines model for SnapshotSnippet.
-type SnapshotSnippet struct {
-	PrimaryWeapon string `firestore:"primaryWeapon" json:"primaryWeapon"`
+// SnapshotLink defines model for SnapshotLink.
+type SnapshotLink struct {
+	CharacterID      string           `firestore:"characterId" json:"characterId"`
+	ConfidenceLevel  ConfidenceLevel  `firestore:"confidenceLevel" json:"confidenceLevel"`
+	ConfidenceSource ConfidenceSource `firestore:"confidenceSource" json:"confidenceSource"`
+	CreatedAt        time.Time        `firestore:"createdAt" json:"createdAt"`
+	SnapshotID       *string          `firestore:"snapshotId" json:"snapshotId,omitempty"`
 }
 
 // Socket defines model for Socket.
@@ -315,10 +339,10 @@ type Stats map[string]GunStat
 // StatsValuePair defines model for StatsValuePair.
 type StatsValuePair struct {
 	// DisplayValue Localized formatted version of the value.
-	DisplayValue *string `json:"displayValue,omitempty"`
+	DisplayValue *string `firestore:"displayValue" json:"displayValue,omitempty"`
 
 	// Value Raw value of the statistic
-	Value *float64 `json:"value,omitempty"`
+	Value *float64 `firestore:"value" json:"value,omitempty"`
 }
 
 // Team defines model for Team.
@@ -331,28 +355,28 @@ type Team struct {
 
 // UniqueStatValue defines model for UniqueStatValue.
 type UniqueStatValue struct {
-	// ActivityId When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
-	ActivityId *int64 `json:"activityId"`
+	// ActivityID When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
+	ActivityID *int64 `firestore:"activityId" json:"activityId"`
 
 	// Basic Basic stat value.
-	Basic StatsValuePair `json:"basic"`
-	Name  string         `json:"name"`
+	Basic StatsValuePair `firestore:"basic" json:"basic"`
+	Name  *string        `firestore:"name" json:"name,omitempty"`
 
 	// Pga Per game average for the statistic, if applicable
-	Pga *StatsValuePair `json:"pga,omitempty"`
+	Pga *StatsValuePair `firestore:"pga" json:"pga,omitempty"`
 
 	// Weighted Weighted value of the stat if a weight greater than 1 has been assigned.
-	Weighted *StatsValuePair `json:"weighted,omitempty"`
+	Weighted *StatsValuePair `firestore:"weighted" json:"weighted,omitempty"`
 }
 
-// WeaponStats defines model for WeaponStats.
-type WeaponStats struct {
-	// ItemDetails The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
-	ItemDetails *ItemDetails `firestore:"itemDetails" json:"details,omitempty"`
+// WeaponInstanceMetrics defines model for WeaponInstanceMetrics.
+type WeaponInstanceMetrics struct {
+	// ItemProperties The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.
+	ItemProperties *ItemProperties `firestore:"itemProperties" json:"properties,omitempty"`
 
-	// ReferenceId The hash ID of the item definition that describes the weapon.
-	ReferenceId *int64           `json:"referenceId,omitempty"`
-	Stats       *HistoricalStats `json:"stats,omitempty"`
+	// ReferenceID The hash ID of the item definition that describes the weapon.
+	ReferenceID *int64                      `firestore:"referenceId" json:"referenceId,omitempty"`
+	Stats       *map[string]UniqueStatValue `firestore:"stats" json:"stats,omitempty"`
 }
 
 // XMembershipID defines model for X-Membership-ID.
@@ -360,6 +384,16 @@ type XMembershipID = string
 
 // XUserID defines model for X-User-ID.
 type XUserID = string
+
+// SessionCheckInJSONBody defines parameters for SessionCheckIn.
+type SessionCheckInJSONBody struct {
+	SessionID string `json:"sessionId"`
+}
+
+// SessionCheckInParams defines parameters for SessionCheckIn.
+type SessionCheckInParams struct {
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
+}
 
 // GetActivitiesParams defines parameters for GetActivities.
 type GetActivitiesParams struct {
@@ -371,9 +405,9 @@ type GetActivitiesParams struct {
 	XMembershipID XMembershipID `json:"X-Membership-ID"`
 }
 
-// GetActivityParams defines parameters for GetActivity.
+// GetActivityParams defines parameters for GetEnrichedActivity.
 type GetActivityParams struct {
-	CharacterId   string        `form:"characterId" json:"characterId"`
+	CharacterID   string        `form:"characterId" json:"characterId"`
 	XUserID       XUserID       `json:"X-User-ID"`
 	XMembershipID XMembershipID `json:"X-Membership-ID"`
 }
@@ -394,17 +428,56 @@ type RefreshTokenJSONBody struct {
 	Code string `json:"code"`
 }
 
+// GetSessionsParams defines parameters for GetSessions.
+type GetSessionsParams struct {
+	Count         int64         `form:"count" json:"count"`
+	Page          int64         `form:"page" json:"page"`
+	CharacterID   string        `form:"characterId" json:"characterId"`
+	XUserID       XUserID       `json:"X-User-ID"`
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
+}
+
+// StartSessionJSONBody defines parameters for StartSession.
+type StartSessionJSONBody struct {
+	CharacterID string `json:"characterId"`
+}
+
+// StartSessionParams defines parameters for StartSession.
+type StartSessionParams struct {
+	XUserID       XUserID       `json:"X-User-ID"`
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
+}
+
+// UpdateSessionJSONBody defines parameters for UpdateSession.
+type UpdateSessionJSONBody struct {
+	CharacterID string  `json:"characterId"`
+	CompletedAt *string `json:"completedAt,omitempty"`
+	Name        *string `json:"name,omitempty"`
+}
+
+// UpdateSessionParams defines parameters for UpdateSession.
+type UpdateSessionParams struct {
+	XUserID       XUserID       `json:"X-User-ID"`
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
+}
+
+// GetSessionAggregatesParams defines parameters for GetSessionAggregates.
+type GetSessionAggregatesParams struct {
+	XUserID       XUserID       `json:"X-User-ID"`
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
+}
+
 // GetSnapshotsParams defines parameters for GetSnapshots.
 type GetSnapshotsParams struct {
 	Count       int64   `form:"count" json:"count"`
 	Page        int64   `form:"page" json:"page"`
-	CharacterId string  `form:"characterId" json:"characterId"`
+	CharacterID string  `form:"characterId" json:"characterId"`
 	XUserID     XUserID `json:"X-User-ID"`
 }
 
 // CreateSnapshotJSONBody defines parameters for CreateSnapshot.
 type CreateSnapshotJSONBody struct {
-	CharacterId string `json:"characterId"`
+	CharacterID string `json:"characterId"`
 }
 
 // CreateSnapshotParams defines parameters for CreateSnapshot.
@@ -415,9 +488,12 @@ type CreateSnapshotParams struct {
 
 // GetSnapshotParams defines parameters for GetSnapshot.
 type GetSnapshotParams struct {
-	CharacterId string  `form:"characterId" json:"characterId"`
+	CharacterID string  `form:"characterId" json:"characterId"`
 	XUserID     XUserID `json:"X-User-ID"`
 }
+
+// SessionCheckInJSONRequestBody defines body for SessionCheckIn for application/json ContentType.
+type SessionCheckInJSONRequestBody SessionCheckInJSONBody
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody LoginJSONBody
@@ -425,17 +501,26 @@ type LoginJSONRequestBody LoginJSONBody
 // RefreshTokenJSONRequestBody defines body for RefreshToken for application/json ContentType.
 type RefreshTokenJSONRequestBody RefreshTokenJSONBody
 
+// StartSessionJSONRequestBody defines body for StartSession for application/json ContentType.
+type StartSessionJSONRequestBody StartSessionJSONBody
+
+// UpdateSessionJSONRequestBody defines body for UpdateSession for application/json ContentType.
+type UpdateSessionJSONRequestBody UpdateSessionJSONBody
+
 // CreateSnapshotJSONRequestBody defines body for CreateSnapshot for application/json ContentType.
 type CreateSnapshotJSONRequestBody CreateSnapshotJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 
+	// (POST /actions/session-checkin)
+	SessionCheckIn(c *gin.Context, params SessionCheckInParams)
+
 	// (GET /activities)
 	GetActivities(c *gin.Context, params GetActivitiesParams)
 
 	// (GET /activities/{activityId})
-	GetActivity(c *gin.Context, activityId string, params GetActivityParams)
+	GetActivity(c *gin.Context, activityID string, params GetActivityParams)
 
 	// (POST /login)
 	Login(c *gin.Context)
@@ -449,6 +534,18 @@ type ServerInterface interface {
 	// (POST /refresh)
 	RefreshToken(c *gin.Context)
 
+	// (GET /sessions)
+	GetSessions(c *gin.Context, params GetSessionsParams)
+
+	// (POST /sessions)
+	StartSession(c *gin.Context, params StartSessionParams)
+
+	// (PUT /sessions/{sessionId})
+	UpdateSession(c *gin.Context, sessionId string, params UpdateSessionParams)
+
+	// (GET /sessions/{sessionId}/aggregates)
+	GetSessionAggregates(c *gin.Context, sessionId string, params GetSessionAggregatesParams)
+
 	// (GET /snapshots)
 	GetSnapshots(c *gin.Context, params GetSnapshotsParams)
 
@@ -456,7 +553,7 @@ type ServerInterface interface {
 	CreateSnapshot(c *gin.Context, params CreateSnapshotParams)
 
 	// (GET /snapshots/{snapshotId})
-	GetSnapshot(c *gin.Context, snapshotId string, params GetSnapshotParams)
+	GetSnapshot(c *gin.Context, snapshotID string, params GetSnapshotParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -467,6 +564,48 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(c *gin.Context)
+
+// SessionCheckIn operation middleware
+func (siw *ServerInterfaceWrapper) SessionCheckIn(c *gin.Context) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SessionCheckInParams
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-Membership-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
+		var XMembershipID XMembershipID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XMembershipID = XMembershipID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SessionCheckIn(c, params)
+}
 
 // GetActivities operation middleware
 func (siw *ServerInterfaceWrapper) GetActivities(c *gin.Context) {
@@ -591,9 +730,9 @@ func (siw *ServerInterfaceWrapper) GetActivity(c *gin.Context) {
 	var err error
 
 	// ------------- Path parameter "activityId" -------------
-	var activityId string
+	var activityID string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "activityId", c.Param("activityId"), &activityId, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "activityId", c.Param("activityId"), &activityID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter activityId: %w", err), http.StatusBadRequest)
 		return
@@ -611,7 +750,7 @@ func (siw *ServerInterfaceWrapper) GetActivity(c *gin.Context) {
 		return
 	}
 
-	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterId)
+	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterID)
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter characterId: %w", err), http.StatusBadRequest)
 		return
@@ -670,7 +809,7 @@ func (siw *ServerInterfaceWrapper) GetActivity(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.GetActivity(c, activityId, params)
+	siw.Handler.GetActivity(c, activityID, params)
 }
 
 // Login operation middleware
@@ -778,6 +917,325 @@ func (siw *ServerInterfaceWrapper) RefreshToken(c *gin.Context) {
 	siw.Handler.RefreshToken(c)
 }
 
+// GetSessions operation middleware
+func (siw *ServerInterfaceWrapper) GetSessions(c *gin.Context) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSessionsParams
+
+	// ------------- Required query parameter "count" -------------
+
+	if paramValue := c.Query("count"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument count is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "count", c.Request.URL.Query(), &params.Count)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter count: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "page" -------------
+
+	if paramValue := c.Query("page"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument page is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "page", c.Request.URL.Query(), &params.Page)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "characterId" -------------
+
+	if paramValue := c.Query("characterId"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument characterId is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterID)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter characterId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required header parameter "X-Membership-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
+		var XMembershipID XMembershipID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XMembershipID = XMembershipID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSessions(c, params)
+}
+
+// StartSession operation middleware
+func (siw *ServerInterfaceWrapper) StartSession(c *gin.Context) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StartSessionParams
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required header parameter "X-Membership-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
+		var XMembershipID XMembershipID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XMembershipID = XMembershipID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StartSession(c, params)
+}
+
+// UpdateSession operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSession(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "sessionId" -------------
+	var sessionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sessionId", c.Param("sessionId"), &sessionId, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter sessionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateSessionParams
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required header parameter "X-Membership-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
+		var XMembershipID XMembershipID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XMembershipID = XMembershipID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UpdateSession(c, sessionId, params)
+}
+
+// GetSessionAggregates operation middleware
+func (siw *ServerInterfaceWrapper) GetSessionAggregates(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "sessionId" -------------
+	var sessionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sessionId", c.Param("sessionId"), &sessionId, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter sessionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSessionAggregatesParams
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required header parameter "X-Membership-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
+		var XMembershipID XMembershipID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XMembershipID = XMembershipID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSessionAggregates(c, sessionId, params)
+}
+
 // GetSnapshots operation middleware
 func (siw *ServerInterfaceWrapper) GetSnapshots(c *gin.Context) {
 
@@ -827,7 +1285,7 @@ func (siw *ServerInterfaceWrapper) GetSnapshots(c *gin.Context) {
 		return
 	}
 
-	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterId)
+	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterID)
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter characterId: %w", err), http.StatusBadRequest)
 		return
@@ -937,9 +1395,9 @@ func (siw *ServerInterfaceWrapper) GetSnapshot(c *gin.Context) {
 	var err error
 
 	// ------------- Path parameter "snapshotId" -------------
-	var snapshotId string
+	var snapshotID string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "snapshotId", c.Param("snapshotId"), &snapshotId, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "snapshotId", c.Param("snapshotId"), &snapshotID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter snapshotId: %w", err), http.StatusBadRequest)
 		return
@@ -959,7 +1417,7 @@ func (siw *ServerInterfaceWrapper) GetSnapshot(c *gin.Context) {
 		return
 	}
 
-	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterId)
+	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterID)
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter characterId: %w", err), http.StatusBadRequest)
 		return
@@ -996,7 +1454,7 @@ func (siw *ServerInterfaceWrapper) GetSnapshot(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.GetSnapshot(c, snapshotId, params)
+	siw.Handler.GetSnapshot(c, snapshotID, params)
 }
 
 // GinServerOptions provides options for the Gin server.
@@ -1026,15 +1484,38 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 		ErrorHandler:       errorHandler,
 	}
 
+	router.POST(options.BaseURL+"/actions/session-checkin", wrapper.SessionCheckIn)
 	router.GET(options.BaseURL+"/activities", wrapper.GetActivities)
 	router.GET(options.BaseURL+"/activities/:activityId", wrapper.GetActivity)
 	router.POST(options.BaseURL+"/login", wrapper.Login)
 	router.GET(options.BaseURL+"/ping", wrapper.GetPing)
 	router.GET(options.BaseURL+"/profile", wrapper.Profile)
 	router.POST(options.BaseURL+"/refresh", wrapper.RefreshToken)
+	router.GET(options.BaseURL+"/sessions", wrapper.GetSessions)
+	router.POST(options.BaseURL+"/sessions", wrapper.StartSession)
+	router.PUT(options.BaseURL+"/sessions/:sessionId", wrapper.UpdateSession)
+	router.GET(options.BaseURL+"/sessions/:sessionId/aggregates", wrapper.GetSessionAggregates)
 	router.GET(options.BaseURL+"/snapshots", wrapper.GetSnapshots)
 	router.POST(options.BaseURL+"/snapshots", wrapper.CreateSnapshot)
 	router.GET(options.BaseURL+"/snapshots/:snapshotId", wrapper.GetSnapshot)
+}
+
+type SessionCheckInRequestObject struct {
+	Params SessionCheckInParams
+	Body   *SessionCheckInJSONRequestBody
+}
+
+type SessionCheckInResponseObject interface {
+	VisitSessionCheckInResponse(w http.ResponseWriter) error
+}
+
+type SessionCheckIn200JSONResponse bool
+
+func (response SessionCheckIn200JSONResponse) VisitSessionCheckInResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
 }
 
 type GetActivitiesRequestObject struct {
@@ -1055,7 +1536,7 @@ func (response GetActivities200JSONResponse) VisitGetActivitiesResponse(w http.R
 }
 
 type GetActivityRequestObject struct {
-	ActivityId string `json:"activityId"`
+	ActivityID string `json:"activityId"`
 	Params     GetActivityParams
 }
 
@@ -1064,10 +1545,9 @@ type GetActivityResponseObject interface {
 }
 
 type GetActivity200JSONResponse struct {
-	Activity       ActivityHistory `json:"activity"`
-	Aggregate      Aggregate       `json:"aggregate"`
-	CharacterStats *[]WeaponStats  `json:"characterStats,omitempty"`
-	Teams          []Team          `json:"teams"`
+	Activity  ActivityHistory `firestore:"activityHistory" json:"activity"`
+	Aggregate *Aggregate      `json:"aggregate,omitempty"`
+	Teams     []Team          `json:"teams"`
 }
 
 func (response GetActivity200JSONResponse) VisitGetActivityResponse(w http.ResponseWriter) error {
@@ -1157,6 +1637,78 @@ func (response RefreshToken200JSONResponse) VisitRefreshTokenResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetSessionsRequestObject struct {
+	Params GetSessionsParams
+}
+
+type GetSessionsResponseObject interface {
+	VisitGetSessionsResponse(w http.ResponseWriter) error
+}
+
+type GetSessions200JSONResponse []Session
+
+func (response GetSessions200JSONResponse) VisitGetSessionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartSessionRequestObject struct {
+	Params StartSessionParams
+	Body   *StartSessionJSONRequestBody
+}
+
+type StartSessionResponseObject interface {
+	VisitStartSessionResponse(w http.ResponseWriter) error
+}
+
+type StartSession201JSONResponse Session
+
+func (response StartSession201JSONResponse) VisitStartSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateSessionRequestObject struct {
+	SessionId string `json:"sessionId"`
+	Params    UpdateSessionParams
+	Body      *UpdateSessionJSONRequestBody
+}
+
+type UpdateSessionResponseObject interface {
+	VisitUpdateSessionResponse(w http.ResponseWriter) error
+}
+
+type UpdateSession201JSONResponse Session
+
+func (response UpdateSession201JSONResponse) VisitUpdateSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSessionAggregatesRequestObject struct {
+	SessionId string `json:"sessionId"`
+	Params    GetSessionAggregatesParams
+}
+
+type GetSessionAggregatesResponseObject interface {
+	VisitGetSessionAggregatesResponse(w http.ResponseWriter) error
+}
+
+type GetSessionAggregates200JSONResponse []Aggregate
+
+func (response GetSessionAggregates200JSONResponse) VisitGetSessionAggregatesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type GetSnapshotsRequestObject struct {
 	Params GetSnapshotsParams
 }
@@ -1193,7 +1745,7 @@ func (response CreateSnapshot201JSONResponse) VisitCreateSnapshotResponse(w http
 }
 
 type GetSnapshotRequestObject struct {
-	SnapshotId string `json:"snapshotId"`
+	SnapshotID string `json:"snapshotId"`
 	Params     GetSnapshotParams
 }
 
@@ -1213,6 +1765,9 @@ func (response GetSnapshot200JSONResponse) VisitGetSnapshotResponse(w http.Respo
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
+	// (POST /actions/session-checkin)
+	SessionCheckIn(ctx context.Context, request SessionCheckInRequestObject) (SessionCheckInResponseObject, error)
+
 	// (GET /activities)
 	GetActivities(ctx context.Context, request GetActivitiesRequestObject) (GetActivitiesResponseObject, error)
 
@@ -1230,6 +1785,18 @@ type StrictServerInterface interface {
 
 	// (POST /refresh)
 	RefreshToken(ctx context.Context, request RefreshTokenRequestObject) (RefreshTokenResponseObject, error)
+
+	// (GET /sessions)
+	GetSessions(ctx context.Context, request GetSessionsRequestObject) (GetSessionsResponseObject, error)
+
+	// (POST /sessions)
+	StartSession(ctx context.Context, request StartSessionRequestObject) (StartSessionResponseObject, error)
+
+	// (PUT /sessions/{sessionId})
+	UpdateSession(ctx context.Context, request UpdateSessionRequestObject) (UpdateSessionResponseObject, error)
+
+	// (GET /sessions/{sessionId}/aggregates)
+	GetSessionAggregates(ctx context.Context, request GetSessionAggregatesRequestObject) (GetSessionAggregatesResponseObject, error)
 
 	// (GET /snapshots)
 	GetSnapshots(ctx context.Context, request GetSnapshotsRequestObject) (GetSnapshotsResponseObject, error)
@@ -1251,6 +1818,41 @@ func NewStrictHandler(ssi StrictServerInterface, middlewares []StrictMiddlewareF
 type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
+}
+
+// SessionCheckIn operation middleware
+func (sh *strictHandler) SessionCheckIn(ctx *gin.Context, params SessionCheckInParams) {
+	var request SessionCheckInRequestObject
+
+	request.Params = params
+
+	var body SessionCheckInJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.Status(http.StatusBadRequest)
+		ctx.Error(err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.SessionCheckIn(ctx, request.(SessionCheckInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SessionCheckIn")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(SessionCheckInResponseObject); ok {
+		if err := validResponse.VisitSessionCheckInResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // GetActivities operation middleware
@@ -1281,17 +1883,17 @@ func (sh *strictHandler) GetActivities(ctx *gin.Context, params GetActivitiesPar
 }
 
 // GetActivity operation middleware
-func (sh *strictHandler) GetActivity(ctx *gin.Context, activityId string, params GetActivityParams) {
+func (sh *strictHandler) GetActivity(ctx *gin.Context, activityID string, params GetActivityParams) {
 	var request GetActivityRequestObject
 
-	request.ActivityId = activityId
+	request.ActivityID = activityID
 	request.Params = params
 
 	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.GetActivity(ctx, request.(GetActivityRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetActivity")
+		handler = middleware(handler, "GetEnrichedActivity")
 	}
 
 	response, err := handler(ctx, request)
@@ -1426,6 +2028,132 @@ func (sh *strictHandler) RefreshToken(ctx *gin.Context) {
 	}
 }
 
+// GetSessions operation middleware
+func (sh *strictHandler) GetSessions(ctx *gin.Context, params GetSessionsParams) {
+	var request GetSessionsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSessions(ctx, request.(GetSessionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSessions")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetSessionsResponseObject); ok {
+		if err := validResponse.VisitGetSessionsResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartSession operation middleware
+func (sh *strictHandler) StartSession(ctx *gin.Context, params StartSessionParams) {
+	var request StartSessionRequestObject
+
+	request.Params = params
+
+	var body StartSessionJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.Status(http.StatusBadRequest)
+		ctx.Error(err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.StartSession(ctx, request.(StartSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartSession")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(StartSessionResponseObject); ok {
+		if err := validResponse.VisitStartSessionResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSession operation middleware
+func (sh *strictHandler) UpdateSession(ctx *gin.Context, sessionId string, params UpdateSessionParams) {
+	var request UpdateSessionRequestObject
+
+	request.SessionId = sessionId
+	request.Params = params
+
+	var body UpdateSessionJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.Status(http.StatusBadRequest)
+		ctx.Error(err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSession(ctx, request.(UpdateSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSession")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(UpdateSessionResponseObject); ok {
+		if err := validResponse.VisitUpdateSessionResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSessionAggregates operation middleware
+func (sh *strictHandler) GetSessionAggregates(ctx *gin.Context, sessionId string, params GetSessionAggregatesParams) {
+	var request GetSessionAggregatesRequestObject
+
+	request.SessionId = sessionId
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSessionAggregates(ctx, request.(GetSessionAggregatesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSessionAggregates")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetSessionAggregatesResponseObject); ok {
+		if err := validResponse.VisitGetSessionAggregatesResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetSnapshots operation middleware
 func (sh *strictHandler) GetSnapshots(ctx *gin.Context, params GetSnapshotsParams) {
 	var request GetSnapshotsRequestObject
@@ -1489,10 +2217,10 @@ func (sh *strictHandler) CreateSnapshot(ctx *gin.Context, params CreateSnapshotP
 }
 
 // GetSnapshot operation middleware
-func (sh *strictHandler) GetSnapshot(ctx *gin.Context, snapshotId string, params GetSnapshotParams) {
+func (sh *strictHandler) GetSnapshot(ctx *gin.Context, snapshotID string, params GetSnapshotParams) {
 	var request GetSnapshotRequestObject
 
-	request.SnapshotId = snapshotId
+	request.SnapshotID = snapshotID
 	request.Params = params
 
 	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
@@ -1519,70 +2247,80 @@ func (sh *strictHandler) GetSnapshot(ctx *gin.Context, snapshotId string, params
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
+	"GT1/fv5bAAAA//9LSFoBZGcAAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

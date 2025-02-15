@@ -1,0 +1,73 @@
+###
+GET http://localhost:8080/ping
+
+###
+GET http://localhost:8080/profile
+
+###
+POST http://localhost:8080/login
+Content-Type: application/json
+
+###
+POST http://localhost:8080/refresh
+Content-Type: application/json
+
+{
+  "code": ""
+}
+
+###
+POST http://localhost:8080/snapshots
+Content-Type: application/json
+
+{
+  "characterId": ""
+}
+
+###
+GET http://localhost:8080/snapshots?
+    count={{$placeholder}}&
+    page={{$placeholder}}&
+    characterId={{$placeholder}}
+
+###
+GET http://localhost:8080/snapshots/{{snapshotId}}
+
+###
+GET http://localhost:8080/activities?
+    count={{$placeholder}}&
+    page={{$placeholder}}&
+    characterId={{$placeholder}}&
+    mode={{$placeholder}}
+
+###
+GET http://localhost:8080/activities/{{activityId}}
+
+###
+POST http://localhost:8080/sessions
+Content-Type: application/json
+
+{
+  "characterId": ""
+}
+
+###
+GET http://localhost:8080/sessions?
+    count={{$placeholder}}&
+    page={{$placeholder}}&
+    characterId={{$placeholder}}
+
+###
+PUT http://localhost:8080/sessions/{{sessionId}}
+Content-Type: application/json
+
+###
+GET http://localhost:8080/sessions/{{sessionId}}/aggregates
+
+###
+POST http://localhost:8080/actions/session-checkin
+Content-Type: application/json
+
+{
+  "sessionId": ""
+}
