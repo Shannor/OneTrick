@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/utils"
+	"oneTrick/ptr"
 	"strconv"
 )
 
@@ -213,7 +213,7 @@ func uintToInt64[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](item *T) *int64
 	if item == nil {
 		return nil
 	}
-	return utils.ToPointer(int64(*item))
+	return ptr.Of(int64(*item))
 }
 
 func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest Manifest) *api.ActivityHistory {

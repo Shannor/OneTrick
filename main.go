@@ -77,8 +77,8 @@ func main() {
 	}
 
 	r.GET("/openapi", func(c *gin.Context) {
-		c.Header("Content-Type", "application/x-yaml")
-		c.File("./api/openapi.yaml")
+		c.Header("Content-Type", "application/json")
+		c.File("./api/openapi.json")
 	})
 
 	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{

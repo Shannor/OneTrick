@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"log/slog"
 	"oneTrick/api"
+	"oneTrick/generator"
+	"oneTrick/ptr"
+	"oneTrick/utils"
 	"time"
 )
 
 type Service interface {
 	Start(ctx context.Context, userID string, characterID string) (*api.Session, error)
+	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 	Get(ctx context.Context, ID string) (*api.Session, error)
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
-	GetAll(ctx context.Context, userID string, characterID string) ([]api.Session, error)
+	GetAll(ctx context.Context, userID string, characterID string, status *api.SessionStatus) ([]api.Session, error)
 	Complete(ctx context.Context, ID string) error
 }
 type service struct {
@@ -37,9 +41,11 @@ func (s service) Start(ctx context.Context, userID string, characterID string) (
 		return nil, fmt.Errorf("session already active")
 	}
 	result := &api.Session{
-		UserID:      userID,
-		StartedAt:   time.Now(),
-		CharacterID: characterID,
+		UserID:       userID,
+		StartedAt:    time.Now(),
+		CharacterID:  characterID,
+		Name:         ptr.Of(generator.D2Name()),
+		AggregateIDs: make([]string, 0),
 	}
 	ref := s.db.Collection(collection).NewDoc()
 	result.ID = ref.ID
@@ -55,7 +61,7 @@ func (s service) HasActive(ctx context.Context, userID string, characterID strin
 	query := s.db.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID).
-		Where("completedAt", "==", nil).
+		Where("status", "==", api.SessionPending).
 		Limit(1)
 
 	docs, err := query.Documents(ctx).GetAll()
@@ -69,7 +75,7 @@ func (s service) GetActive(ctx context.Context, userID string, characterID strin
 	query := s.db.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID).
-		Where("completedAt", "==", nil).
+		Where("status", "==", api.SessionPending).
 		Limit(1)
 
 	docs, err := query.Documents(ctx).GetAll()
@@ -100,29 +106,27 @@ func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
 	return result, nil
 }
 
-func (s service) GetAll(ctx context.Context, userID string, characterID string) ([]api.Session, error) {
+func (s service) GetAll(ctx context.Context, userID string, characterID string, status *api.SessionStatus) ([]api.Session, error) {
 	query := s.db.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID)
 
+	if status != nil {
+		query = query.Where("status", "==", *status)
+		switch *status {
+		case api.SessionPending:
+			query = query.Limit(1)
+		}
+	}
 	docs, err := query.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
 	}
-	if len(docs) == 0 {
-		return nil, fmt.Errorf("no active session found")
-	}
 
-	result := make([]api.Session, 0)
-	for _, doc := range docs {
-		r := api.Session{}
-		err = doc.DataTo(&r)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, r)
+	result, err := utils.GetAllToStructs[api.Session](docs)
+	if err != nil {
+		return nil, err
 	}
-
 	return result, nil
 }
 
@@ -145,6 +149,10 @@ func (s service) Complete(ctx context.Context, ID string) error {
 				Path:  "completedAt",
 				Value: time.Now(),
 			},
+			{
+				Path:  "status",
+				Value: api.SessionComplete,
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to complete session: %w", err)
@@ -153,5 +161,18 @@ func (s service) Complete(ctx context.Context, ID string) error {
 		slog.With("sessionID", ID).Warn("session already completed")
 	}
 
+	return nil
+}
+
+func (s service) AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error {
+	_, err := s.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
+		{
+			Path:  "aggregateIds",
+			Value: firestore.ArrayUnion(aggregateIDs),
+		},
+	})
+	if err != nil {
+		return err
+	}
 	return nil
 }

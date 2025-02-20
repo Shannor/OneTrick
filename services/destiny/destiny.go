@@ -12,7 +12,7 @@ import (
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
 	"oneTrick/envvars"
-	"oneTrick/utils"
+	"oneTrick/ptr"
 	"os"
 	"slices"
 	"strconv"
@@ -186,9 +186,9 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		mID,
 		cID,
 		&bungie.Destiny2GetActivityHistoryParams{
-			Count: utils.ToPointer(int32(count)),
-			Mode:  utils.ToPointer(int32(mode)),
-			Page:  utils.ToPointer(int32(page)),
+			Count: ptr.Of(int32(count)),
+			Mode:  ptr.Of(int32(mode)),
+			Page:  ptr.Of(int32(page)),
 		},
 	)
 	if err != nil {

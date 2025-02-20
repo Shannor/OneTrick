@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"oneTrick/api"
+	"oneTrick/generator"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"oneTrick/utils"
@@ -78,7 +79,12 @@ func (s *service) Create(ctx context.Context, userID string, snapshot api.Charac
 	}
 
 	snapshot.UserID = userID
-	snapshot.CreatedAt = time.Now()
+	now := time.Now()
+	snapshot.CreatedAt = now
+	snapshot.UpdatedAt = now
+	if snapshot.Name == "" {
+		snapshot.Name = generator.PVPName()
+	}
 	ref := s.DB.Collection(collection).NewDoc()
 	snapshot.ID = ref.ID
 	_, err = ref.Set(ctx, snapshot)
@@ -89,20 +95,28 @@ func (s *service) Create(ctx context.Context, userID string, snapshot api.Charac
 }
 
 func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapshot) (*string, error) {
+	now := time.Now()
 	history := History{
 		ParentID:    og.ID,
 		UserID:      og.UserID,
 		CharacterID: og.CharacterID,
-		Timestamp:   time.Now(),
+		Timestamp:   now,
 		Meta: MetaData{
-			KineticID: og.Loadout[strconv.Itoa(destiny.Kinetic)].InstanceID,
-			EnergyID:  og.Loadout[strconv.Itoa(destiny.Energy)].InstanceID,
-			PowerID:   og.Loadout[strconv.Itoa(destiny.Power)].InstanceID,
+			KineticID: strconv.FormatInt(og.Loadout[strconv.Itoa(destiny.Kinetic)].ItemHash, 10),
+			EnergyID:  strconv.FormatInt(og.Loadout[strconv.Itoa(destiny.Energy)].ItemHash, 10),
+			PowerID:   strconv.FormatInt(og.Loadout[strconv.Itoa(destiny.Power)].ItemHash, 10),
 		},
 	}
 	ref := s.DB.Collection(collection).Doc(og.ID).Collection(historyCollection).NewDoc()
 	history.ID = ref.ID
 	_, err := ref.Set(ctx, history)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = s.DB.Collection(collection).Doc(og.ID).Set(ctx, map[string]interface{}{
+		"updatedAt": now,
+	}, firestore.MergeAll)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +276,12 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 	minTime := activityPeriod.Add(-12 * time.Hour)
 	// A game can last about 8 minutes over the starting time
 	maxTime := activityPeriod.Add(10 * time.Minute)
+	l := slog.With(
+		"minTime", minTime,
+		"maxTime", maxTime,
+		"userID", userID,
+		"characterID", characterID,
+	)
 	docs, err := s.DB.CollectionGroup(historyCollection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID).
@@ -270,6 +290,7 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 		OrderBy("timestamp", firestore.Desc).
 		Documents(ctx).GetAll()
 	if err != nil {
+		l.Error("failed to get histories", "error", err.Error())
 		return nil, nil, err
 	}
 
@@ -283,34 +304,32 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 		return nil, &link, nil
 	}
 
-	weaponsMap := make(map[string]api.WeaponInstanceMetrics)
-	for _, weapon := range weapons {
-		if weapon.ReferenceID != nil {
-			weaponsMap[strconv.FormatInt(*weapon.ReferenceID, 10)] = weapon
-		}
-	}
-
 	var (
 		bestFit      *History
-		bestFitScore int = 0
+		bestFitScore = 0
 	)
 	histories, err := utils.GetAllToStructs[History](docs)
 	if err != nil {
+		l.Error("failed to get all histories", "error", err.Error())
 		return nil, nil, err
+	}
+
+	weaponSet := make(map[string]bool)
+	for _, weapon := range weapons {
+		if weapon.ReferenceID != nil {
+			weaponSet[strconv.FormatInt(*weapon.ReferenceID, 10)] = true
+		}
 	}
 	for _, h := range histories {
 		matches := 0
-		for _, weapon := range weapons {
-			if weapon.ReferenceID != nil {
-				switch strconv.Itoa(int(*weapon.ReferenceID)) {
-				case h.Meta.KineticID:
-					matches += 2
-				case h.Meta.EnergyID:
-					matches += 2
-				case h.Meta.PowerID:
-					matches++
-				}
-			}
+		if weaponSet[h.Meta.KineticID] {
+			matches += 2
+		}
+		if weaponSet[h.Meta.EnergyID] {
+			matches += 2
+		}
+		if weaponSet[h.Meta.PowerID] {
+			matches++
 		}
 
 		if bestFit == nil && matches >= 1 {
@@ -325,6 +344,7 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 	}
 
 	if bestFit == nil {
+		l.Debug("no best fit match found")
 		link := api.SnapshotLink{
 			CharacterID:      characterID,
 			ConfidenceLevel:  api.NoMatchConfidenceLevel,
@@ -339,6 +359,7 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 	} else if bestFitScore >= 2 {
 		level = api.MediumConfidenceLevel
 	}
+	l.Debug("best fit found", "score", bestFitScore, "level", level)
 
 	link := api.SnapshotLink{
 		CharacterID:      characterID,
@@ -348,8 +369,10 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 		SnapshotID:       &bestFit.ParentID,
 	}
 
+	l.Debug("creating snapshot link", "link", link, "parentID", bestFit.ParentID)
 	snap, err := s.Get(ctx, bestFit.ParentID)
 	if err != nil {
+		l.Error("failed to get snapshot", "error", err.Error())
 		return nil, nil, err
 	}
 	return snap, &link, nil

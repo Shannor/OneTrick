@@ -28,6 +28,17 @@ type Server struct {
 	SessionService   session.Service
 }
 
+func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
+	sessionID := request.SessionId
+	l := slog.With("sessionID", sessionID, "function", "GetSession")
+	ses, err := s.SessionService.Get(ctx, sessionID)
+	if err != nil {
+		l.With("error", err.Error()).Error("Failed to fetch session")
+		return nil, err
+	}
+	return api.GetSession200JSONResponse(*ses), nil
+}
+
 func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRequestObject) (api.SessionCheckInResponseObject, error) {
 	sessionID := request.Body.SessionID
 	membershipID := request.Params.XMembershipID
@@ -89,7 +100,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 	for _, activity := range activityHistories {
 		IDs = append(IDs, activity.InstanceID)
 	}
-	aggregates, err := s.AggregateService.GetAggregates(ctx, IDs)
+	aggregates, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
 	if err != nil {
 		l.With("error", err.Error()).Error("Failed to fetch aggregate data")
 		return nil, err
@@ -106,7 +117,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		link := s.SnapshotService.LookupLink(agg, characterID)
 
 		// Already attempted to link this character to this activity so we can skip it
-		if link != nil {
+		if link != nil && link.SessionID != nil {
 			l.With("activityID", history.InstanceID).Debug("Already linked to this activity")
 			continue
 		}
@@ -118,7 +129,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 			l.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
-		_, err = SetAggregate(ctx, s, userID, characterID, &history, history.Period, *activity.Performance)
+		_, err = SetAggregate(ctx, s, userID, characterID, &history, history.Period, *activity.Performance, &sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -130,15 +141,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 
 // SetAggregate will find the best fitting snapshot and link for a character.
 // Will enrich their data if a snapshot is found. And will upsert an aggregate with the characters data.
-func SetAggregate(
-	ctx context.Context,
-	s Server,
-	userID string,
-	characterID string,
-	activity *api.ActivityHistory,
-	period time.Time,
-	performance api.InstancePerformance,
-) (*api.Aggregate, error) {
+func SetAggregate(ctx context.Context, s Server, userID string, characterID string, activity *api.ActivityHistory, period time.Time, performance api.InstancePerformance, sessionID *string) (*api.Aggregate, error) {
 	snap, link, err := s.SnapshotService.FindBestFit(ctx, userID, characterID, period, performance.Weapons)
 	if err != nil {
 		return nil, err
@@ -149,13 +152,11 @@ func SetAggregate(
 		return nil, fmt.Errorf("failed to enrich performance instance: %w", err)
 	}
 
-	agg, err := s.AggregateService.AddAggregate(
-		ctx,
-		characterID,
-		*activity,
-		*link,
-		*enrichedPerformance,
-	)
+	if sessionID != nil {
+		link.SessionID = sessionID
+	}
+
+	agg, err := s.AggregateService.AddAggregate(ctx, characterID, *activity, *link, *enrichedPerformance)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +164,7 @@ func SetAggregate(
 }
 
 func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
-	result, err := s.SessionService.GetAll(ctx, request.Params.XUserID, request.Params.CharacterID)
+	result, err := s.SessionService.GetAll(ctx, request.Params.XUserID, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +174,7 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
 	result, err := s.SessionService.Start(ctx, request.Params.XUserID, request.Body.CharacterID)
 	if err != nil {
-		return nil, err
+		return api.StartSession400JSONResponse{Message: err.Error()}, nil
 	}
 	return api.StartSession201JSONResponse(*result), nil
 }
@@ -198,7 +199,15 @@ func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequ
 
 func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSessionAggregatesRequestObject) (api.GetSessionAggregatesResponseObject, error) {
 	//TODO implement me
-	panic("implement me")
+	ses, err := s.SessionService.Get(ctx, request.SessionId)
+	if err != nil {
+		return nil, err
+	}
+	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetSessionAggregates200JSONResponse(aggregates), nil
 }
 
 func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
@@ -466,7 +475,7 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 	for _, activityHistory := range history {
 		activityIDs = append(activityIDs, activityHistory.InstanceID)
 	}
-	aggregates, err := s.AggregateService.GetAggregates(ctx, activityIDs)
+	aggregates, err := s.AggregateService.GetAggregatesByActivity(ctx, activityIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -533,12 +542,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		}, nil
 	}
 
-	link := s.SnapshotService.LookupLink(agg, characterID)
-	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch snapshot and link")
-		return nil, err
-	}
-	if link != nil {
+	if s.SnapshotService.LookupLink(agg, characterID) != nil {
 		return api.GetActivity200JSONResponse{
 			Activity:  *activityDetails.Activity,
 			Teams:     activityDetails.Teams,
@@ -547,15 +551,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	}
 
 	// Backfill an aggregate on lookup when looking at an activity
-	a, err := SetAggregate(
-		ctx,
-		s,
-		userID,
-		characterID,
-		activityDetails.Activity,
-		*activityDetails.Period,
-		*activityDetails.Performance,
-	)
+	a, err := SetAggregate(ctx, s, userID, characterID, activityDetails.Activity, *activityDetails.Period, *activityDetails.Performance, nil)
 	if err != nil {
 		l.With("error", err.Error()).Error("Failed to set aggregate")
 		return nil, err

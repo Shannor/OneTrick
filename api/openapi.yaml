@@ -282,6 +282,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
+        400:
+          description: "Request is invalid"
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                properties:
+                  message:
+                    type: string
+
     get:
       parameters:
         - $ref: "#/components/parameters/X-User-ID"
@@ -434,6 +446,7 @@ components:
         - ErrInternalSystemDown
         - ErrUnknownError
 
+
     Profile:
       type: object
       required:
@@ -478,6 +491,7 @@ components:
         - userId
         - hash
         - name
+        - updatedAt
       properties:
         id:
           type: string
@@ -514,6 +528,12 @@ components:
           description: "Timestamp for when the snapshot was first created"
           x-oapi-codegen-extra-tags:
             firestore: "createdAt"
+        updatedAt:
+          type: string
+          format: date-time
+          description: "Timestamp for when the snapshot was last updated or when a history entry was made for it."
+          x-oapi-codegen-extra-tags:
+            firestore: "updatedAt"
         loadout:
           $ref: "#/components/schemas/Loadout"
 
