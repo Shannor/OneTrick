@@ -236,7 +236,8 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 	}
 
 	var (
-		performance *api.InstancePerformance
+		performance   *api.InstancePerformance
+		personalStats *map[string]bungie.HistoricalStatsValue
 	)
 	for _, entry := range *data.Entries {
 		if entry.CharacterId == nil {
@@ -245,6 +246,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		// TODO: Only getting it for one character. Change for everyone
 		if *entry.CharacterId == characterID {
 			performance = CarnageEntryToInstancePerformance(&entry)
+			personalStats = entry.Values
 			break
 		}
 
@@ -254,6 +256,12 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 	}
 	details := TransformHistoricActivity(data.ActivityDetails, *a.Manifest)
 	details.Period = *data.Period
+	details.PersonalValues = ToPlayerStats(personalStats)
+	if details.PersonalValues != nil && performance != nil {
+		performance.PlayerStats = *details.PersonalValues
+	} else {
+		slog.Warn("No personal stats found for activity")
+	}
 	result := EnrichedActivity{
 		Period:          data.Period,
 		Activity:        details,

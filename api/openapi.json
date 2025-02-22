@@ -682,9 +682,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Aggregate"
+                  "type": "object",
+                  "required": ["aggregates", "snapshots"],
+                  "properties": {
+                    "aggregates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Aggregate"
+                      }
+                    },
+                    "snapshots": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/CharacterSnapshot"
+                      }
+                    }
                   }
                 }
               }
@@ -1838,37 +1850,119 @@
       },
       "PlayerStats": {
         "x-oapi-codegen-extra-tags": {
-          "firestore": "playerStats,omitempty"
+          "firestore": "playerStats"
         },
         "type": "object",
         "description": "All Player Stats from a match that we currently care about",
         "properties": {
           "kills": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "Number of kills done in the match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "kills"
+            }
           },
           "assists": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "Number of assists done in the match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "assists"
+            }
           },
           "deaths": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "Number of deaths done in the match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "deaths"
+            }
           },
           "kd": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "ratio of kill / deaths in the match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "kd"
+            }
           },
           "kda": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "ratio of kills + assists/ deaths in the match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "kda"
+            }
           },
           "standing": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "Win or lose in the match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "standing"
+            }
           },
           "team": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "Id for the team the player was on this match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "team"
+            }
           },
           "fireTeamId": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "ID for the fireteam player was on. If the same as another player then they were together",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "fireTeamId"
+            },
+            "x-go-name": "fireTeamID"
           },
           "timePlayed": {
-            "$ref": "#/components/schemas/StatsValuePair"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsValuePair"
+              }
+            ],
+            "description": "Time in seconds the player was in the match",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "timePlayed"
+            }
           }
         }
       },

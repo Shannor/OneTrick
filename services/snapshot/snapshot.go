@@ -32,6 +32,7 @@ type Service interface {
 	// Takes a context, user ID, character ID, and snapshot ID as input.
 	// Returns the requested CharacterSnapshot or an error if the snapshot is not found or cannot be retrieved.
 	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
+	GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error)
 
 	FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons []api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
 	LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink
@@ -168,6 +169,17 @@ func (s *service) Get(ctx context.Context, snapshotID string) (*api.CharacterSna
 	return result, nil
 }
 
+func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error) {
+	data, err := s.DB.Collection(collection).Where("id", "in", snapshotIDs).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[api.CharacterSnapshot](data)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
 func (s *service) LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink {
 	if agg == nil {
 		return nil
@@ -369,7 +381,7 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 		SnapshotID:       &bestFit.ParentID,
 	}
 
-	l.Debug("creating snapshot link", "link", link, "parentID", bestFit.ParentID)
+	l.Debug("generated link", "link", link, "parentID", bestFit.ParentID)
 	snap, err := s.Get(ctx, bestFit.ParentID)
 	if err != nil {
 		l.Error("failed to get snapshot", "error", err.Error())

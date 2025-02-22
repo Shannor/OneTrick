@@ -170,6 +170,11 @@ func SetAggregate(ctx context.Context, s Server, userID string, characterID stri
 		link.SessionID = sessionID
 	}
 
+	// Clear Personal values for an aggregate, we don't want to save that.
+	if activity.PersonalValues != nil {
+		activity.PersonalValues = nil
+	}
+
 	agg, err := s.AggregateService.AddAggregate(ctx, characterID, *activity, *link, *enrichedPerformance)
 	if err != nil {
 		return nil, err
@@ -220,7 +225,29 @@ func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSession
 	if err != nil {
 		return nil, err
 	}
-	return api.GetSessionAggregates200JSONResponse(aggregates), nil
+	uniqueIDS := make([]string, 0)
+	for _, a := range aggregates {
+		link, ok := a.SnapshotLinks[ses.CharacterID]
+		if !ok {
+			continue
+		}
+		if link.SnapshotID == nil {
+			continue
+		}
+		uniqueIDS = append(uniqueIDS, *link.SnapshotID)
+	}
+	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
+	if err != nil {
+		return nil, err
+	}
+	snapshotByID := make(map[string]api.CharacterSnapshot)
+	for _, snap := range snapshots {
+		snapshotByID[snap.ID] = snap
+	}
+	return api.GetSessionAggregates200JSONResponse{
+		Aggregates: aggregates,
+		Snapshots:  snapshotByID,
+	}, nil
 }
 
 func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
