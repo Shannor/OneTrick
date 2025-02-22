@@ -95,7 +95,7 @@ func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
 	for _, p := range *item.Perks.Data.Perks {
 		perk, ok := manifest.SandboxPerkDefinition[strconv.Itoa(int(*p.PerkHash))]
 		if !ok {
-			slog.Warn("Perk not found in manifest: ", strconv.Itoa(int(*p.PerkHash)))
+			slog.Warn("Perk not found in manifest", "perkHash", strconv.Itoa(int(*p.PerkHash)))
 			continue
 		}
 		if !perk.IsDisplayable {
@@ -120,7 +120,7 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 		}
 		socket, ok := manifest.InventoryItemDefinition[strconv.Itoa(int(*s.PlugHash))]
 		if !ok {
-			slog.Warn("Socket not found in manifest: ", strconv.Itoa(int(*s.PlugHash)))
+			slog.Warn("Socket not found in manifest", "socketHash", strconv.Itoa(int(*s.PlugHash)))
 			continue
 		}
 
@@ -311,6 +311,7 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		ImageURL:       fmt.Sprintf("%s%s", baseBungieURL, definition.PgcrImage),
 		ActivityIcon:   fmt.Sprintf("%s%s", baseBungieURL, activityMode.DisplayProperties.Icon),
 		PersonalValues: ToPlayerStats(period.Values),
+		Period:         *period.Period,
 	}
 }
 

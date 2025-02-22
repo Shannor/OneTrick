@@ -165,10 +165,14 @@ func (s service) Complete(ctx context.Context, ID string) error {
 }
 
 func (s service) AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error {
+	ids := make([]any, 0)
+	for _, d := range aggregateIDs {
+		ids = append(ids, d)
+	}
 	_, err := s.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
 		{
 			Path:  "aggregateIds",
-			Value: firestore.ArrayUnion(aggregateIDs),
+			Value: firestore.ArrayUnion(ids...),
 		},
 	})
 	if err != nil {

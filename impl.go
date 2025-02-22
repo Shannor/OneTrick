@@ -79,6 +79,10 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 	}
 
 	membershipType, err := s.UserService.GetMembershipType(ctx, userID, membershipID)
+	if err != nil {
+		l.With("error", err.Error()).Error("Failed to fetch membership type")
+		return nil, err
+	}
 
 	// 2. Get 3 latest activity history
 	activityHistories, err := s.D2Service.GetAllPVPActivity(
@@ -107,8 +111,10 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 	}
 
 	activityToAgg := make(map[string]*api.Aggregate)
+	aggIDs := make([]string, 0)
 	for _, agg := range aggregates {
 		activityToAgg[agg.ActivityID] = &agg
+		aggIDs = append(aggIDs, agg.ID)
 	}
 
 	updatedAgg := false
@@ -120,6 +126,9 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		if link != nil && link.SessionID != nil {
 			l.With("activityID", history.InstanceID).Debug("Already linked to this activity")
 			continue
+		} else if link != nil {
+			// TODO: Figure out if we want to add this Session ID to this link
+			// Probably need to check the times to see if they're close
 		}
 
 		updatedAgg = true
@@ -135,6 +144,11 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		}
 	}
 
+	err = s.SessionService.AddAggregateIDs(ctx, sessionID, aggIDs)
+	if err != nil {
+		l.With("error", err.Error()).Error("Failed to add aggregate IDs to session")
+		return nil, err
+	}
 	l.Info("Session check in complete")
 	return api.SessionCheckIn200JSONResponse(updatedAgg), nil
 }
@@ -198,7 +212,6 @@ func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequ
 }
 
 func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSessionAggregatesRequestObject) (api.GetSessionAggregatesResponseObject, error) {
-	//TODO implement me
 	ses, err := s.SessionService.Get(ctx, request.SessionId)
 	if err != nil {
 		return nil, err

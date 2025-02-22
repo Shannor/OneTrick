@@ -273,14 +273,15 @@ func (s *service) GenerateSnapshot(ctx context.Context, userID, membershipID, ch
 
 func (s *service) FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons []api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
 
-	minTime := activityPeriod.Add(-12 * time.Hour)
+	minTime := activityPeriod.Add(time.Duration(-12) * time.Hour)
 	// A game can last about 8 minutes over the starting time
-	maxTime := activityPeriod.Add(10 * time.Minute)
+	maxTime := activityPeriod.Add(time.Duration(10) * time.Minute)
 	l := slog.With(
+		"activityPeriod", activityPeriod,
 		"minTime", minTime,
 		"maxTime", maxTime,
-		"userID", userID,
-		"characterID", characterID,
+		"userId", userID,
+		"characterId", characterID,
 	)
 	docs, err := s.DB.CollectionGroup(historyCollection).
 		Where("userId", "==", userID).
@@ -344,7 +345,6 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 	}
 
 	if bestFit == nil {
-		l.Debug("no best fit match found")
 		link := api.SnapshotLink{
 			CharacterID:      characterID,
 			ConfidenceLevel:  api.NoMatchConfidenceLevel,
