@@ -12,7 +12,7 @@ import (
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
 	"oneTrick/envvars"
-	"oneTrick/utils"
+	"oneTrick/ptr"
 	"os"
 	"slices"
 	"strconv"
@@ -186,9 +186,9 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		mID,
 		cID,
 		&bungie.Destiny2GetActivityHistoryParams{
-			Count: utils.ToPointer(int32(count)),
-			Mode:  utils.ToPointer(int32(mode)),
-			Page:  utils.ToPointer(int32(page)),
+			Count: ptr.Of(int32(count)),
+			Mode:  ptr.Of(int32(mode)),
+			Page:  ptr.Of(int32(page)),
 		},
 	)
 	if err != nil {
@@ -236,7 +236,8 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 	}
 
 	var (
-		performance *api.InstancePerformance
+		performance   *api.InstancePerformance
+		personalStats *map[string]bungie.HistoricalStatsValue
 	)
 	for _, entry := range *data.Entries {
 		if entry.CharacterId == nil {
@@ -245,6 +246,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		// TODO: Only getting it for one character. Change for everyone
 		if *entry.CharacterId == characterID {
 			performance = CarnageEntryToInstancePerformance(&entry)
+			personalStats = entry.Values
 			break
 		}
 
@@ -254,6 +256,12 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 	}
 	details := TransformHistoricActivity(data.ActivityDetails, *a.Manifest)
 	details.Period = *data.Period
+	details.PersonalValues = ToPlayerStats(personalStats)
+	if details.PersonalValues != nil && performance != nil {
+		performance.PlayerStats = *details.PersonalValues
+	} else {
+		slog.Warn("No personal stats found for activity")
+	}
 	result := EnrichedActivity{
 		Period:          data.Period,
 		Activity:        details,

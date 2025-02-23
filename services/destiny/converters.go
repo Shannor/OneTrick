@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/utils"
+	"oneTrick/ptr"
 	"strconv"
 )
 
@@ -95,7 +95,7 @@ func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
 	for _, p := range *item.Perks.Data.Perks {
 		perk, ok := manifest.SandboxPerkDefinition[strconv.Itoa(int(*p.PerkHash))]
 		if !ok {
-			slog.Warn("Perk not found in manifest: ", strconv.Itoa(int(*p.PerkHash)))
+			slog.Warn("Perk not found in manifest", "perkHash", strconv.Itoa(int(*p.PerkHash)))
 			continue
 		}
 		if !perk.IsDisplayable {
@@ -120,7 +120,7 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 		}
 		socket, ok := manifest.InventoryItemDefinition[strconv.Itoa(int(*s.PlugHash))]
 		if !ok {
-			slog.Warn("Socket not found in manifest: ", strconv.Itoa(int(*s.PlugHash)))
+			slog.Warn("Socket not found in manifest", "socketHash", strconv.Itoa(int(*s.PlugHash)))
 			continue
 		}
 
@@ -213,7 +213,7 @@ func uintToInt64[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](item *T) *int64
 	if item == nil {
 		return nil
 	}
-	return utils.ToPointer(int64(*item))
+	return ptr.Of(int64(*item))
 }
 
 func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest Manifest) *api.ActivityHistory {
@@ -311,6 +311,7 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		ImageURL:       fmt.Sprintf("%s%s", baseBungieURL, definition.PgcrImage),
 		ActivityIcon:   fmt.Sprintf("%s%s", baseBungieURL, activityMode.DisplayProperties.Icon),
 		PersonalValues: ToPlayerStats(period.Values),
+		Period:         *period.Period,
 	}
 }
 
@@ -334,7 +335,7 @@ func ToPlayerStats(values *map[string]bungie.HistoricalStatsValue) *api.PlayerSt
 		case "standing":
 			personalValues.Standing = (*api.StatsValuePair)(value.Basic)
 		case "fireteamId":
-			personalValues.FireTeamId = (*api.StatsValuePair)(value.Basic)
+			personalValues.FireTeamID = (*api.StatsValuePair)(value.Basic)
 		case "timePlayedSeconds":
 			personalValues.TimePlayed = (*api.StatsValuePair)(value.Basic)
 		}
@@ -372,25 +373,29 @@ func BungieStatValueToUniqueStatValue(values *map[string]bungie.HistoricalStatsV
 	return &result
 }
 
-func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats) []api.WeaponInstanceMetrics {
+func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats) map[string]api.WeaponInstanceMetrics {
 	if values == nil {
 		return nil
 	}
-	result := make([]api.WeaponInstanceMetrics, 0)
+	result := make(map[string]api.WeaponInstanceMetrics)
 	for _, v := range *values {
+		if v.ReferenceId == nil {
+			continue
+		}
 		ref := int64(*v.ReferenceId)
 		r := api.WeaponInstanceMetrics{
 			ReferenceID: &ref,
 			Stats:       BungieStatValueToUniqueStatValue(v.Values),
 		}
-		result = append(result, r)
+		result[strconv.Itoa(int(*v.ReferenceId))] = r
 	}
 	return result
 }
 
 func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	if modeType == nil {
-		return "Missing"
+		slog.Warn("Activity Mode type is nil")
+		return "Unknown"
 	}
 	switch *modeType {
 	case bungie.CurrentActivityModeTypeControl:

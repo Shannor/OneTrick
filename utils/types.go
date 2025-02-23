@@ -5,10 +5,6 @@ import (
 	"fmt"
 )
 
-func ToPointer[T any](value T) *T {
-	return &value
-}
-
 func GetAllToStructs[T any](docs []*firestore.DocumentSnapshot) ([]T, error) {
 	result := make([]T, len(docs))
 	for i, doc := range docs {
