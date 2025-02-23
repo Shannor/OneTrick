@@ -373,25 +373,29 @@ func BungieStatValueToUniqueStatValue(values *map[string]bungie.HistoricalStatsV
 	return &result
 }
 
-func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats) []api.WeaponInstanceMetrics {
+func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats) map[string]api.WeaponInstanceMetrics {
 	if values == nil {
 		return nil
 	}
-	result := make([]api.WeaponInstanceMetrics, 0)
+	result := make(map[string]api.WeaponInstanceMetrics)
 	for _, v := range *values {
+		if v.ReferenceId == nil {
+			continue
+		}
 		ref := int64(*v.ReferenceId)
 		r := api.WeaponInstanceMetrics{
 			ReferenceID: &ref,
 			Stats:       BungieStatValueToUniqueStatValue(v.Values),
 		}
-		result = append(result, r)
+		result[strconv.Itoa(int(*v.ReferenceId))] = r
 	}
 	return result
 }
 
 func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	if modeType == nil {
-		return "Missing"
+		slog.Warn("Activity Mode type is nil")
+		return "Unknown"
 	}
 	switch *modeType {
 	case bungie.CurrentActivityModeTypeControl:

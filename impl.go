@@ -138,12 +138,13 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 			l.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
-		_, err = SetAggregate(ctx, s, userID, characterID, &history, history.Period, *activity.Performance, &sessionID)
+		a, err := SetAggregate(ctx, s, userID, characterID, &history, history.Period, *activity.Performance, &sessionID)
 		if err != nil {
 			return nil, err
 		}
+		aggIDs = append(aggIDs, a.ID)
 	}
-
+	l.Info("Adding aggregate IDs to session", "aggIDs", aggIDs)
 	err = s.SessionService.AddAggregateIDs(ctx, sessionID, aggIDs)
 	if err != nil {
 		l.With("error", err.Error()).Error("Failed to add aggregate IDs to session")
@@ -217,12 +218,15 @@ func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequ
 }
 
 func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSessionAggregatesRequestObject) (api.GetSessionAggregatesResponseObject, error) {
+	l := slog.With("sessionID", request.SessionId)
 	ses, err := s.SessionService.Get(ctx, request.SessionId)
 	if err != nil {
+		l.With("error", err.Error()).Error("Failed to fetch session")
 		return nil, err
 	}
 	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
 	if err != nil {
+		l.With("error", err.Error()).Error("Failed to fetch aggregates")
 		return nil, err
 	}
 	uniqueIDS := make([]string, 0)
@@ -238,6 +242,7 @@ func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSession
 	}
 	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
 	if err != nil {
+		l.With("error", err.Error()).Error("Failed to fetch snapshots")
 		return nil, err
 	}
 	snapshotByID := make(map[string]api.CharacterSnapshot)

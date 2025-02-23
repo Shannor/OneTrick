@@ -34,7 +34,7 @@ type Service interface {
 	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
 	GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error)
 
-	FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons []api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
+	FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
 	LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink
 	EnrichInstancePerformance(snapshot *api.CharacterSnapshot, performance api.InstancePerformance) (*api.InstancePerformance, error)
 	GenerateSnapshot(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error)
@@ -216,7 +216,7 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 		mapping[component.ItemHash] = component.ItemProperties
 	}
 
-	results := make([]api.WeaponInstanceMetrics, 0)
+	results := make(map[string]api.WeaponInstanceMetrics)
 	for _, metric := range performance.Weapons {
 		result := api.WeaponInstanceMetrics{}
 		if metric.ReferenceID == nil {
@@ -229,7 +229,7 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 		if ok {
 			result.ItemProperties = &properties
 		}
-		results = append(results, result)
+		results[strconv.FormatInt(*metric.ReferenceID, 10)] = result
 	}
 	result.Weapons = results
 	return result, nil
@@ -283,7 +283,7 @@ func (s *service) GenerateSnapshot(ctx context.Context, userID, membershipID, ch
 	return &result, nil
 }
 
-func (s *service) FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons []api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
+func (s *service) FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
 
 	minTime := activityPeriod.Add(time.Duration(-12) * time.Hour)
 	// A game can last about 8 minutes over the starting time

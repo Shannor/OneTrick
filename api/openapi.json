@@ -1322,12 +1322,12 @@
             "$ref": "#/components/schemas/PlayerStats"
           },
           "weapons": {
-            "type": "array",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/WeaponInstanceMetrics"
+            },
             "x-oapi-codegen-extra-tags": {
               "firestore": "weapons"
-            },
-            "items": {
-              "$ref": "#/components/schemas/WeaponInstanceMetrics"
             }
           },
           "extra": {
