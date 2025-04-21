@@ -179,31 +179,32 @@ type ItemCategoryDisplay struct {
 }
 
 type ItemDefinition struct {
-	Hash               int64                 `json:"hash"`
-	Index              int                   `json:"index"`
-	DisplayProperties  ItemDisplayProperties `json:"displayProperties"`
-	Inventory          Inventory             `json:"inventory"`
-	Stats              ItemStats             `json:"stats"`
-	EquippingBlock     EquippingBlock        `json:"equippingBlock"`
-	TranslationBlock   TranslationBlock      `json:"translationBlock"`
-	Quality            Quality               `json:"quality"`
-	InvestmentStats    []InvestmentStat      `json:"investmentStats"`
-	Perks              []ItemPerk            `json:"perks"`
-	AllowActions       bool                  `json:"allowActions"`
-	NonTransferrable   bool                  `json:"nonTransferrable"`
-	ItemCategoryHashes []int64               `json:"itemCategoryHashes"`
-	SpecialItemType    int                   `json:"specialItemType"`
-	ItemType           int                   `json:"itemType"`
-	ItemSubType        int                   `json:"itemSubType"`
-	ClassType          int                   `json:"classType"`
-	BreakerType        int                   `json:"breakerType"`
-	Equippable         bool                  `json:"equippable"`
-	DefaultDamageType  int                   `json:"defaultDamageType"`
-	IsWrapper          bool                  `json:"isWrapper"`
-	TraitIds           []string              `json:"traitIds"`
-	TraitHashes        []int64               `json:"traitHashes"`
-	Redacted           bool                  `json:"redacted"`
-	Blacklisted        bool                  `json:"blacklisted"`
+	Hash                       int64                 `json:"hash"`
+	Index                      int                   `json:"index"`
+	DisplayProperties          ItemDisplayProperties `json:"displayProperties"`
+	Inventory                  Inventory             `json:"inventory"`
+	Stats                      ItemStats             `json:"stats"`
+	EquippingBlock             EquippingBlock        `json:"equippingBlock"`
+	TranslationBlock           TranslationBlock      `json:"translationBlock"`
+	Quality                    Quality               `json:"quality"`
+	InvestmentStats            []InvestmentStat      `json:"investmentStats"`
+	Perks                      []ItemPerk            `json:"perks"`
+	AllowActions               bool                  `json:"allowActions"`
+	NonTransferrable           bool                  `json:"nonTransferrable"`
+	ItemTypeAndTierDisplayName string                `json:"itemTypeAndTierDisplayName"`
+	ItemCategoryHashes         []int64               `json:"itemCategoryHashes"`
+	SpecialItemType            int                   `json:"specialItemType"`
+	ItemType                   int                   `json:"itemType"`
+	ItemSubType                int                   `json:"itemSubType"`
+	ClassType                  int                   `json:"classType"`
+	BreakerType                int                   `json:"breakerType"`
+	Equippable                 bool                  `json:"equippable"`
+	DefaultDamageType          int                   `json:"defaultDamageType"`
+	IsWrapper                  bool                  `json:"isWrapper"`
+	TraitIds                   []string              `json:"traitIds"`
+	TraitHashes                []int64               `json:"traitHashes"`
+	Redacted                   bool                  `json:"redacted"`
+	Blacklisted                bool                  `json:"blacklisted"`
 }
 
 type ItemDisplayProperties struct {

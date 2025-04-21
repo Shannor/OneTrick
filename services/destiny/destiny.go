@@ -245,7 +245,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		}
 		// TODO: Only getting it for one character. Change for everyone
 		if *entry.CharacterId == characterID {
-			performance = CarnageEntryToInstancePerformance(&entry)
+			performance = CarnageEntryToInstancePerformance(&entry, a.Manifest)
 			personalStats = entry.Values
 			break
 		}

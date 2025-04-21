@@ -418,6 +418,12 @@
                     },
                     "aggregate": {
                       "$ref": "#/components/schemas/Aggregate"
+                    },
+                    "postGameEntries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
                     }
                   }
                 }
@@ -1294,6 +1300,9 @@
               "firestore": "referenceId"
             }
           },
+          "display": {
+            "$ref": "#/components/schemas/Display"
+          },
           "properties": {
             "$ref": "#/components/schemas/ItemProperties"
           },
@@ -1304,6 +1313,47 @@
             "type": "object",
             "additionalProperties": {
               "$ref": "#/components/schemas/UniqueStatValue"
+            }
+          }
+        }
+      },
+      "Display": {
+        "x-oapi-codegen-extra-tags": {
+          "firestore": "display"
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "hasIcon"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-go-name": "name",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "name"
+            }
+          },
+          "hasIcon": {
+            "type": "boolean",
+            "x-go-name": "hasIcon",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "hasIcon"
+            }
+          },
+          "description": {
+            "type": "string",
+            "x-go-name": "description",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "description"
+            }
+          },
+          "icon": {
+            "type": "string",
+            "x-go-name": "icon",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "icon"
             }
           }
         }
@@ -1963,6 +2013,29 @@
             "x-oapi-codegen-extra-tags": {
               "firestore": "timePlayed"
             }
+          }
+        }
+      },
+      "PostGameEntry": {
+        "type": "object",
+        "x-oapi-codegen-extra-tags": {
+          "firestore": "postGameEntry"
+        },
+        "properties": {
+          "characterId": {
+            "type": "string",
+            "x-go-name": "characterID",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "characterId"
+            }
+          },
+          "standing": {
+            "type": "integer",
+            "format": "int32",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "standing"
+            },
+
           }
         }
       },
