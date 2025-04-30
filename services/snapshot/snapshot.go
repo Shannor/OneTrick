@@ -371,7 +371,6 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 	} else if bestFitScore >= 2 {
 		level = api.MediumConfidenceLevel
 	}
-	l.Debug("best fit found", "score", bestFitScore, "level", level)
 
 	link := api.SnapshotLink{
 		CharacterID:      characterID,
@@ -381,7 +380,6 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 		SnapshotID:       &bestFit.ParentID,
 	}
 
-	l.Debug("generated link", "link", link, "parentID", bestFit.ParentID)
 	snap, err := s.Get(ctx, bestFit.ParentID)
 	if err != nil {
 		l.Error("failed to get snapshot", "error", err.Error())

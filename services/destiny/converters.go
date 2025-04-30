@@ -9,8 +9,13 @@ import (
 	"strconv"
 )
 
-const baseBungieURL = "https://www.bungie.net"
+func setIconBase(value *string) string {
+	if value == nil {
+		return ""
+	}
 
+	return fmt.Sprintf("%s%s", "https://www.bungie.net", *value)
+}
 func TransformItemToDetails(item *bungie.DestinyItem, manifest Manifest) *api.ItemProperties {
 	if item == nil {
 		return nil
@@ -46,8 +51,8 @@ func TransformCharacter(item *bungie.CharacterComponent, manifest Manifest) api.
 	title := manifest.RecordDefinition[strconv.Itoa(int(*item.TitleRecordHash))]
 	return api.Character{
 		Class:               class.DisplayProperties.Name,
-		EmblemBackgroundURL: fmt.Sprintf("%s%s", baseBungieURL, *item.EmblemBackgroundPath),
-		EmblemURL:           fmt.Sprintf("%s%s", baseBungieURL, *item.EmblemPath),
+		EmblemBackgroundURL: setIconBase(item.EmblemBackgroundPath),
+		EmblemURL:           setIconBase(item.EmblemPath),
 		Id:                  *item.CharacterId,
 		Light:               int64(*item.Light),
 		Race:                race.DisplayProperties.Name,
@@ -103,7 +108,7 @@ func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
 		}
 		perks = append(perks, api.Perk{
 			Hash:        int64(*p.PerkHash),
-			IconPath:    p.IconPath,
+			IconPath:    ptr.Of(setIconBase(p.IconPath)),
 			Name:        perk.DisplayProperties.Name,
 			Description: &perk.DisplayProperties.Description,
 		})
@@ -124,6 +129,7 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 			continue
 		}
 
+		// TODO: Enhance the amount of data we return from a socket.
 		hash := int(*s.PlugHash)
 		sockets = append(sockets, api.Socket{
 			IsEnabled:   s.IsEnabled,
@@ -131,7 +137,7 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 			PlugHash:    hash,
 			Name:        socket.DisplayProperties.Name,
 			Description: socket.DisplayProperties.Description,
-			Icon:        &socket.DisplayProperties.Icon,
+			Icon:        ptr.Of(setIconBase(&socket.DisplayProperties.Icon)),
 		})
 	}
 	return &sockets
@@ -238,8 +244,8 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest
 		Location:     definition.DisplayProperties.Name,
 		Description:  definition.DisplayProperties.Description,
 		Activity:     activity.DisplayProperties.Name,
-		ImageURL:     fmt.Sprintf("%s%s", baseBungieURL, definition.PgcrImage),
-		ActivityIcon: fmt.Sprintf("%s%s", baseBungieURL, activityMode.DisplayProperties.Icon),
+		ImageURL:     setIconBase(&definition.PgcrImage),
+		ActivityIcon: setIconBase(&activityMode.DisplayProperties.Icon),
 	}
 }
 
@@ -308,8 +314,8 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		Location:       definition.DisplayProperties.Name,
 		Description:    definition.DisplayProperties.Description,
 		Activity:       activity.DisplayProperties.Name,
-		ImageURL:       fmt.Sprintf("%s%s", baseBungieURL, definition.PgcrImage),
-		ActivityIcon:   fmt.Sprintf("%s%s", baseBungieURL, activityMode.DisplayProperties.Icon),
+		ImageURL:       setIconBase(&definition.PgcrImage),
+		ActivityIcon:   setIconBase(&activityMode.DisplayProperties.Icon),
 		PersonalValues: ToPlayerStats(period.Values),
 		Period:         *period.Period,
 	}
@@ -343,7 +349,7 @@ func ToPlayerStats(values *map[string]bungie.HistoricalStatsValue) *api.PlayerSt
 	return personalValues
 }
 
-func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry) *api.InstancePerformance {
+func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry, manifest *Manifest) *api.InstancePerformance {
 	if entry == nil {
 		return nil
 	}
@@ -351,7 +357,7 @@ func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry)
 
 	result.Extra = BungieStatValueToUniqueStatValue(entry.Extended.Values)
 	result.PlayerStats = *ToPlayerStats(entry.Values)
-	result.Weapons = WeaponsToInstanceWeapons(entry.Extended.Weapons)
+	result.Weapons = WeaponsToInstanceWeapons(entry.Extended.Weapons, manifest)
 	return result
 }
 
@@ -373,7 +379,7 @@ func BungieStatValueToUniqueStatValue(values *map[string]bungie.HistoricalStatsV
 	return &result
 }
 
-func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats) map[string]api.WeaponInstanceMetrics {
+func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, manifest *Manifest) map[string]api.WeaponInstanceMetrics {
 	if values == nil {
 		return nil
 	}
@@ -387,6 +393,16 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats) map[string
 			ReferenceID: &ref,
 			Stats:       BungieStatValueToUniqueStatValue(v.Values),
 		}
+		def, ok := manifest.InventoryItemDefinition[strconv.Itoa(int(*v.ReferenceId))]
+		if ok {
+			r.Display = &api.Display{
+				Description: def.ItemTypeAndTierDisplayName,
+				HasIcon:     def.DisplayProperties.HasIcon,
+				Icon:        ptr.Of(setIconBase(&def.DisplayProperties.Icon)),
+				Name:        def.DisplayProperties.Name,
+			}
+		}
+
 		result[strconv.Itoa(int(*v.ReferenceId))] = r
 	}
 	return result

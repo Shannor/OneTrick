@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/fatih/structs"
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
@@ -579,19 +580,25 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		}
 	}
 
+	entries := make([]map[string]any, 0)
+	for _, entry := range activityDetails.PostGameEntries {
+		entries = append(entries, structs.Map(entry))
+	}
 	if !characterInGame {
 		return api.GetActivity200JSONResponse{
-			Activity:  *activityDetails.Activity,
-			Teams:     activityDetails.Teams,
-			Aggregate: agg,
+			Activity:        *activityDetails.Activity,
+			Teams:           activityDetails.Teams,
+			Aggregate:       agg,
+			PostGameEntries: &entries,
 		}, nil
 	}
 
 	if s.SnapshotService.LookupLink(agg, characterID) != nil {
 		return api.GetActivity200JSONResponse{
-			Activity:  *activityDetails.Activity,
-			Teams:     activityDetails.Teams,
-			Aggregate: agg,
+			Activity:        *activityDetails.Activity,
+			Teams:           activityDetails.Teams,
+			Aggregate:       agg,
+			PostGameEntries: &entries,
 		}, nil
 	}
 
@@ -603,8 +610,9 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	}
 
 	return api.GetActivity200JSONResponse{
-		Activity:  *activityDetails.Activity,
-		Teams:     activityDetails.Teams,
-		Aggregate: a,
+		Activity:        *activityDetails.Activity,
+		Teams:           activityDetails.Teams,
+		Aggregate:       a,
+		PostGameEntries: &entries,
 	}, nil
 }
