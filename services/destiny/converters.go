@@ -108,7 +108,7 @@ func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
 		}
 		perks = append(perks, api.Perk{
 			Hash:        int64(*p.PerkHash),
-			IconPath:    p.IconPath,
+			IconPath:    ptr.Of(setIconBase(p.IconPath)),
 			Name:        perk.DisplayProperties.Name,
 			Description: &perk.DisplayProperties.Description,
 		})
@@ -129,6 +129,7 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 			continue
 		}
 
+		// TODO: Enhance the amount of data we return from a socket.
 		hash := int(*s.PlugHash)
 		sockets = append(sockets, api.Socket{
 			IsEnabled:   s.IsEnabled,
@@ -136,7 +137,7 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 			PlugHash:    hash,
 			Name:        socket.DisplayProperties.Name,
 			Description: socket.DisplayProperties.Description,
-			Icon:        &socket.DisplayProperties.Icon,
+			Icon:        ptr.Of(setIconBase(&socket.DisplayProperties.Icon)),
 		})
 	}
 	return &sockets
