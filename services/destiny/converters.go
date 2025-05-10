@@ -129,15 +129,16 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 			continue
 		}
 
-		// TODO: Enhance the amount of data we return from a socket.
 		hash := int(*s.PlugHash)
 		sockets = append(sockets, api.Socket{
-			IsEnabled:   s.IsEnabled,
-			IsVisible:   s.IsVisible,
-			PlugHash:    hash,
-			Name:        socket.DisplayProperties.Name,
-			Description: socket.DisplayProperties.Description,
-			Icon:        ptr.Of(setIconBase(&socket.DisplayProperties.Icon)),
+			IsEnabled:                 s.IsEnabled,
+			IsVisible:                 s.IsVisible,
+			PlugHash:                  hash,
+			Name:                      socket.DisplayProperties.Name,
+			Description:               socket.DisplayProperties.Description,
+			ItemTypeDisplayName:       ptr.Of(socket.ItemTypeDisplayName),
+			ItemTypeTieredDisplayName: ptr.Of(socket.ItemTypeAndTierDisplayName),
+			Icon:                      ptr.Of(setIconBase(&socket.DisplayProperties.Icon)),
 		})
 	}
 	return &sockets
@@ -389,6 +390,9 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, manifest *
 			continue
 		}
 		ref := int64(*v.ReferenceId)
+		if ref == 0 {
+			continue
+		}
 		r := api.WeaponInstanceMetrics{
 			ReferenceID: &ref,
 			Stats:       BungieStatValueToUniqueStatValue(v.Values),
@@ -469,4 +473,29 @@ func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	default:
 		return "Unknown"
 	}
+}
+
+func generateClassStats(manifest *Manifest, stats map[string]int32) map[string]api.ClassStat {
+	if manifest == nil {
+		return nil
+	}
+	results := make(map[string]api.ClassStat)
+	for key, value := range stats {
+		info, ok := manifest.StatDefinition[key]
+		if !ok {
+			slog.Warn("Missing stat", "statKey", key)
+			continue
+		}
+		i := api.ClassStat{
+			Name:            info.DisplayProperties.Name,
+			Icon:            info.DisplayProperties.Name,
+			HasIcon:         info.DisplayProperties.HasIcon,
+			Description:     info.DisplayProperties.Description,
+			StatCategory:    info.StatCategory,
+			AggregationType: info.AggregationType,
+			Value:           value,
+		}
+		results[key] = i
+	}
+	return results
 }

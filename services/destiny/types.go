@@ -190,6 +190,7 @@ type ItemDefinition struct {
 	InvestmentStats            []InvestmentStat      `json:"investmentStats"`
 	Perks                      []ItemPerk            `json:"perks"`
 	AllowActions               bool                  `json:"allowActions"`
+	ItemTypeDisplayName        string                `json:"itemTypeDisplayName"`
 	NonTransferrable           bool                  `json:"nonTransferrable"`
 	ItemTypeAndTierDisplayName string                `json:"itemTypeAndTierDisplayName"`
 	ItemCategoryHashes         []int64               `json:"itemCategoryHashes"`
@@ -508,3 +509,62 @@ type EnrichedActivity struct {
 	Period          *time.Time                          `json:"period"`
 	PostGameEntries []bungie.PostGameCarnageReportEntry `json:"postGameEntries"`
 }
+
+type ManifestResponse struct {
+	Response struct {
+		Version                  string `json:"version"`
+		MobileAssetContentPath   string `json:"mobileAssetContentPath"`
+		MobileGearAssetDataBases []struct {
+			Version int    `json:"version"`
+			Path    string `json:"path"`
+		} `json:"mobileGearAssetDataBases"`
+		MobileWorldContentPaths        ContentPaths                 `json:"mobileWorldContentPaths"`
+		JsonWorldContentPaths          ContentPaths                 `json:"jsonWorldContentPaths"`
+		JsonWorldComponentContentPaths map[string]map[string]string `json:"jsonWorldComponentContentPaths"`
+	} `json:"Response"`
+	ErrorCode       int               `json:"ErrorCode"`
+	ThrottleSeconds int               `json:"ThrottleSeconds"`
+	ErrorStatus     string            `json:"ErrorStatus"`
+	Message         string            `json:"Message"`
+	MessageData     map[string]string `json:"MessageData"`
+}
+
+type ContentPaths struct {
+	EN string `json:"en"`
+	FR string `json:"fr"`
+}
+
+type WeaponBucket = uint32
+
+const (
+	KineticBucket WeaponBucket = 1498876634
+	EnergyBucket  WeaponBucket = 2465295065
+	PowerBucket   WeaponBucket = 953998645
+)
+
+const Kinetic = 1498876634
+const Energy = 2465295065
+const Power = 953998645
+const SubClass = 3284755031
+
+type ArmorBucket = uint32
+
+const (
+	HelmetArmor    ArmorBucket = 3448274439
+	GauntletsArmor ArmorBucket = 3551918588
+	ChestArmor     ArmorBucket = 14239492
+	LegArmor       ArmorBucket = 20886954
+	ClassArmor     ArmorBucket = 1585787867
+)
+
+type RequestInfo = int32
+
+const (
+	Characters          RequestInfo = 200
+	CharactersEquipment RequestInfo = 205
+	ItemInstanceCode    RequestInfo = 300
+	ItemPerksCode       RequestInfo = 302
+	ItemStatsCode       RequestInfo = 304
+	ItemSocketsCode     RequestInfo = 305
+	ItemCommonDataCode  RequestInfo = 307
+)

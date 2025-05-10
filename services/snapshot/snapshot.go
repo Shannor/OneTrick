@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/generator"
+	"oneTrick/ptr"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"oneTrick/utils"
@@ -247,7 +248,7 @@ func (s *service) GenerateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("invalid membership id: %w", err)
 	}
 
-	items, timestamp, err := s.D2Service.GetCurrentInventory(ctx, memID, membershipType, characterID)
+	loadout, stats, timestamp, err := s.D2Service.GetLoadout(ctx, memID, membershipType, characterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profile data: %w", err)
 	}
@@ -255,32 +256,12 @@ func (s *service) GenerateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("failed to fetch timestamp for profile data: %w", err)
 	}
 
-	result := api.CharacterSnapshot{
+	return &api.CharacterSnapshot{
 		UserID:      userID,
 		CharacterID: characterID,
-	}
-
-	itemSnapshots := make(api.Loadout)
-	for _, item := range items {
-		if item.ItemInstanceId == nil {
-			return nil, fmt.Errorf("missing instance id for item hash: %d", item.ItemHash)
-		}
-		snap := api.ItemSnapshot{
-			InstanceID: *item.ItemInstanceId,
-		}
-		details, err := s.D2Service.GetWeaponDetails(ctx, membershipID, membershipType, *item.ItemInstanceId)
-		if err != nil {
-			return nil, fmt.Errorf("couldn't find an item with item hash %d", item.ItemHash)
-		}
-		snap.Name = details.BaseInfo.Name
-		snap.ItemHash = details.BaseInfo.ItemHash
-		snap.ItemProperties = *details
-		snap.BucketHash = &details.BaseInfo.BucketHash
-		itemSnapshots[strconv.FormatInt(snap.ItemProperties.BaseInfo.BucketHash, 10)] = snap
-	}
-
-	result.Loadout = itemSnapshots
-	return &result, nil
+		Stats:       ptr.Of(stats),
+		Loadout:     loadout,
+	}, nil
 }
 
 func (s *service) FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {

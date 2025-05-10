@@ -44,8 +44,9 @@ func (s service) Start(ctx context.Context, userID string, characterID string) (
 		UserID:       userID,
 		StartedAt:    time.Now(),
 		CharacterID:  characterID,
-		Name:         ptr.Of(generator.D2Name()),
+		Name:         ptr.Of(generator.SessionName()),
 		AggregateIDs: make([]string, 0),
+		Status:       ptr.Of(api.SessionPending),
 	}
 	ref := s.db.Collection(collection).NewDoc()
 	result.ID = ref.ID
@@ -142,8 +143,7 @@ func (s service) Complete(ctx context.Context, ID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
-
-	if session.CompletedAt != nil {
+	if session.CompletedAt == nil {
 		_, err := ref.Update(ctx, []firestore.Update{
 			{
 				Path:  "completedAt",

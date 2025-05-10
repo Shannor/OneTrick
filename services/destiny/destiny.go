@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/clients/gcp"
 	"oneTrick/envvars"
 	"oneTrick/ptr"
 	"os"
@@ -20,15 +20,10 @@ import (
 	"time"
 )
 
-const Kinetic = 1498876634
-const Energy = 2465295065
-const Power = 953998645
-const SubClass = 3284755031
-
 type Service interface {
-	GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error)
+	GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error)
 	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
-	GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
+	GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
@@ -41,6 +36,8 @@ type service struct {
 	Manifest *Manifest
 	DB       *firestore.Client
 }
+
+const LastManifestVersion = "233040.25.04.12.2000-3-bnet.59314"
 
 func NewService(apiKey string, firestore *firestore.Client) Service {
 	hc := http.Client{}
@@ -61,8 +58,10 @@ func NewService(apiKey string, firestore *firestore.Client) Service {
 	manifest, err := getManifest()
 	if err != nil {
 		slog.With("error", err.Error()).Error("Failed to get manifest")
+
+	} else {
+		slog.Info("Manifest loaded")
 	}
-	slog.Info("Manifest loaded")
 	return &service{
 		Client:   cli,
 		Manifest: manifest,
@@ -75,6 +74,7 @@ const manifestLocation = "./manifest.json"
 const destinyBucket = "destiny"
 const objectName = "manifest.json"
 
+// TODO: Make a cron or job to update the manifest in Production every few days
 func getManifest() (*Manifest, error) {
 	var (
 		manifest = &Manifest{}
@@ -110,20 +110,42 @@ func getManifest() (*Manifest, error) {
 		return manifest, nil
 	}
 
-	slog.Info("Attempting to set manifest.json file for dev environment")
-	stat, err := os.Stat(manifestLocation)
+	slog.Info("Check if manifest exists")
+	_, err := os.Stat(manifestLocation)
+	// Need to download the file
 	if err != nil {
-		slog.With("error", err.Error()).Error("File does not exist at specified location")
-		return nil, err
-	}
-	if !stat.IsDir() {
-		slog.Info("File exists at specified location")
-	} else {
-		err := gcp.DownloadFile(destinyBucket, objectName, manifestLocation)
+		manifestResponse, err := DownloadNewManifest(context.Background())
 		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to download manifest.json file")
+			slog.With("error", err).Error("failed download")
 			return nil, err
 		}
+		path := manifestResponse.Response.JsonWorldContentPaths.EN
+		// Check if we have a path for the selected language
+		// Construct the full URL for the manifest JSON
+		manifestURL := fmt.Sprintf("https://www.bungie.net%s", path)
+		// Determine where to save the file
+		var destPath string
+		env := envvars.GetEvn()
+		if env.Environment == "production" {
+			destPath = mntLocation
+		} else {
+			destPath = manifestLocation
+		}
+
+		// Download the manifest file
+		err = DownloadJSONFile(context.Background(), manifestURL, destPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download manifest: %w", err)
+		}
+
+		slog.Info(
+			"Successfully updated manifest",
+			"version", manifestResponse.Response.Version,
+			"language", "en",
+			"path", destPath,
+		)
+
+		return nil, err
 	}
 	manifestFile, err := os.Open(manifestLocation)
 	if err != nil {
@@ -144,6 +166,108 @@ func getManifest() (*Manifest, error) {
 	return manifest, nil
 }
 
+// DownloadJSONFile downloads a JSON file from the specified URL and saves it to the given destination path.
+// It returns an error if any part of the process fails.
+func DownloadJSONFile(ctx context.Context, url string, destPath string) error {
+	// Create a request with context
+	slog.Info("Starting download")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add headers that might be necessary for the request
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("User-Agent", "oneTrick-backend")
+
+	// Execute the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad response status: %s (code: %d)", resp.Status, resp.StatusCode)
+	}
+
+	// Create the destination file
+	out, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file: %w", err)
+	}
+	defer func() {
+		closeErr := out.Close()
+		if err == nil && closeErr != nil {
+			err = fmt.Errorf("failed to close destination file: %w", closeErr)
+		}
+	}()
+
+	// Copy the response body to the file
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write data to file: %w", err)
+	}
+
+	// Verify JSON format by parsing it
+	out.Seek(0, 0) // Reset file pointer to beginning
+	var jsonObj interface{}
+	jsonErr := json.NewDecoder(out).Decode(&jsonObj)
+	if jsonErr != nil {
+		// If the file exists but isn't valid JSON, we should remove it
+		out.Close()
+		os.Remove(destPath)
+		return fmt.Errorf("downloaded file is not valid JSON: %w", jsonErr)
+	}
+
+	slog.Info("Successfully downloaded and saved JSON file",
+		"url", url,
+		"destination", destPath,
+		"size", resp.ContentLength)
+
+	return nil
+}
+func DownloadNewManifest(ctx context.Context) (*ManifestResponse, error) {
+	// Create a request to the Bungie.net manifest endpoint
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.bungie.net/Platform/Destiny2/Manifest/", nil)
+	if err != nil {
+		slog.With("error", err.Error()).Error("Failed to create manifest request")
+		return nil, err
+	}
+
+	// Add required headers
+	//req.Header.Add("X-API-KEY", os.Getenv("BUNGIE_API_KEY"))
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("User-Agent", "oneTrick")
+
+	// Make the HTTP request
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		slog.With("error", err.Error()).Error("Failed to get manifest")
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Check for success
+	if resp.StatusCode != http.StatusOK {
+		slog.With("status", resp.Status, "status code", resp.StatusCode).Error("Failed to get manifest")
+		return nil, fmt.Errorf("failed to get manifest, status code: %d", resp.StatusCode)
+	}
+
+	var manifestResponse ManifestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&manifestResponse); err != nil {
+		slog.With("error", err.Error()).Error("Failed to unmarshal manifest response")
+		return nil, err
+	}
+
+	slog.Info("Successfully downloaded manifest", "version", manifestResponse.Response.Version)
+
+	return &manifestResponse, nil
+}
 func (a *service) GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error) {
 	return getActivity(a, ctx, membershipID, membershipType, characterID, count, int64(bungie.CurrentActivityModeTypePvPQuickplay), page)
 }
@@ -272,15 +396,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 	return &result, nil
 }
 
-const (
-	ItemInstanceCode   = 300
-	ItemPerksCode      = 302
-	ItemStatsCode      = 304
-	ItemSocketsCode    = 305
-	ItemCommonDataCode = 307
-)
-
-func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error) {
+func (a *service) GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error) {
 	components := []int32{ItemPerksCode, ItemStatsCode, ItemSocketsCode, ItemCommonDataCode, ItemInstanceCode}
 	membershipIdInt64, err := strconv.ParseInt(membershipID, 10, 64)
 	if err != nil {
@@ -315,54 +431,104 @@ func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, mem
 	}
 	return TransformItemToDetails(response.JSON200.DestinyItem, *a.Manifest), nil
 }
-func (a *service) GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error) {
+
+func (a *service) GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error) {
 	var components []int32
-	components = append(components, 205)
+	components = append(components, CharactersEquipment, Characters)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
 	test, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// TODO: Update snapshot to include the guns information as it is now, since mods and perks could change on the same gun.
 
 	if test.JSON200 == nil {
-		return nil, nil, fmt.Errorf("no response found")
+		return nil, nil, nil, fmt.Errorf("no response found")
 	}
 
-	// TODO: Update this function to take a snapshot for all characters at once
 	timeStamp := test.JSON200.Response.ResponseMintedTimestamp
-	var items []bungie.ItemComponent
+
+	// TODO: Update this function to take a snapshot for all characters at once
+	results := make([]bungie.ItemComponent, 0)
 	if test.JSON200.Response.CharacterEquipment.Data != nil {
 		equipment := *test.JSON200.Response.CharacterEquipment.Data
 		for ID, equ := range equipment {
 			if characterID == ID {
-				items = *equ.Items
+				if equ.Items == nil {
+					continue
+				}
+				buckets := map[uint32]bool{
+					HelmetArmor:    true,
+					GauntletsArmor: true,
+					ChestArmor:     true,
+					LegArmor:       true,
+					ClassArmor:     true,
+					KineticBucket:  true,
+					EnergyBucket:   true,
+					PowerBucket:    true,
+					SubClass:       true,
+				}
+
+				for _, item := range *equ.Items {
+					if item.BucketHash == nil {
+						continue
+					}
+					if buckets[*item.BucketHash] {
+						results = append(results, item)
+					}
+				}
+
 			}
 		}
 
 	}
-	results := make([]bungie.ItemComponent, 0)
-	for _, item := range items {
-		switch *item.BucketHash {
-		case Kinetic:
-			results = append(results, item)
-		case Energy:
-			results = append(results, item)
-		case Power:
-			results = append(results, item)
-		case SubClass:
-			results = append(results, item)
+
+	stats := make(map[string]api.ClassStat)
+	if test.JSON200.Response.Characters.Data != nil {
+		characters := *test.JSON200.Response.Characters.Data
+		for ID, character := range characters {
+			if characterID == ID && character.Stats != nil {
+				stats = generateClassStats(a.Manifest, *character.Stats)
+			}
 		}
+
 	}
-	return results, timeStamp, nil
+	loadout := a.buildLoadout(ctx, membershipID, membershipType, results)
+	return loadout, stats, timeStamp, nil
+}
+
+func (a *service) buildLoadout(ctx context.Context, membershipID int64, membershipType int64, items []bungie.ItemComponent) api.Loadout {
+
+	loadout := make(api.Loadout)
+	for _, item := range items {
+		if item.ItemInstanceId == nil {
+			slog.Warn("no instance id found", "membershipId", membershipID)
+			continue
+		}
+		snap := api.ItemSnapshot{
+			InstanceID: *item.ItemInstanceId,
+		}
+		details, err := a.GetItemDetails(ctx, strconv.FormatInt(membershipID, 10), membershipType, *item.ItemInstanceId)
+		if err != nil {
+			slog.With("error", err.Error()).Error("failed to get item details")
+			continue
+		}
+		snap.Name = details.BaseInfo.Name
+		snap.ItemHash = details.BaseInfo.ItemHash
+		snap.ItemProperties = *details
+		snap.BucketHash = &details.BaseInfo.BucketHash
+		loadout[strconv.FormatInt(snap.ItemProperties.BaseInfo.BucketHash, 10)] = snap
+	}
+
+	return loadout
 }
 
 func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
 	var components []int32
-	components = append(components, 200)
+	components = append(components, Characters)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
