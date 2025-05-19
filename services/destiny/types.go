@@ -529,9 +529,18 @@ type ManifestResponse struct {
 	MessageData     map[string]string `json:"MessageData"`
 }
 
+type ManifestUpdate struct {
+	Version      string
+	ManifestURL  string
+	ShouldUpdate bool
+}
 type ContentPaths struct {
 	EN string `json:"en"`
 	FR string `json:"fr"`
+}
+
+type Configuration struct {
+	ManifestVersion string `json:"manifestVersion" firebase:"manifestVersion"`
 }
 
 type WeaponBucket = uint32
@@ -540,6 +549,15 @@ const (
 	KineticBucket WeaponBucket = 1498876634
 	EnergyBucket  WeaponBucket = 2465295065
 	PowerBucket   WeaponBucket = 953998645
+)
+
+const (
+	ConfigurationCollection = "configurations"
+	DestinyDocument         = "destiny"
+	ManifestObjectName      = "manifest.json"
+	DestinyBucket           = "destiny"
+	mntLocation             = "mnt/destiny/manifest.json"
+	LocalManifestLocation   = "./manifest.json"
 )
 
 const Kinetic = 1498876634

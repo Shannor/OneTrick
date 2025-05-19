@@ -7,7 +7,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-resty/resty/v2"
 	"github.com/oapi-codegen/gin-middleware"
-	"log"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
@@ -24,6 +25,7 @@ import (
 )
 
 func main() {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
 	env := envvars.GetEvn()
 	if env.Environment != "production" {
@@ -42,9 +44,17 @@ func main() {
 		}),
 	)
 	firestore := gcp.CreateFirestore(context.Background())
+
+	manifestService := destiny.NewManifestService(firestore, env.Environment)
+	err = manifestService.Init()
+	if err != nil {
+		log.Fatal().Err(err).Msg("need manifest to start the service")
+		return
+	}
+
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
-	destinyService := destiny.NewService(env.ApiKey, firestore)
+	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
 	userService := user.NewUserService(firestore)
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore)
@@ -56,13 +66,14 @@ func main() {
 		snapshotService,
 		aggregateService,
 		sessionService,
+		manifestService,
 	)
 
 	defer firestore.Close()
 	// Load OpenAPI spec file
 	swagger, err := api.GetSwagger()
 	if err != nil {
-		slog.Error("failed to load swagger spec file")
+		log.Error().Err(err).Msg("failed to load swagger spec file")
 		return
 	}
 	// Clear out the servers array in the swagger spec, that skips validating
@@ -94,6 +105,9 @@ func main() {
 		Addr:    "0.0.0.0:8080",
 	}
 
-	slog.Info("Starting HTTP server on port 8080")
-	log.Fatal(s.ListenAndServe())
+	log.Info().Msg("Starting HTTP server on port 8080")
+	err = s.ListenAndServe()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Server crashed")
+	}
 }

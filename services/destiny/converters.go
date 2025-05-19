@@ -9,7 +9,7 @@ import (
 	"strconv"
 )
 
-func setIconBase(value *string) string {
+func setBaseBungieURL(value *string) string {
 	if value == nil {
 		return ""
 	}
@@ -51,8 +51,8 @@ func TransformCharacter(item *bungie.CharacterComponent, manifest Manifest) api.
 	title := manifest.RecordDefinition[strconv.Itoa(int(*item.TitleRecordHash))]
 	return api.Character{
 		Class:               class.DisplayProperties.Name,
-		EmblemBackgroundURL: setIconBase(item.EmblemBackgroundPath),
-		EmblemURL:           setIconBase(item.EmblemPath),
+		EmblemBackgroundURL: setBaseBungieURL(item.EmblemBackgroundPath),
+		EmblemURL:           setBaseBungieURL(item.EmblemPath),
 		Id:                  *item.CharacterId,
 		Light:               int64(*item.Light),
 		Race:                race.DisplayProperties.Name,
@@ -108,7 +108,7 @@ func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
 		}
 		perks = append(perks, api.Perk{
 			Hash:        int64(*p.PerkHash),
-			IconPath:    ptr.Of(setIconBase(p.IconPath)),
+			IconPath:    ptr.Of(setBaseBungieURL(p.IconPath)),
 			Name:        perk.DisplayProperties.Name,
 			Description: &perk.DisplayProperties.Description,
 		})
@@ -138,7 +138,7 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 			Description:               socket.DisplayProperties.Description,
 			ItemTypeDisplayName:       ptr.Of(socket.ItemTypeDisplayName),
 			ItemTypeTieredDisplayName: ptr.Of(socket.ItemTypeAndTierDisplayName),
-			Icon:                      ptr.Of(setIconBase(&socket.DisplayProperties.Icon)),
+			Icon:                      ptr.Of(setBaseBungieURL(&socket.DisplayProperties.Icon)),
 		})
 	}
 	return &sockets
@@ -245,8 +245,8 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest
 		Location:     definition.DisplayProperties.Name,
 		Description:  definition.DisplayProperties.Description,
 		Activity:     activity.DisplayProperties.Name,
-		ImageURL:     setIconBase(&definition.PgcrImage),
-		ActivityIcon: setIconBase(&activityMode.DisplayProperties.Icon),
+		ImageURL:     setBaseBungieURL(&definition.PgcrImage),
+		ActivityIcon: setBaseBungieURL(&activityMode.DisplayProperties.Icon),
 	}
 }
 
@@ -315,8 +315,8 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		Location:       definition.DisplayProperties.Name,
 		Description:    definition.DisplayProperties.Description,
 		Activity:       activity.DisplayProperties.Name,
-		ImageURL:       setIconBase(&definition.PgcrImage),
-		ActivityIcon:   setIconBase(&activityMode.DisplayProperties.Icon),
+		ImageURL:       setBaseBungieURL(&definition.PgcrImage),
+		ActivityIcon:   setBaseBungieURL(&activityMode.DisplayProperties.Icon),
 		PersonalValues: ToPlayerStats(period.Values),
 		Period:         *period.Period,
 	}
@@ -402,7 +402,7 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, manifest *
 			r.Display = &api.Display{
 				Description: def.ItemTypeAndTierDisplayName,
 				HasIcon:     def.DisplayProperties.HasIcon,
-				Icon:        ptr.Of(setIconBase(&def.DisplayProperties.Icon)),
+				Icon:        ptr.Of(setBaseBungieURL(&def.DisplayProperties.Icon)),
 				Name:        def.DisplayProperties.Name,
 			}
 		}

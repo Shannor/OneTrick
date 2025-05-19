@@ -603,6 +603,9 @@ type ServerInterface interface {
 	// (POST /login)
 	Login(c *gin.Context)
 
+	// (POST /manifest)
+	UpdateManifest(c *gin.Context)
+
 	// (GET /ping)
 	GetPing(c *gin.Context)
 
@@ -904,6 +907,19 @@ func (siw *ServerInterfaceWrapper) Login(c *gin.Context) {
 	}
 
 	siw.Handler.Login(c)
+}
+
+// UpdateManifest operation middleware
+func (siw *ServerInterfaceWrapper) UpdateManifest(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UpdateManifest(c)
 }
 
 // GetPing operation middleware
@@ -1650,6 +1666,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/activities", wrapper.GetActivities)
 	router.GET(options.BaseURL+"/activities/:activityId", wrapper.GetActivity)
 	router.POST(options.BaseURL+"/login", wrapper.Login)
+	router.POST(options.BaseURL+"/manifest", wrapper.UpdateManifest)
 	router.GET(options.BaseURL+"/ping", wrapper.GetPing)
 	router.GET(options.BaseURL+"/profile", wrapper.Profile)
 	router.POST(options.BaseURL+"/refresh", wrapper.RefreshToken)
@@ -1732,6 +1749,24 @@ type LoginResponseObject interface {
 type Login200JSONResponse AuthResponse
 
 func (response Login200JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateManifestRequestObject struct {
+}
+
+type UpdateManifestResponseObject interface {
+	VisitUpdateManifestResponse(w http.ResponseWriter) error
+}
+
+type UpdateManifest200JSONResponse struct {
+	Success bool `json:"success"`
+}
+
+func (response UpdateManifest200JSONResponse) VisitUpdateManifestResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
@@ -1973,6 +2008,9 @@ type StrictServerInterface interface {
 	// (POST /login)
 	Login(ctx context.Context, request LoginRequestObject) (LoginResponseObject, error)
 
+	// (POST /manifest)
+	UpdateManifest(ctx context.Context, request UpdateManifestRequestObject) (UpdateManifestResponseObject, error)
+
 	// (GET /ping)
 	GetPing(ctx context.Context, request GetPingRequestObject) (GetPingResponseObject, error)
 
@@ -2135,6 +2173,31 @@ func (sh *strictHandler) Login(ctx *gin.Context) {
 		ctx.Status(http.StatusInternalServerError)
 	} else if validResponse, ok := response.(LoginResponseObject); ok {
 		if err := validResponse.VisitLoginResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateManifest operation middleware
+func (sh *strictHandler) UpdateManifest(ctx *gin.Context) {
+	var request UpdateManifestRequestObject
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateManifest(ctx, request.(UpdateManifestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateManifest")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(UpdateManifestResponseObject); ok {
+		if err := validResponse.VisitUpdateManifestResponse(ctx.Writer); err != nil {
 			ctx.Error(err)
 		}
 	} else if response != nil {
@@ -2547,18 +2610,19 @@ var swaggerSpec = []string{
 	"IcV9Lha+tS/Kfh4puHudeHYuRfaOPfvS7k//Gmm1LhDh3yVVui/0F1+bOPZlDw1Y/53I/ymkpB9fuKd4",
 	"/DOLIOuw1K/aOUJIUTv0ouGv9QLmkewFaclogfuu12lj9Jo/0wJuuZY+E++cPjehaPdw3yS2++MEMO/v",
 	"68qGG72e+rC36gAXDSmjXoigziquSFpJd1EpeI0eNcy4/lbA0Faoe/w8leNO3DPH20sO2GpoomPd8FYx",
-	"CN9rHTJZIsvMErLaIXsQyiZD9GDjkZNxjNCYAU5L+9pZMxVktkG4DPLrETDf1mh+PuXyuBkNrNC1xey6",
-	"F5rc9bX/ePXTCMkuQCn3uGfnHwUwY8wlA57maxJ887kg4E3EeLCA507btz/qHF677KqSZ6umto/9sFcp",
-	"CVMkFc88CtMkFIkwQfr188tnFDD3eutmS/Kh+9rrP7lBceuBlxhxTZymurB/a5T/6Nv8HuP/Y8T4TjtD",
-	"mlNBbD5YReshbdzvDeDmG2ULHjB4QJpQizu2Ga5sXGPWTCg+nt1gBzsVDU2lV57v4eomMXnHwXq2wR72",
-	"cQoPUqxYCt3r2IIg+MkWj11RaY7+bFcF5YfJLO1jUyg5pKwSR38YlZwELn+7+/EN91lmp5XG+TK+ojnC",
-	"KVt+4eJrXbsK8+A2mZ9BE1pfSt+oD40r+U6epJ2MNkW5/Y3t5oLfKYPL3SJHw/pdHJXVkM1ytjdo3N2h",
-	"j1ig/QffpO9pFntw654v53udk//z2VO/bN1C9ZChumhw/nvEtVdN49/N0o4KWWtd9wrAWgWvbg3LIyWP",
-	"fwi6/+jvrofoabjdDQMHlboCGl4Mw5kMOkkrzIpQkrtAs+7jMbbuOW58nKdR00E/Wg83TmQnSrBOl0d9",
-	"v9zpm6Qn2+R3Y6JSSxIntJbIPA/kqStBu4sq2xMd5TMdD6huCyzlqXtJKRTvntxaWo/N0/q/Z0QTeHBN",
-	"l9BGu4v5N3XgAzK8X2oUNG+Z0IuvDYL+ZQ97ukEqDzCjI2XxkBMyz+yGE7Lg7sDRZiy4tfD/x1yOlrD6",
-	"iaFGO1T4LwHsKCpjC7ny+1/J3AFsLi8ucpHQfCGUvvzjqz++wkVtvqvLiwtasvP0R8ER67M8T0QRvXx+",
-	"+b8AAAD//5tAX4vbegAA",
+	"CN9rHTJZIsvMErLaIReUsznYRRtevI8YXb317SZVDVXhG5uD0UUn1HEt9xEdF4aIOXG9UIzMNMzc/YxN",
+	"hsgBUpu5mbXwgJxNRvnBxmYn2z2ECQ3Mp7QvvzXbisw2aJ9Bfj0a6Ns6kM+nXB43o4EVurb4ZfdalbvK",
+	"9x+vfhohmgUo5R467fwDCWaMuWTA03xNgm8+Lwa8lRkPFjMd8mD7A9fhFdSuHni2amr7KIS9VkqYIql4",
+	"5lGYMqJIhMnir59fPqOAuZdsNxuGD92Xb//JjatbD7zQiWviNNWlQFsznkff5vd85x8j33HaGdKcCm70",
+	"wSpaD3Xkfm/AR98oc/LgyQNSplrcsc1wlecaKwiE4kPiDY6yU93RVHrl+R6ubhKTdxzEaRsEZB+n8CDF",
+	"iqXQvZouCALBbCHdFdjm6M92VZN+mMzSPjZFo0NKTHH0h1HRaODyt7sf33C/YBRlxDhfxlc0Z2nXL1x8",
+	"ret4YU2gTeZn0ITWF/Q36kPjSr6TJ2kn5k2Bcn9ju7n4ecrgcrfI0bCWGUdlNWSznO0NGseD6dQ/+CZ9",
+	"T7PYg573fDnfCzPwz2dP/bJ1i/ZDhuqiufOwR1x71TT+3SztqBa21nWvAKxV/OvW8zxq9PhHsfsPIO96",
+	"lJ+G290wcFDZL6DhxTCcyaCTtMKsCCW5CzTrPh5v7J4mx4eKGjUd9KP1cONEdqIE63R51PfLnb5JerJN",
+	"fjcmKrUkcUJriczzQJ66ErS7qLI90VE+0/Hg8rbAUp66V6VC8e7JraX12PwzA79nRBN4cE2X0Eb+i/k3",
+	"deADMrxfahQ0b5nQi6/NbYKXPezpBqk8wIyOlMVDTgs9sxtOC4N7FEebseAGx/8fczlawurnlhrtUOG/",
+	"irCjqIwt5MrvfyVzBza6vLjIRULzhVD68o+v/vgKF7X5ri4vLmjJztMfBUfc0/I8EUX08vnl/wIAAP//",
+	"69rdo+d7AAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
