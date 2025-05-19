@@ -3,32 +3,23 @@ package destiny
 import (
 	"cloud.google.com/go/firestore"
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/rs/zerolog/log"
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/clients/gcp"
-	"oneTrick/envvars"
 	"oneTrick/ptr"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const Kinetic = 1498876634
-const Energy = 2465295065
-const Power = 953998645
-const SubClass = 3284755031
-
 type Service interface {
-	GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error)
+	GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error)
 	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
-	GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
+	GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
@@ -37,12 +28,12 @@ type Service interface {
 }
 
 type service struct {
-	Client   *bungie.ClientWithResponses
-	Manifest *Manifest
-	DB       *firestore.Client
+	Client          *bungie.ClientWithResponses
+	ManifestService ManifestService
+	DB              *firestore.Client
 }
 
-func NewService(apiKey string, firestore *firestore.Client) Service {
+func NewService(apiKey string, firestore *firestore.Client, manifestService ManifestService) Service {
 	hc := http.Client{}
 	cli, err := bungie.NewClientWithResponses(
 		"https://www.bungie.net/Platform",
@@ -56,92 +47,13 @@ func NewService(apiKey string, firestore *firestore.Client) Service {
 		}),
 	)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("failed to start destiny client")
 	}
-	manifest, err := getManifest()
-	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to get manifest")
-	}
-	slog.Info("Manifest loaded")
 	return &service{
-		Client:   cli,
-		Manifest: manifest,
-		DB:       firestore,
+		Client:          cli,
+		ManifestService: manifestService,
+		DB:              firestore,
 	}
-}
-
-const mntLocation = "mnt/destiny/manifest.json"
-const manifestLocation = "./manifest.json"
-const destinyBucket = "destiny"
-const objectName = "manifest.json"
-
-func getManifest() (*Manifest, error) {
-	var (
-		manifest = &Manifest{}
-	)
-
-	env := envvars.GetEvn()
-	if env.Environment == "production" {
-		slog.Info("Attempting to set manifest.json file for production environment")
-		stat, err := os.Stat(mntLocation)
-		if err != nil {
-			slog.With("error", err.Error()).Error("File does not exist at specified location")
-			return nil, err
-		}
-		if stat.IsDir() {
-			slog.With("error", "path is a directory").Error("Invalid file path")
-			return nil, fmt.Errorf("path is a directory")
-		}
-		file, err := os.Open(mntLocation)
-		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to open file")
-			return nil, err
-		}
-		if err := json.NewDecoder(file).Decode(&manifest); err != nil {
-			slog.With("error", err.Error()).Error("failed to parse manifest.json file:", err)
-			return nil, err
-		}
-
-		err = file.Close()
-		if err != nil {
-			slog.Warn("failed to close manifest.json file:", err)
-		}
-		defer file.Close()
-		return manifest, nil
-	}
-
-	slog.Info("Attempting to set manifest.json file for dev environment")
-	stat, err := os.Stat(manifestLocation)
-	if err != nil {
-		slog.With("error", err.Error()).Error("File does not exist at specified location")
-		return nil, err
-	}
-	if !stat.IsDir() {
-		slog.Info("File exists at specified location")
-	} else {
-		err := gcp.DownloadFile(destinyBucket, objectName, manifestLocation)
-		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to download manifest.json file")
-			return nil, err
-		}
-	}
-	manifestFile, err := os.Open(manifestLocation)
-	if err != nil {
-		slog.With("error", err.Error()).Error("failed to open manifest.json file")
-		return nil, err
-	}
-
-	if err := json.NewDecoder(manifestFile).Decode(&manifest); err != nil {
-		slog.With("error", err.Error()).Error("failed to parse manifest.json file:", err)
-		return nil, err
-	}
-
-	err = manifestFile.Close()
-	if err != nil {
-		slog.Warn("failed to close manifest.json file:", err)
-	}
-
-	return manifest, nil
 }
 
 func (a *service) GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error) {
@@ -208,10 +120,11 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	if resp.JSON200.Response.Activities == nil {
 		return nil, fmt.Errorf("no activities found")
 	}
-	if a.Manifest == nil {
+	manifest, err := a.ManifestService.Get(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("manifest is not provided")
 	}
-	return TransformPeriodGroups(*resp.JSON200.Response.Activities, *a.Manifest), nil
+	return TransformPeriodGroups(*resp.JSON200.Response.Activities, *manifest), nil
 }
 
 func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, activityID string) (*EnrichedActivity, error) {
@@ -235,6 +148,10 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		return nil, nil
 	}
 
+	manifest, err := a.ManifestService.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("manifest is not provided")
+	}
 	var (
 		performance   *api.InstancePerformance
 		personalStats *map[string]bungie.HistoricalStatsValue
@@ -245,16 +162,13 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		}
 		// TODO: Only getting it for one character. Change for everyone
 		if *entry.CharacterId == characterID {
-			performance = CarnageEntryToInstancePerformance(&entry, a.Manifest)
+			performance = CarnageEntryToInstancePerformance(&entry, manifest)
 			personalStats = entry.Values
 			break
 		}
 
 	}
-	if a.Manifest == nil {
-		return nil, fmt.Errorf("manifest is not provided")
-	}
-	details := TransformHistoricActivity(data.ActivityDetails, *a.Manifest)
+	details := TransformHistoricActivity(data.ActivityDetails, *manifest)
 	details.Period = *data.Period
 	details.PersonalValues = ToPlayerStats(personalStats)
 	if details.PersonalValues != nil && performance != nil {
@@ -272,15 +186,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 	return &result, nil
 }
 
-const (
-	ItemInstanceCode   = 300
-	ItemPerksCode      = 302
-	ItemStatsCode      = 304
-	ItemSocketsCode    = 305
-	ItemCommonDataCode = 307
-)
-
-func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error) {
+func (a *service) GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error) {
 	components := []int32{ItemPerksCode, ItemStatsCode, ItemSocketsCode, ItemCommonDataCode, ItemInstanceCode}
 	membershipIdInt64, err := strconv.ParseInt(membershipID, 10, 64)
 	if err != nil {
@@ -310,59 +216,114 @@ func (a *service) GetWeaponDetails(ctx context.Context, membershipID string, mem
 	if response.JSON200.DestinyItem == nil {
 		return nil, nil
 	}
-	if a.Manifest == nil {
+	manifest, err := a.ManifestService.Get(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("manifest is not provided")
 	}
-	return TransformItemToDetails(response.JSON200.DestinyItem, *a.Manifest), nil
+	return TransformItemToDetails(response.JSON200.DestinyItem, *manifest), nil
 }
-func (a *service) GetCurrentInventory(ctx context.Context, membershipID int64, membershipType int64, characterID string) ([]bungie.ItemComponent, *time.Time, error) {
+
+func (a *service) GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error) {
 	var components []int32
-	components = append(components, 205)
+	components = append(components, CharactersEquipment, Characters)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
 	test, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// TODO: Update snapshot to include the guns information as it is now, since mods and perks could change on the same gun.
 
 	if test.JSON200 == nil {
-		return nil, nil, fmt.Errorf("no response found")
+		return nil, nil, nil, fmt.Errorf("no response found")
 	}
 
-	// TODO: Update this function to take a snapshot for all characters at once
 	timeStamp := test.JSON200.Response.ResponseMintedTimestamp
-	var items []bungie.ItemComponent
+
+	// TODO: Update this function to take a snapshot for all characters at once
+	results := make([]bungie.ItemComponent, 0)
 	if test.JSON200.Response.CharacterEquipment.Data != nil {
 		equipment := *test.JSON200.Response.CharacterEquipment.Data
 		for ID, equ := range equipment {
 			if characterID == ID {
-				items = *equ.Items
+				if equ.Items == nil {
+					continue
+				}
+				buckets := map[uint32]bool{
+					HelmetArmor:    true,
+					GauntletsArmor: true,
+					ChestArmor:     true,
+					LegArmor:       true,
+					ClassArmor:     true,
+					KineticBucket:  true,
+					EnergyBucket:   true,
+					PowerBucket:    true,
+					SubClass:       true,
+				}
+
+				for _, item := range *equ.Items {
+					if item.BucketHash == nil {
+						continue
+					}
+					if buckets[*item.BucketHash] {
+						results = append(results, item)
+					}
+				}
+
 			}
 		}
 
 	}
-	results := make([]bungie.ItemComponent, 0)
-	for _, item := range items {
-		switch *item.BucketHash {
-		case Kinetic:
-			results = append(results, item)
-		case Energy:
-			results = append(results, item)
-		case Power:
-			results = append(results, item)
-		case SubClass:
-			results = append(results, item)
-		}
+
+	manifest, err := a.ManifestService.Get(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get manifest but still will generate stats")
 	}
-	return results, timeStamp, nil
+	stats := make(map[string]api.ClassStat)
+	if test.JSON200.Response.Characters.Data != nil {
+		characters := *test.JSON200.Response.Characters.Data
+		for ID, character := range characters {
+			if characterID == ID && character.Stats != nil {
+				stats = generateClassStats(manifest, *character.Stats)
+			}
+		}
+
+	}
+	loadout := a.buildLoadout(ctx, membershipID, membershipType, results)
+	return loadout, stats, timeStamp, nil
+}
+
+func (a *service) buildLoadout(ctx context.Context, membershipID int64, membershipType int64, items []bungie.ItemComponent) api.Loadout {
+
+	loadout := make(api.Loadout)
+	for _, item := range items {
+		if item.ItemInstanceId == nil {
+			slog.Warn("no instance id found", "membershipId", membershipID)
+			continue
+		}
+		snap := api.ItemSnapshot{
+			InstanceID: *item.ItemInstanceId,
+		}
+		details, err := a.GetItemDetails(ctx, strconv.FormatInt(membershipID, 10), membershipType, *item.ItemInstanceId)
+		if err != nil {
+			slog.With("error", err.Error()).Error("failed to get item details")
+			continue
+		}
+		snap.Name = details.BaseInfo.Name
+		snap.ItemHash = details.BaseInfo.ItemHash
+		snap.ItemProperties = *details
+		snap.BucketHash = &details.BaseInfo.BucketHash
+		loadout[strconv.FormatInt(snap.ItemProperties.BaseInfo.BucketHash, 10)] = snap
+	}
+
+	return loadout
 }
 
 func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
 	var components []int32
-	components = append(components, 200)
+	components = append(components, Characters)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
@@ -386,9 +347,13 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 	if resp.JSON200.Response.Characters == nil {
 		return nil, fmt.Errorf("no response found")
 	}
+	manifest, err := a.ManifestService.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("manifest required for characters: %w", err)
+	}
 	results := make([]api.Character, 0)
 	for _, c := range *resp.JSON200.Response.Characters.Data {
-		r := TransformCharacter(&c, *a.Manifest)
+		r := TransformCharacter(&c, *manifest)
 		results = append(results, r)
 	}
 	slices.SortFunc(results, func(a, b api.Character) int {

@@ -9,7 +9,7 @@ import (
 	"strconv"
 )
 
-func setIconBase(value *string) string {
+func setBaseBungieURL(value *string) string {
 	if value == nil {
 		return ""
 	}
@@ -51,8 +51,8 @@ func TransformCharacter(item *bungie.CharacterComponent, manifest Manifest) api.
 	title := manifest.RecordDefinition[strconv.Itoa(int(*item.TitleRecordHash))]
 	return api.Character{
 		Class:               class.DisplayProperties.Name,
-		EmblemBackgroundURL: setIconBase(item.EmblemBackgroundPath),
-		EmblemURL:           setIconBase(item.EmblemPath),
+		EmblemBackgroundURL: setBaseBungieURL(item.EmblemBackgroundPath),
+		EmblemURL:           setBaseBungieURL(item.EmblemPath),
 		Id:                  *item.CharacterId,
 		Light:               int64(*item.Light),
 		Race:                race.DisplayProperties.Name,
@@ -108,7 +108,7 @@ func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
 		}
 		perks = append(perks, api.Perk{
 			Hash:        int64(*p.PerkHash),
-			IconPath:    ptr.Of(setIconBase(p.IconPath)),
+			IconPath:    ptr.Of(setBaseBungieURL(p.IconPath)),
 			Name:        perk.DisplayProperties.Name,
 			Description: &perk.DisplayProperties.Description,
 		})
@@ -129,15 +129,16 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 			continue
 		}
 
-		// TODO: Enhance the amount of data we return from a socket.
 		hash := int(*s.PlugHash)
 		sockets = append(sockets, api.Socket{
-			IsEnabled:   s.IsEnabled,
-			IsVisible:   s.IsVisible,
-			PlugHash:    hash,
-			Name:        socket.DisplayProperties.Name,
-			Description: socket.DisplayProperties.Description,
-			Icon:        ptr.Of(setIconBase(&socket.DisplayProperties.Icon)),
+			IsEnabled:                 s.IsEnabled,
+			IsVisible:                 s.IsVisible,
+			PlugHash:                  hash,
+			Name:                      socket.DisplayProperties.Name,
+			Description:               socket.DisplayProperties.Description,
+			ItemTypeDisplayName:       ptr.Of(socket.ItemTypeDisplayName),
+			ItemTypeTieredDisplayName: ptr.Of(socket.ItemTypeAndTierDisplayName),
+			Icon:                      ptr.Of(setBaseBungieURL(&socket.DisplayProperties.Icon)),
 		})
 	}
 	return &sockets
@@ -244,8 +245,8 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest
 		Location:     definition.DisplayProperties.Name,
 		Description:  definition.DisplayProperties.Description,
 		Activity:     activity.DisplayProperties.Name,
-		ImageURL:     setIconBase(&definition.PgcrImage),
-		ActivityIcon: setIconBase(&activityMode.DisplayProperties.Icon),
+		ImageURL:     setBaseBungieURL(&definition.PgcrImage),
+		ActivityIcon: setBaseBungieURL(&activityMode.DisplayProperties.Icon),
 	}
 }
 
@@ -314,8 +315,8 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *a
 		Location:       definition.DisplayProperties.Name,
 		Description:    definition.DisplayProperties.Description,
 		Activity:       activity.DisplayProperties.Name,
-		ImageURL:       setIconBase(&definition.PgcrImage),
-		ActivityIcon:   setIconBase(&activityMode.DisplayProperties.Icon),
+		ImageURL:       setBaseBungieURL(&definition.PgcrImage),
+		ActivityIcon:   setBaseBungieURL(&activityMode.DisplayProperties.Icon),
 		PersonalValues: ToPlayerStats(period.Values),
 		Period:         *period.Period,
 	}
@@ -389,6 +390,9 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, manifest *
 			continue
 		}
 		ref := int64(*v.ReferenceId)
+		if ref == 0 {
+			continue
+		}
 		r := api.WeaponInstanceMetrics{
 			ReferenceID: &ref,
 			Stats:       BungieStatValueToUniqueStatValue(v.Values),
@@ -398,7 +402,7 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, manifest *
 			r.Display = &api.Display{
 				Description: def.ItemTypeAndTierDisplayName,
 				HasIcon:     def.DisplayProperties.HasIcon,
-				Icon:        ptr.Of(setIconBase(&def.DisplayProperties.Icon)),
+				Icon:        ptr.Of(setBaseBungieURL(&def.DisplayProperties.Icon)),
 				Name:        def.DisplayProperties.Name,
 			}
 		}
@@ -469,4 +473,29 @@ func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	default:
 		return "Unknown"
 	}
+}
+
+func generateClassStats(manifest *Manifest, stats map[string]int32) map[string]api.ClassStat {
+	if manifest == nil {
+		return nil
+	}
+	results := make(map[string]api.ClassStat)
+	for key, value := range stats {
+		info, ok := manifest.StatDefinition[key]
+		if !ok {
+			slog.Warn("Missing stat", "statKey", key)
+			continue
+		}
+		i := api.ClassStat{
+			Name:            info.DisplayProperties.Name,
+			Icon:            info.DisplayProperties.Name,
+			HasIcon:         info.DisplayProperties.HasIcon,
+			Description:     info.DisplayProperties.Description,
+			StatCategory:    info.StatCategory,
+			AggregationType: info.AggregationType,
+			Value:           value,
+		}
+		results[key] = i
+	}
+	return results
 }

@@ -30,6 +30,29 @@
         }
       }
     },
+    "/manifest":{
+      "post": {
+        "operationId": "UpdateManifest",
+        "responses": {
+          "200": {
+            "description": "Return of success of updating manifest if needed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["success"],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/profile": {
       "get": {
         "operationId": "Profile",
@@ -894,6 +917,12 @@
               "firestore": "characterId"
             }
           },
+          "stats": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ClassStat"
+            }
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -1631,6 +1660,18 @@
             "x-oapi-codegen-extra-tags": {
               "firestore": "icon"
             }
+          },
+          "itemTypeDisplayName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "itemTypeDisplayName"
+            }
+          },
+          "itemTypeTieredDisplayName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "itemTypeTieredDisplayName"
+            }
           }
         }
       },
@@ -1810,6 +1851,12 @@
             "type": "string",
             "x-oapi-codegen-extra-tags": {
               "firestore": "class"
+            }
+          },
+          "stats": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ClassStat"
             }
           }
         }
@@ -2034,8 +2081,67 @@
             "format": "int32",
             "x-oapi-codegen-extra-tags": {
               "firestore": "standing"
-            },
-
+            }
+          }
+        }
+      },
+      "ClassStat": {
+        "type": "object",
+        "x-oapi-codegen-extra-tags": {
+          "firestore": "classStat"
+        },
+        "required":[
+          "name",
+          "description",
+          "hasIcon",
+          "icon",
+          "value",
+          "statCategory",
+          "aggregationType"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "name"
+            }
+          },
+          "icon": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "icon"
+            }
+          },
+          "hasIcon": {
+            "type": "boolean",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "hasIcon"
+            }
+          },
+          "description": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "description"
+            }
+          },
+          "statCategory": {
+            "type": "integer",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "description"
+            }
+          },
+          "aggregationType": {
+            "type": "integer",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "description"
+            }
+          },
+          "value": {
+            "type": "integer",
+            "format": "int32",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "value"
+            }
           }
         }
       },

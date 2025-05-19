@@ -7,68 +7,45 @@ import (
 	"time"
 )
 
-// D2Name generates a Destiny 2 themed name by combining randomly selected elements.
-func D2Name() string {
-	// Funny prefix/suffix collections
+// SessionName generates a Destiny 2 themed name by combining randomly selected elements.
+func SessionName() string {
 	prefixes := []string{
-		"Xur'", "Zur'", "Yeet'", "Boop'", "Nyoom'",
-		"Zoop'", "Vex'", "Bonk'", "Squish'", "Pew'",
-		"Thwap'", "Kzzt'", "Brrr'", "Swoosh'", "Zip'",
-		"Fwoop'", "Thunk'", "Blam'", "Zzzt'", "Splorch'",
+		"Sweat'", "Flawless'", "Focus'", "Speed'", "Clutch'",
+		"React'", "Sharp'", "Quick'", "Tactical'", "Primed'",
+		"Elite'", "Pro'", "Peak'", "Optimal'", "Perfect'",
 	}
 
 	suffixes := []string{
-		"'thul", "'pok", "'zoop", "'boop", "'yeet",
-		"'splat", "'zonk", "'thonk", "'bork", "'derp",
-		"'zork", "'blam", "'kthx", "'yoink", "'zoom",
-		"'zing", "'zang", "'whoosh", "'bonk", "'zap",
+		"Goes Brrr", "Has Entered the Chat", "Intensifies", "404",
+		"Not Found", "Over 9000", "To the Moon", "Stonks",
+		"Yeet", "POV", "No Cap", "Chad", "This Is Fine",
+		"Sus", "Poggers", "Big Brain Time", "Chief", "Literally Me",
+		"In 4K", "Speedrun", "Any%", "Hack", "Doom",
+		"Unhinged", "Vibes", "Energy", "UwU", "Loading...",
 	}
 
-	adjectives := []string{
-		"Brave", "Fierce", "Shadowed", "Burning", "Silent",
-		"Radiant", "Ascendant", "Taken", "Corrupted", "Awoken",
-		"Shattered", "Fallen", "Exiled", "Risen", "Haunted",
-		"Luminous", "Transcendent", "Stasis-bound", "Darkness-touched", "Light-forged",
-		"Eternal", "Unstoppable", "Celestial", "Vanguard", "Forgotten",
-		"Void-marked", "Solar-blessed", "Arc-charged", "Paracausal", "Godslaying",
-	}
 	nouns := []string{
-		"Guardian", "Warlock", "Hunter", "Titan", "Lightbearer",
-		"Redjack", "Corsair", "Techeun", "Sentinel", "Dredgen",
-		"Harbinger", "Iron Lord", "Wayfarer", "Chronicler", "Savior",
-		"Revenant", "Behemoth", "Shadebinder", "Nightstalker", "Sunbreaker",
-		"Stormcaller", "Voidwalker", "Gunslinger", "Defender", "Seraph",
-		"Witness", "Disciple", "Warden", "Champion", "Arbalest",
+		"Operation", "Protocol", "Project", "Mission", "Initiative", "Task",
+		"Objective", "Endeavor", "Campaign", "Program",
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	// Randomly decide if we should add a prefix or suffix to either the adjective or noun
-	usePrefix := r.Float64() < 0.3        // 30% chance for prefix
-	useSuffix := r.Float64() < 0.3        // 30% chance for suffix
-	applyToAdjective := r.Float64() < 0.5 // 50% chance for either word
+	usePrefix := r.Float64() < 0.7
+	useSuffix := r.Float64() < 0.8
 
-	adj := adjectives[r.Intn(len(adjectives))]
 	noun := nouns[r.Intn(len(nouns))]
 	// Apply prefix/suffix modifications
 	if usePrefix {
 		prefix := prefixes[r.Intn(len(prefixes))]
-		if applyToAdjective {
-			adj = prefix + adj
-		} else {
-			noun = prefix + noun
-		}
+		noun = prefix + noun
 	}
 
 	if useSuffix {
 		suffix := suffixes[r.Intn(len(suffixes))]
-		if applyToAdjective {
-			adj = adj + suffix
-		} else {
-			noun = noun + suffix
-		}
+		noun = noun + suffix
 	}
 
-	return fmt.Sprintf("%s %s", adj, noun)
+	return fmt.Sprintf("%s", noun)
 }
 
 // PVPName generates a Destiny 2 PvP loadout name with meme flair

@@ -21,12 +21,25 @@ import (
 var _ api.StrictServerInterface = (*Server)(nil)
 
 type Server struct {
-	D2Service        destiny.Service
-	D2AuthService    destiny.AuthService
-	UserService      user.Service
-	SnapshotService  snapshot.Service
-	AggregateService aggregate.Service
-	SessionService   session.Service
+	D2Service         destiny.Service
+	D2AuthService     destiny.AuthService
+	D2ManifestService destiny.ManifestService
+	UserService       user.Service
+	SnapshotService   snapshot.Service
+	AggregateService  aggregate.Service
+	SessionService    session.Service
+}
+
+func (s Server) UpdateManifest(ctx context.Context, request api.UpdateManifestRequestObject) (api.UpdateManifestResponseObject, error) {
+	err := s.D2ManifestService.Update(ctx)
+	if err != nil {
+		return api.UpdateManifest200JSONResponse{
+			Success: false,
+		}, err
+	}
+	return api.UpdateManifest200JSONResponse{
+		Success: true,
+	}, nil
 }
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
@@ -425,14 +438,16 @@ func NewServer(
 	snapshotService snapshot.Service,
 	aggregateService aggregate.Service,
 	sessionService session.Service,
+	manifestService destiny.ManifestService,
 ) Server {
 	return Server{
-		D2Service:        service,
-		D2AuthService:    authService,
-		UserService:      userService,
-		SnapshotService:  snapshotService,
-		AggregateService: aggregateService,
-		SessionService:   sessionService,
+		D2Service:         service,
+		D2AuthService:     authService,
+		UserService:       userService,
+		SnapshotService:   snapshotService,
+		AggregateService:  aggregateService,
+		SessionService:    sessionService,
+		D2ManifestService: manifestService,
 	}
 }
 
