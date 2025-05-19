@@ -69,3 +69,6 @@ Content-Type: application/json
 {
   "sessionId": ""
 }
+
+###
+POST https://api.d2onetrick.com/manifest

@@ -36,7 +36,6 @@ func NewManifestService(db *firestore.Client, env string) ManifestService {
 func (m *manifestService) Init() error {
 	// Check if the local file is here (local) or gcp (production)
 	// If not there, go grab the data and bring it in
-
 	return nil
 }
 
@@ -137,7 +136,6 @@ func (m *manifestService) Update(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed the check manifest: %v", err)
 	}
-	log.Info().Any("update", update).Msg("returned data")
 
 	if update.ShouldUpdate {
 		err := setLatestManifest(ctx, m.env, update.ManifestURL)
@@ -150,6 +148,20 @@ func (m *manifestService) Update(ctx context.Context) error {
 			log.Error().Err(err).Msg("failed to set latest manifest version")
 			return err
 		}
+	}
+
+	if m.env == "production" {
+		data, err := readManifestFromMount()
+		if err != nil {
+			return fmt.Errorf("failed to set the updated mainfest at run time: %v", err)
+		}
+		m.Current = data
+	} else {
+		data, err := readManifestFromLocal(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to set the updated mainfest at run time: %v", err)
+		}
+		m.Current = data
 	}
 	return nil
 }
