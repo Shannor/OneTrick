@@ -39,11 +39,11 @@ func main() {
 	env := envvars.GetEvn()
 	if env.Environment != "production" {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		log.Logger = log.Output(writer)
-	} else {
 		consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
 		multi := zerolog.MultiLevelWriter(consoleWriter, writer)
 		log.Logger = log.Output(multi)
+	} else {
+		log.Logger = log.Output(writer)
 	}
 	log.Info().Str("logID", logID).Msg("setup start log")
 
