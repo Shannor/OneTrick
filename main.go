@@ -6,6 +6,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-resty/resty/v2"
+	"github.com/mark-ignacio/zerolog-gcp"
 	"github.com/oapi-codegen/gin-middleware"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -26,6 +27,20 @@ import (
 
 func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	projectID := "gruntt-destiny"
+	logID := "application-log"
+	ctx := context.Background()
+
+	writer, err := zlg.NewCloudLoggingWriter(ctx, projectID, logID, zlg.CloudLoggingOptions{})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create GCP writer")
+	}
+	// Configure zerolog to use both console and GCP writer
+	consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
+	multi := zerolog.MultiLevelWriter(consoleWriter, writer)
+
+	// Set up the global logger
+	log.Logger = zerolog.New(multi).With().Timestamp().Logger()
 
 	env := envvars.GetEvn()
 	if env.Environment != "production" {
