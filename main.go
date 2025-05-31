@@ -35,17 +35,20 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create GCP writer")
 	}
-	// Configure zerolog to use both console and GCP writer
-	consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
-	multi := zerolog.MultiLevelWriter(consoleWriter, writer)
-
-	// Set up the global logger
-	log.Logger = zerolog.New(multi).With().Timestamp().Logger()
 
 	env := envvars.GetEvn()
 	if env.Environment != "production" {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		log.Logger = log.Output(writer)
+	} else {
+		consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
+		multi := zerolog.MultiLevelWriter(consoleWriter, writer)
+		log.Logger = log.Output(multi)
 	}
+	log.Info().Str("logID", logID).Msg("setup start log")
+
+	defer zlg.Flush()
+
 	hc := http.Client{}
 	cli, err := bungie.NewClientWithResponses(
 		"https://www.bungie.net/Platform",
