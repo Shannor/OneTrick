@@ -47,10 +47,10 @@ func (s Server) UpdateManifest(ctx context.Context, request api.UpdateManifestRe
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	sessionID := request.SessionId
-	l := slog.With("sessionID", sessionID, "function", "GetSession")
+	l := log.With().Str("sessionID", sessionID).Logger()
 	ses, err := s.SessionService.Get(ctx, sessionID)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch session")
+		l.Error().Err(err).Msg("failed to fetch session")
 		return nil, err
 	}
 	return api.GetSession200JSONResponse(*ses), nil

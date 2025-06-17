@@ -595,12 +595,6 @@
       "get": {
         "parameters": [
           {
-            "$ref": "#/components/parameters/X-User-ID"
-          },
-          {
-            "$ref": "#/components/parameters/X-Membership-ID"
-          },
-          {
             "name": "sessionId",
             "in": "path",
             "required": true,
@@ -689,12 +683,6 @@
       "get": {
         "operationId": "GetSessionAggregates",
         "parameters": [
-          {
-            "$ref": "#/components/parameters/X-User-ID"
-          },
-          {
-            "$ref": "#/components/parameters/X-Membership-ID"
-          },
           {
             "name": "sessionId",
             "in": "path",
