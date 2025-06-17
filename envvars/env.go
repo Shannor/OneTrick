@@ -16,11 +16,18 @@ const (
 
 type Env struct {
 	ApiKey         string
-	Environment    string
+	Environment    EnvironmentKey
 	D2ClientID     string
 	D2ClientSecret string
 	RedirectURI    string
 }
+
+type EnvironmentKey string
+
+const (
+	ProductionEnv EnvironmentKey = "production"
+	DevEnv        EnvironmentKey = "dev"
+)
 
 func GetEvn() Env {
 	apiKey, ok := os.LookupEnv(D2ApiKey)
@@ -43,8 +50,16 @@ func GetEvn() Env {
 
 	return Env{
 		ApiKey:         apiKey,
-		Environment:    environment,
+		Environment:    EnvironmentKey(environment),
 		D2ClientID:     clientID,
 		D2ClientSecret: clientSecret,
 	}
+}
+
+func IsProd(env Env) bool {
+	return env.Environment == ProductionEnv
+}
+
+func IsDev(env Env) bool {
+	return env.Environment == DevEnv
 }
