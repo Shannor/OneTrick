@@ -36,17 +36,17 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to create GCP writer")
 	}
 
+	log.Logger = log.Output(writer)
+
 	env := envvars.GetEvn()
-	if env.Environment != "production" {
+	if envvars.IsDev(env) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
 		multi := zerolog.MultiLevelWriter(consoleWriter, writer)
 		log.Logger = log.Output(multi)
-	} else {
-		log.Logger = log.Output(writer)
 	}
-	log.Info().Str("logID", logID).Msg("setup start log")
 
+	log.Info().Str("Env", string(env.Environment)).Msg("Starting Up")
 	defer zlg.Flush()
 
 	hc := http.Client{}
@@ -63,7 +63,7 @@ func main() {
 	)
 	firestore := gcp.CreateFirestore(context.Background())
 
-	manifestService := destiny.NewManifestService(firestore, env.Environment)
+	manifestService := destiny.NewManifestService(firestore, string(env.Environment))
 	err = manifestService.Init()
 	if err != nil {
 		log.Fatal().Err(err).Msg("need manifest to start the service")
@@ -101,7 +101,7 @@ func main() {
 	r := gin.Default()
 	r.Use(cors.Default())
 
-	if env.Environment == "production" {
+	if envvars.IsProd(env) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 

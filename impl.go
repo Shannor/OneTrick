@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fatih/structs"
+	"github.com/rs/zerolog/log"
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
@@ -31,12 +32,14 @@ type Server struct {
 }
 
 func (s Server) UpdateManifest(ctx context.Context, request api.UpdateManifestRequestObject) (api.UpdateManifestResponseObject, error) {
-	err := s.D2ManifestService.Update(ctx)
-	if err != nil {
-		return api.UpdateManifest200JSONResponse{
-			Success: false,
-		}, err
-	}
+
+	go func() {
+		err := s.D2ManifestService.Update(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to perform an update")
+		}
+	}()
+
 	return api.UpdateManifest200JSONResponse{
 		Success: true,
 	}, nil
