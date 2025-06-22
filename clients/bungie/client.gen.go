@@ -4,6 +4,7 @@
 package bungie
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -2889,6 +2890,26 @@ type MembershipData struct {
 	PrimaryMembershipId *string `json:"primaryMembershipId"`
 }
 
+// UserSearchPrefixRequest defines model for User.UserSearchPrefixRequest.
+type UserSearchPrefixRequest struct {
+	DisplayNamePrefix *string `json:"displayNamePrefix,omitempty"`
+}
+
+// SearchResponse defines model for User.UserSearchResponse.
+type SearchResponse struct {
+	HasMore       *bool               `json:"hasMore,omitempty"`
+	Page          *int32              `json:"page,omitempty"`
+	SearchResults *[]UserSearchDetail `json:"searchResults,omitempty"`
+}
+
+// UserSearchDetail defines model for User.UserSearchResponseDetail.
+type UserSearchDetail struct {
+	BungieGlobalDisplayName     *string             `json:"bungieGlobalDisplayName,omitempty"`
+	BungieGlobalDisplayNameCode *int16              `json:"bungieGlobalDisplayNameCode"`
+	BungieNetMembershipId       *string             `json:"bungieNetMembershipId"`
+	DestinyMemberships          *[]UserUserInfoCard `json:"destinyMemberships,omitempty"`
+}
+
 // UserUserToUserContext defines model for User.UserToUserContext.
 type UserUserToUserContext struct {
 	GlobalIgnoreEndDate *time.Time             `json:"globalIgnoreEndDate"`
@@ -2955,6 +2976,17 @@ type UserUserMembershipData struct {
 	ThrottleSeconds    *int32             `json:"ThrottleSeconds,omitempty"`
 }
 
+// UserSearchResponse defines model for User.UserSearchResponse.
+type UserSearchResponse struct {
+	DetailedErrorTrace *string            `json:"DetailedErrorTrace,omitempty"`
+	ErrorCode          *int32             `json:"ErrorCode,omitempty"`
+	ErrorStatus        *string            `json:"ErrorStatus,omitempty"`
+	Message            *string            `json:"Message,omitempty"`
+	MessageData        *map[string]string `json:"MessageData,omitempty"`
+	SearchResponse     *SearchResponse    `json:"Response,omitempty"`
+	ThrottleSeconds    *int32             `json:"ThrottleSeconds,omitempty"`
+}
+
 // Destiny2GetActivityHistoryParams defines parameters for Destiny2GetActivityHistory.
 type Destiny2GetActivityHistoryParams struct {
 	// Count Number of rows to return
@@ -2978,6 +3010,9 @@ type Destiny2GetItemParams struct {
 	// Components A comma separated list of components to return (as strings or numeric values). See the DestinyComponentType enum for valid components to request. You must request at least one component to receive results.
 	Components *[]int32 `form:"components,omitempty" json:"components,omitempty"`
 }
+
+// UserSearchByGlobalNamePostJSONRequestBody defines body for UserSearchByGlobalNamePost for application/json ContentType.
+type UserSearchByGlobalNamePostJSONRequestBody = UserSearchPrefixRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -3066,6 +3101,11 @@ type ClientInterface interface {
 
 	// UserGetMembershipDataForCurrentUser request
 	UserGetMembershipDataForCurrentUser(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UserSearchByGlobalNamePostWithBody request with any body
+	UserSearchByGlobalNamePostWithBody(ctx context.Context, page int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UserSearchByGlobalNamePost(ctx context.Context, page int32, body UserSearchByGlobalNamePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) Destiny2GetPostGameCarnageReport(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -3118,6 +3158,30 @@ func (c *Client) Destiny2GetItem(ctx context.Context, membershipType int32, dest
 
 func (c *Client) UserGetMembershipDataForCurrentUser(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewUserGetMembershipDataForCurrentUserRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UserSearchByGlobalNamePostWithBody(ctx context.Context, page int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUserSearchByGlobalNamePostRequestWithBody(c.Server, page, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UserSearchByGlobalNamePost(ctx context.Context, page int32, body UserSearchByGlobalNamePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUserSearchByGlobalNamePostRequest(c.Server, page, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3424,6 +3488,53 @@ func NewUserGetMembershipDataForCurrentUserRequest(server string) (*http.Request
 	return req, nil
 }
 
+// NewUserSearchByGlobalNamePostRequest calls the generic UserSearchByGlobalNamePost builder with application/json body
+func NewUserSearchByGlobalNamePostRequest(server string, page int32, body UserSearchByGlobalNamePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUserSearchByGlobalNamePostRequestWithBody(server, page, "application/json", bodyReader)
+}
+
+// NewUserSearchByGlobalNamePostRequestWithBody generates requests for UserSearchByGlobalNamePost with any type of body
+func NewUserSearchByGlobalNamePostRequestWithBody(server string, page int32, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "page", runtime.ParamLocationPath, page)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/User/Search/GlobalName/%s/", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -3481,6 +3592,11 @@ type ClientWithResponsesInterface interface {
 
 	// UserGetMembershipDataForCurrentUserWithResponse request
 	UserGetMembershipDataForCurrentUserWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*UserGetMembershipDataForCurrentUserResponse, error)
+
+	// UserSearchByGlobalNamePostWithBodyWithResponse request with any body
+	UserSearchByGlobalNamePostWithBodyWithResponse(ctx context.Context, page int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UserSearchByGlobalNamePostResponse, error)
+
+	UserSearchByGlobalNamePostWithResponse(ctx context.Context, page int32, body UserSearchByGlobalNamePostJSONRequestBody, reqEditors ...RequestEditorFn) (*UserSearchByGlobalNamePostResponse, error)
 }
 
 type Destiny2GetPostGameCarnageReportResponse struct {
@@ -3593,6 +3709,28 @@ func (r UserGetMembershipDataForCurrentUserResponse) StatusCode() int {
 	return 0
 }
 
+type UserSearchByGlobalNamePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *UserSearchResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r UserSearchByGlobalNamePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UserSearchByGlobalNamePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // Destiny2GetPostGameCarnageReportWithResponse request returning *Destiny2GetPostGameCarnageReportResponse
 func (c *ClientWithResponses) Destiny2GetPostGameCarnageReportWithResponse(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*Destiny2GetPostGameCarnageReportResponse, error) {
 	rsp, err := c.Destiny2GetPostGameCarnageReport(ctx, activityId, reqEditors...)
@@ -3636,6 +3774,23 @@ func (c *ClientWithResponses) UserGetMembershipDataForCurrentUserWithResponse(ct
 		return nil, err
 	}
 	return ParseUserGetMembershipDataForCurrentUserResponse(rsp)
+}
+
+// UserSearchByGlobalNamePostWithBodyWithResponse request with arbitrary body returning *UserSearchByGlobalNamePostResponse
+func (c *ClientWithResponses) UserSearchByGlobalNamePostWithBodyWithResponse(ctx context.Context, page int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UserSearchByGlobalNamePostResponse, error) {
+	rsp, err := c.UserSearchByGlobalNamePostWithBody(ctx, page, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUserSearchByGlobalNamePostResponse(rsp)
+}
+
+func (c *ClientWithResponses) UserSearchByGlobalNamePostWithResponse(ctx context.Context, page int32, body UserSearchByGlobalNamePostJSONRequestBody, reqEditors ...RequestEditorFn) (*UserSearchByGlobalNamePostResponse, error) {
+	rsp, err := c.UserSearchByGlobalNamePost(ctx, page, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUserSearchByGlobalNamePostResponse(rsp)
 }
 
 // ParseDestiny2GetPostGameCarnageReportResponse parses an HTTP response from a Destiny2GetPostGameCarnageReportWithResponse call
@@ -3758,6 +3913,32 @@ func ParseUserGetMembershipDataForCurrentUserResponse(rsp *http.Response) (*User
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest UserUserMembershipData
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUserSearchByGlobalNamePostResponse parses an HTTP response from a UserSearchByGlobalNamePostWithResponse call
+func ParseUserSearchByGlobalNamePostResponse(rsp *http.Response) (*UserSearchByGlobalNamePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UserSearchByGlobalNamePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest UserSearchResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

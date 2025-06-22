@@ -25,6 +25,7 @@ type Service interface {
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetIronBannerActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetEnrichedActivity(ctx context.Context, characterID string, activityID string) (*EnrichedActivity, error)
+	Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error)
 }
 
 type service struct {
@@ -363,4 +364,28 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 		return strings.Compare(a.Class, b.Class)
 	})
 	return results, nil
+}
+
+func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {
+	body := bungie.UserSearchPrefixRequest{DisplayNamePrefix: ptr.Of(prefix)}
+	resp, err := a.Client.UserSearchByGlobalNamePostWithResponse(ctx, page, body)
+	if err != nil {
+		return nil, false, err
+	}
+	if resp.JSON200 == nil {
+		return nil, false, fmt.Errorf("no response")
+	}
+	if resp.JSON200.SearchResponse == nil {
+		return nil, false, fmt.Errorf("empty response")
+	}
+	results := make([]api.SearchUserResult, 0)
+	for _, data := range *resp.JSON200.SearchResponse.SearchResults {
+		d := TransformUserSearchDetail(data)
+		if d == nil {
+			continue
+		}
+		results = append(results, *d)
+	}
+
+	return results, *resp.JSON200.SearchResponse.HasMore, nil
 }

@@ -17,7 +17,7 @@ type Service interface {
 	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 	Get(ctx context.Context, ID string) (*api.Session, error)
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
-	GetAll(ctx context.Context, userID string, characterID string, status *api.SessionStatus) ([]api.Session, error)
+	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus) ([]api.Session, error)
 	Complete(ctx context.Context, ID string) error
 }
 type service struct {
@@ -107,10 +107,15 @@ func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
 	return result, nil
 }
 
-func (s service) GetAll(ctx context.Context, userID string, characterID string, status *api.SessionStatus) ([]api.Session, error) {
-	query := s.db.Collection(collection).
-		Where("userId", "==", userID).
-		Where("characterId", "==", characterID)
+func (s service) GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus) ([]api.Session, error) {
+	query := s.db.Collection(collection).Query
+
+	if userID != nil {
+		query = query.Where("userId", "==", *userID)
+	}
+	if characterID != nil {
+		query = query.Where("characterId", "==", *characterID)
+	}
 
 	if status != nil {
 		query = query.Where("status", "==", *status)

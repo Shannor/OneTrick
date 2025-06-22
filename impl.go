@@ -56,6 +56,17 @@ func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObj
 	return api.GetSession200JSONResponse(*ses), nil
 }
 
+func (s Server) Search(ctx context.Context, request api.SearchRequestObject) (api.SearchResponseObject, error) {
+	results, hasMore, err := s.D2Service.Search(ctx, request.Body.Prefix, request.Body.Page)
+	if err != nil {
+		return nil, err
+	}
+	return api.Search200JSONResponse{
+		Results: results,
+		HasMore: hasMore,
+	}, nil
+}
+
 func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRequestObject) (api.SessionCheckInResponseObject, error) {
 	sessionID := request.Body.SessionID
 	membershipID := request.Params.XMembershipID
@@ -201,11 +212,68 @@ func SetAggregate(ctx context.Context, s Server, userID string, characterID stri
 }
 
 func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
-	result, err := s.SessionService.GetAll(ctx, request.Params.XUserID, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
+	result, err := s.SessionService.GetAll(ctx, &request.Params.XUserID, &request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
 	if err != nil {
 		return nil, err
 	}
 	return api.GetSessions200JSONResponse(result), nil
+}
+
+func (s Server) GetPublicSessions(ctx context.Context, request api.GetPublicSessionsRequestObject) (api.GetPublicSessionsResponseObject, error) {
+	result, err := s.SessionService.GetAll(ctx, nil, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
+	if err != nil {
+		return nil, err
+	}
+	return api.GetPublicSessions200JSONResponse(result), nil
+}
+
+func (s Server) GetPublicSession(ctx context.Context, request api.GetPublicSessionRequestObject) (api.GetPublicSessionResponseObject, error) {
+	sessionID := request.SessionId
+	l := log.With().Str("sessionID", sessionID).Logger()
+	ses, err := s.SessionService.Get(ctx, sessionID)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch session")
+		return nil, err
+	}
+	return api.GetPublicSession200JSONResponse(*ses), nil
+}
+
+func (s Server) GetPublicSessionAggregates(ctx context.Context, request api.GetPublicSessionAggregatesRequestObject) (api.GetPublicSessionAggregatesResponseObject, error) {
+	l := log.With().Str("sessionID", request.SessionId).Logger()
+	ses, err := s.SessionService.Get(ctx, request.SessionId)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch session")
+		return nil, err
+	}
+	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch aggregates")
+		return nil, err
+	}
+	uniqueIDS := make([]string, 0)
+	for _, a := range aggregates {
+		link, ok := a.SnapshotLinks[ses.CharacterID]
+		if !ok {
+			continue
+		}
+		if link.SnapshotID == nil {
+			continue
+		}
+		uniqueIDS = append(uniqueIDS, *link.SnapshotID)
+	}
+	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch snapshots")
+		return nil, err
+	}
+	snapshotByID := make(map[string]api.CharacterSnapshot)
+	for _, snap := range snapshots {
+		snapshotByID[snap.ID] = snap
+	}
+	return api.GetPublicSessionAggregates200JSONResponse{
+		Aggregates: aggregates,
+		Snapshots:  snapshotByID,
+	}, nil
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {

@@ -72,3 +72,12 @@ Content-Type: application/json
 
 ###
 POST https://api.d2onetrick.com/manifest
+
+###
+POST http://localhost:8080/search
+Content-Type: application/json
+
+{
+  "prefix": "Zone 6 Weegee",
+  "page": 0
+}
