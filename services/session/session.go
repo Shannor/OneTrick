@@ -9,6 +9,7 @@ import (
 	"oneTrick/generator"
 	"oneTrick/ptr"
 	"oneTrick/utils"
+	"slices"
 	"time"
 )
 
@@ -133,6 +134,9 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	if err != nil {
 		return nil, err
 	}
+	slices.SortFunc(result, func(a, b api.Session) int {
+		return b.StartedAt.Compare(a.StartedAt)
+	})
 	return result, nil
 }
 

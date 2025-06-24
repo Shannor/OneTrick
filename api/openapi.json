@@ -919,6 +919,56 @@
           }
         }
       }
+    },"/public/profile": {
+      "get": {
+        "operationId": "GetPublicProfile",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "x-go-name":"ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User Profile Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "message",
+                    "status"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "description": "User friendly description of the error"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/InternalError"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/actions/session-checkin": {
       "post": {

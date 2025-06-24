@@ -351,6 +351,42 @@ func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestO
 	return api.GetSnapshot200JSONResponse(*result), nil
 }
 
+func (s Server) GetPublicProfile(ctx context.Context, request api.GetPublicProfileRequestObject) (api.GetPublicProfileResponseObject, error) {
+	u, err := s.UserService.GetUser(ctx, request.Params.ID)
+	if err != nil {
+		return nil, err
+	}
+	t := int64(0)
+	for _, membership := range u.Memberships {
+		if membership.ID == u.PrimaryMembershipID {
+			t = membership.Type
+			break
+		}
+	}
+	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse primary membership id")
+	}
+	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+	if err != nil {
+		if errors.Is(err, destiny.ErrDestinyServerDown) {
+			return api.GetPublicProfile503JSONResponse{
+				Message: "Destiny Server is down. Please wait while they get it back up and running",
+				Status:  api.ErrDestinyServerDown,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to fetch characters: %w", err)
+	}
+
+	return api.GetPublicProfile200JSONResponse{
+		DisplayName:  u.DisplayName,
+		UniqueName:   u.UniqueName,
+		Id:           u.ID,
+		MembershipId: u.PrimaryMembershipID,
+		Characters:   characters,
+	}, nil
+}
+
 func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (api.ProfileResponseObject, error) {
 	access, ok := validator.FromContext(ctx)
 	if !ok {
