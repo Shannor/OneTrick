@@ -47,13 +47,24 @@ func (s Server) UpdateManifest(ctx context.Context, request api.UpdateManifestRe
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	sessionID := request.SessionId
-	l := slog.With("sessionID", sessionID, "function", "GetSession")
+	l := log.With().Str("sessionID", sessionID).Logger()
 	ses, err := s.SessionService.Get(ctx, sessionID)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch session")
+		l.Error().Err(err).Msg("failed to fetch session")
 		return nil, err
 	}
 	return api.GetSession200JSONResponse(*ses), nil
+}
+
+func (s Server) Search(ctx context.Context, request api.SearchRequestObject) (api.SearchResponseObject, error) {
+	results, hasMore, err := s.D2Service.Search(ctx, request.Body.Prefix, request.Body.Page)
+	if err != nil {
+		return nil, err
+	}
+	return api.Search200JSONResponse{
+		Results: results,
+		HasMore: hasMore,
+	}, nil
 }
 
 func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRequestObject) (api.SessionCheckInResponseObject, error) {
@@ -201,11 +212,68 @@ func SetAggregate(ctx context.Context, s Server, userID string, characterID stri
 }
 
 func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
-	result, err := s.SessionService.GetAll(ctx, request.Params.XUserID, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
+	result, err := s.SessionService.GetAll(ctx, &request.Params.XUserID, &request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
 	if err != nil {
 		return nil, err
 	}
 	return api.GetSessions200JSONResponse(result), nil
+}
+
+func (s Server) GetPublicSessions(ctx context.Context, request api.GetPublicSessionsRequestObject) (api.GetPublicSessionsResponseObject, error) {
+	result, err := s.SessionService.GetAll(ctx, nil, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
+	if err != nil {
+		return nil, err
+	}
+	return api.GetPublicSessions200JSONResponse(result), nil
+}
+
+func (s Server) GetPublicSession(ctx context.Context, request api.GetPublicSessionRequestObject) (api.GetPublicSessionResponseObject, error) {
+	sessionID := request.SessionId
+	l := log.With().Str("sessionID", sessionID).Logger()
+	ses, err := s.SessionService.Get(ctx, sessionID)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch session")
+		return nil, err
+	}
+	return api.GetPublicSession200JSONResponse(*ses), nil
+}
+
+func (s Server) GetPublicSessionAggregates(ctx context.Context, request api.GetPublicSessionAggregatesRequestObject) (api.GetPublicSessionAggregatesResponseObject, error) {
+	l := log.With().Str("sessionID", request.SessionId).Logger()
+	ses, err := s.SessionService.Get(ctx, request.SessionId)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch session")
+		return nil, err
+	}
+	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch aggregates")
+		return nil, err
+	}
+	uniqueIDS := make([]string, 0)
+	for _, a := range aggregates {
+		link, ok := a.SnapshotLinks[ses.CharacterID]
+		if !ok {
+			continue
+		}
+		if link.SnapshotID == nil {
+			continue
+		}
+		uniqueIDS = append(uniqueIDS, *link.SnapshotID)
+	}
+	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to fetch snapshots")
+		return nil, err
+	}
+	snapshotByID := make(map[string]api.CharacterSnapshot)
+	for _, snap := range snapshots {
+		snapshotByID[snap.ID] = snap
+	}
+	return api.GetPublicSessionAggregates200JSONResponse{
+		Aggregates: aggregates,
+		Snapshots:  snapshotByID,
+	}, nil
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
@@ -281,6 +349,42 @@ func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestO
 	}
 
 	return api.GetSnapshot200JSONResponse(*result), nil
+}
+
+func (s Server) GetPublicProfile(ctx context.Context, request api.GetPublicProfileRequestObject) (api.GetPublicProfileResponseObject, error) {
+	u, err := s.UserService.GetUser(ctx, request.Params.ID)
+	if err != nil {
+		return nil, err
+	}
+	t := int64(0)
+	for _, membership := range u.Memberships {
+		if membership.ID == u.PrimaryMembershipID {
+			t = membership.Type
+			break
+		}
+	}
+	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse primary membership id")
+	}
+	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+	if err != nil {
+		if errors.Is(err, destiny.ErrDestinyServerDown) {
+			return api.GetPublicProfile503JSONResponse{
+				Message: "Destiny Server is down. Please wait while they get it back up and running",
+				Status:  api.ErrDestinyServerDown,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to fetch characters: %w", err)
+	}
+
+	return api.GetPublicProfile200JSONResponse{
+		DisplayName:  u.DisplayName,
+		UniqueName:   u.UniqueName,
+		Id:           u.ID,
+		MembershipId: u.PrimaryMembershipID,
+		Characters:   characters,
+	}, nil
 }
 
 func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (api.ProfileResponseObject, error) {

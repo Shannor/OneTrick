@@ -30,7 +30,59 @@
         }
       }
     },
-    "/manifest":{
+    "/search": {
+      "summary": "return a list from bungie of matching users",
+      "post": {
+        "operationId": "search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["prefix", "page"],
+                "properties": {
+                  "prefix": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "integer",
+                    "format": "int32"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Return a list of search results found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "results",
+                    "hasMore"
+                  ],
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SearchUserResult"
+                      }
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/manifest": {
       "post": {
         "operationId": "UpdateManifest",
         "responses": {
@@ -40,7 +92,9 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["success"],
+                  "required": [
+                    "success"
+                  ],
                   "properties": {
                     "success": {
                       "type": "boolean"
@@ -595,12 +649,6 @@
       "get": {
         "parameters": [
           {
-            "$ref": "#/components/parameters/X-User-ID"
-          },
-          {
-            "$ref": "#/components/parameters/X-Membership-ID"
-          },
-          {
             "name": "sessionId",
             "in": "path",
             "required": true,
@@ -690,11 +738,146 @@
         "operationId": "GetSessionAggregates",
         "parameters": [
           {
-            "$ref": "#/components/parameters/X-User-ID"
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-go-name": "sessionID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of aggregates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "aggregates",
+                    "snapshots"
+                  ],
+                  "properties": {
+                    "aggregates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Aggregate"
+                      }
+                    },
+                    "snapshots": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/CharacterSnapshot"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/sessions": {
+      "get": {
+        "parameters": [
+          {
+            "name": "count",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "maximum": 30,
+              "minimum": 1
+            }
           },
           {
-            "$ref": "#/components/parameters/X-Membership-ID"
+            "name": "page",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
           },
+          {
+            "name": "characterId",
+            "x-go-name": "characterID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "complete"
+              ],
+              "x-enum-varnames": [
+                "SessionRequestPending",
+                "SessionRequestComplete"
+              ]
+            }
+          }
+        ],
+        "operationId": "GetPublicSessions",
+        "responses": {
+          "200": {
+            "description": "List of Sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Session"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/sessions/{sessionId}": {
+      "get": {
+        "operationId": "GetPublicSession",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-go-name": "sessionID"
+            }
+          }
+        ],
+        "description": "Get a specific session",
+        "responses": {
+          "200": {
+            "description": "Return a session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/sessions/{sessionId}/aggregates": {
+      "get": {
+        "operationId": "GetPublicSessionAggregates",
+        "parameters": [
           {
             "name": "sessionId",
             "in": "path",
@@ -712,7 +895,10 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["aggregates", "snapshots"],
+                  "required": [
+                    "aggregates",
+                    "snapshots"
+                  ],
                   "properties": {
                     "aggregates": {
                       "type": "array",
@@ -725,6 +911,56 @@
                       "additionalProperties": {
                         "$ref": "#/components/schemas/CharacterSnapshot"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },"/public/profile": {
+      "get": {
+        "operationId": "GetPublicProfile",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "x-go-name":"ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User Profile Info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "message",
+                    "status"
+                  ],
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "description": "User friendly description of the error"
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/InternalError"
                     }
                   }
                 }
@@ -1113,19 +1349,19 @@
       "OneTrickError": {
         "description": "Known errors for the one trick API",
         "type": "object",
-          "required": [
-            "message",
-            "status"
-          ],
-          "properties": {
-            "message": {
-              "type": "string",
-              "description": "User friendly description of the error"
-            },
-            "status": {
-              "$ref": "#/components/schemas/InternalError"
-            }
+        "required": [
+          "message",
+          "status"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "User friendly description of the error"
+          },
+          "status": {
+            "$ref": "#/components/schemas/InternalError"
           }
+        }
       },
       "ConfidenceSource": {
         "type": "string",
@@ -2090,7 +2326,7 @@
         "x-oapi-codegen-extra-tags": {
           "firestore": "classStat"
         },
-        "required":[
+        "required": [
           "name",
           "description",
           "hasIcon",
@@ -2199,7 +2435,7 @@
               "firestore": "name"
             }
           },
-          "status":{
+          "status": {
             "type": "string",
             "enum": [
               "pending",
@@ -2241,6 +2477,75 @@
             }
           }
         }
+      },
+      "SearchUserResult": {
+        "x-oapi-codegen-extra-tags": {
+          "firestore": "searchUserResult"
+        },
+        "required": [
+          "displayName",
+          "nameCode",
+          "bungieMembershipId",
+          "memberships"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "nameCode": {
+            "type": "string"
+          },
+          "bungieMembershipId": {
+            "type": "string",
+            "x-go-name": "bungieMembershipID"
+          },
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DestinyMembership"
+            }
+          }
+        }
+      },
+      "DestinyMembership": {
+        "type": "object",
+        "required": [
+          "displayName",
+          "membershipId",
+          "membershipType"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "membershipId":{
+            "x-go-name": "membershipID",
+            "type": "string"
+          },
+          "membershipType": {
+            "$ref": "#/components/schemas/SourceSystem"
+          },
+          "iconPath": {
+            "type": "string"
+          }
+        }
+      },
+      "SourceSystem": {
+        "type": "string",
+        "enum": [
+          "playstation",
+          "xbox",
+          "steam",
+          "stadia",
+          "unknown"
+        ],
+        "x-enum-varnames": [
+          "SystemPlayStation",
+          "SystemXbox",
+          "SystemSteam",
+          "SystemStadia",
+          "SystemUnknown"
+        ]
       }
     }
   }

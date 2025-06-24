@@ -9023,6 +9023,7 @@
         }
       },
       "User.UserSearchResponse": {
+        "x-go-name": "SearchResponse",
         "type": "object",
         "properties": {
           "searchResults": {
@@ -9041,6 +9042,7 @@
         }
       },
       "User.UserSearchResponseDetail": {
+        "x-go-name": "UserSearchDetail",
         "type": "object",
         "properties": {
           "bungieGlobalDisplayName": {
@@ -9052,8 +9054,7 @@
             "nullable": true
           },
           "bungieNetMembershipId": {
-            "type": "integer",
-            "format": "int64",
+            "type": "string",
             "nullable": true
           },
           "destinyMemberships": {
@@ -9065,6 +9066,7 @@
         }
       },
       "User.UserSearchPrefixRequest": {
+        "x-go-name": "UserSearchPrefixRequest",
         "type": "object",
         "properties": {
           "displayNamePrefix": {
@@ -47544,6 +47546,7 @@
       },
       "User.UserSearchResponse": {
         "description": "Look at the Response property for more information about the nature of this response",
+        "x-go-name": "UserSearchResponse",
         "content": {
           "application/json": {
             "schema": {
