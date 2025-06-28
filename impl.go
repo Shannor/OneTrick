@@ -70,26 +70,21 @@ func (s Server) Search(ctx context.Context, request api.SearchRequestObject) (ap
 func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRequestObject) (api.SessionCheckInResponseObject, error) {
 	sessionID := request.Body.SessionID
 	membershipID := request.Params.XMembershipID
-	l := slog.With(
-		"sessionID",
-		sessionID,
-		"membershipID",
-		membershipID,
-		"function",
-		"SessionCheckIn",
-	)
-	// 1. Get Session
+	l := log.With().
+		Str("sessionId", sessionID).
+		Str("membershipId", membershipID).Logger()
+
 	currentSession, err := s.SessionService.Get(ctx, sessionID)
 	if err != nil {
-		l.Error("Failed to fetch session")
+		l.Error().Err(err).Msg("cannot get session")
 		return nil, err
 	}
 
 	characterID := currentSession.CharacterID
 	userID := currentSession.UserID
-	l = l.
-		With("characterID", characterID).
-		With("userID", userID)
+	l = l.With().
+		Str("characterID", characterID).
+		Str("userID", userID).Logger()
 
 	// 2. Take a snapshot at this current time
 	_, err = s.CreateSnapshot(ctx, api.CreateSnapshotRequestObject{
@@ -102,17 +97,18 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		},
 	})
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to create snapshot")
+		l.Error().Err(err).Msg("failed to create snapshot")
 		return nil, err
 	}
 
 	membershipType, err := s.UserService.GetMembershipType(ctx, userID, membershipID)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch membership type")
+		l.Error().Err(err).Msg("failed to fetch membership type")
 		return nil, err
 	}
 
-	// 2. Get 3 latest activity history
+	// 2. Get 3 latest activity history TODO: Update to check dates aren't too far off
+	// Bug currently pulls older matches from other sessions
 	activityHistories, err := s.D2Service.GetAllPVPActivity(
 		ctx,
 		membershipID,
@@ -122,7 +118,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		0,
 	)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch history data")
+		l.Error().Err(err).Msg("failed to fetch membership type")
 		return nil, err
 	}
 	// TODO: Save to currentSession the last seen history ID and timestamp, If it's been the same for a long time we should kill the currentSession
@@ -134,7 +130,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 	}
 	aggregates, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch aggregate data")
+		l.Error().Err(err).Msg("failed to fetch aggregate data")
 		return nil, err
 	}
 
@@ -152,7 +148,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 
 		// Already attempted to link this character to this activity so we can skip it
 		if link != nil && link.SessionID != nil {
-			l.With("activityID", history.InstanceID).Debug("Already linked to this activity")
+			l.Debug().Str("activityID", history.InstanceID).Msg("Already linked to this activity")
 			continue
 		} else if link != nil {
 			// TODO: Figure out if we want to add this Session ID to this link
@@ -163,7 +159,8 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 
 		activity, err := s.D2Service.GetEnrichedActivity(ctx, characterID, history.InstanceID)
 		if err != nil {
-			l.With("error", err.Error()).Error("Failed to fetch activity data")
+
+			l.Error().Err(err).Msg("failed to fetch activity data")
 			return nil, err
 		}
 		a, err := SetAggregate(ctx, s, userID, characterID, &history, history.Period, *activity.Performance, &sessionID)
@@ -172,13 +169,13 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		}
 		aggIDs = append(aggIDs, a.ID)
 	}
-	l.Info("Adding aggregate IDs to session", "aggIDs", aggIDs)
+	l.Info().Strs("aggIDs", aggIDs).Msg("Adding aggregate IDs to session")
 	err = s.SessionService.AddAggregateIDs(ctx, sessionID, aggIDs)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to add aggregate IDs to session")
+		l.Error().Err(err).Msg("Failed to add aggregate IDs to session")
 		return nil, err
 	}
-	l.Info("Session check in complete")
+	l.Info().Msg("session check in complete")
 	return api.SessionCheckIn200JSONResponse(updatedAgg), nil
 }
 
@@ -367,7 +364,7 @@ func (s Server) GetPublicProfile(ctx context.Context, request api.GetPublicProfi
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse primary membership id")
 	}
-	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+	characters, _, err := s.D2Service.GetCharacters(ctx, pmId, t)
 	if err != nil {
 		if errors.Is(err, destiny.ErrDestinyServerDown) {
 			return api.GetPublicProfile503JSONResponse{
@@ -411,7 +408,7 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse primary membership id")
 	}
-	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+	characters, fireteamIDs, err := s.D2Service.GetCharacters(ctx, pmId, t)
 	if err != nil {
 		if errors.Is(err, destiny.ErrDestinyServerDown) {
 			return api.Profile503JSONResponse{
@@ -420,6 +417,20 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to fetch characters: %w", err)
+	}
+
+	fireteam := make([]api.FireteamMember, 0)
+	for _, ID := range fireteamIDs {
+		member, err := s.UserService.GetUser(ctx, ID)
+		if err != nil {
+			log.Warn().Str("memberId", ID).Msg("Membership ID is not found in one trick system. User needs to make an account")
+			continue
+		}
+		fireteam = append(fireteam, api.FireteamMember{
+			DisplayName:  member.DisplayName,
+			ID:           member.ID,
+			MembershipID: member.PrimaryMembershipID,
+		})
 	}
 
 	return api.Profile200JSONResponse{

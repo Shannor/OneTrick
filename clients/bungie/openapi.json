@@ -31825,9 +31825,8 @@
         "type": "object",
         "properties": {
           "membershipId": {
-            "type": "integer",
-            "description": "The Membership ID that matches the party member.",
-            "format": "int64"
+            "type": "string",
+            "description": "The Membership ID that matches the party member."
           },
           "emblemHash": {
             "type": "integer",
