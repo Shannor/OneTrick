@@ -919,7 +919,8 @@
           }
         }
       }
-    },"/public/profile": {
+    },
+    "/public/profile": {
       "get": {
         "operationId": "GetPublicProfile",
         "parameters": [
@@ -1080,6 +1081,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Character"
+            }
+          },
+          "fireteam": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FireteamMember"
             }
           }
         }
@@ -2027,6 +2034,39 @@
             "format": "int",
             "x-oapi-codegen-extra-tags": {
               "firestore": "alpha"
+            }
+          }
+        }
+      },
+      "FireteamMember" : {
+        "x-oapi-codegen-extra-tags": {
+          "firestore": "fireteamMember"
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "membershipId",
+          "displayName"
+        ],
+        "properties": {
+          "id": {
+            "x-go-name": "ID",
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "id"
+            }
+          },
+          "membershipId":{
+            "type": "string",
+            "x-go-name": "membershipID",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "membershipId"
+            }
+          },
+          "displayName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "displayName"
             }
           }
         }

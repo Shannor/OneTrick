@@ -57,7 +57,6 @@ func (m *manifestService) Get(ctx context.Context) (*Manifest, error) {
 		}
 		m.Current = data
 	}
-
 	return m.Current, nil
 }
 
@@ -102,7 +101,7 @@ func readManifestFromLocal(ctx context.Context) (*Manifest, error) {
 
 func readManifestFromMount() (*Manifest, error) {
 	var manifest *Manifest
-	log.Info().Msg("Attempting to get manifest.json file from mount")
+	log.Info().Msg("attempting to get manifest.json file from mount")
 	stat, err := os.Stat(mntLocation)
 	if err != nil {
 		log.
@@ -128,6 +127,7 @@ func readManifestFromMount() (*Manifest, error) {
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to close manifest.json file")
 	}
+	log.Info().Msg("returned manifest.json file from mount")
 	return manifest, nil
 }
 
@@ -138,6 +138,7 @@ func (m *manifestService) Update(ctx context.Context) error {
 	}
 
 	if update.ShouldUpdate {
+		log.Info().Msg("need to update the manifest")
 		err := setLatestManifest(ctx, m.env, update.ManifestURL)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to update to latest manifest")
@@ -147,6 +148,12 @@ func (m *manifestService) Update(ctx context.Context) error {
 		if err != nil {
 			log.Error().Err(err).Msg("failed to set latest manifest version")
 			return err
+		}
+		log.Info().Msg("updated manifest in bucket and firebase")
+	} else {
+		if m.Current != nil {
+			log.Info().Msg("no need to update and already have most up to date manifest")
+			return nil
 		}
 	}
 
@@ -163,6 +170,7 @@ func (m *manifestService) Update(ctx context.Context) error {
 		}
 		m.Current = data
 	}
+	log.Info().Msg("set manifest in memory successfully")
 	return nil
 }
 

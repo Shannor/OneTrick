@@ -748,7 +748,7 @@ type DestinyComponentsProfilesDestinyProfileTransitoryPartyMember struct {
 	EmblemHash *uint32 `json:"emblemHash,omitempty"`
 
 	// MembershipId The Membership ID that matches the party member.
-	MembershipId *int64 `json:"membershipId,omitempty"`
+	MembershipId *string `json:"membershipId,omitempty"`
 
 	// Status A Flags Enumeration value indicating the states that the player is in relevant to being on a fireteam.
 	Status *int32 `json:"status,omitempty"`

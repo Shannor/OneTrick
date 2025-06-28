@@ -18,7 +18,7 @@ import (
 
 type Service interface {
 	GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error)
-	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
+	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, []string, error)
 	GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
@@ -226,7 +226,7 @@ func (a *service) GetItemDetails(ctx context.Context, membershipID string, membe
 
 func (a *service) GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error) {
 	var components []int32
-	components = append(components, CharactersEquipment, Characters)
+	components = append(components, CharactersEquipment, CharactersCode)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
@@ -322,35 +322,47 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 	return loadout
 }
 
-func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
+func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, []string, error) {
 	var components []int32
-	components = append(components, Characters)
+	components = append(components, CharactersCode, TransitoryCode)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
 	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), primaryMembershipId, params)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed to get profile")
-		return nil, err
+		return nil, nil, err
 	}
 	if resp.StatusCode() != http.StatusOK {
 		if resp.StatusCode() == http.StatusServiceUnavailable {
-			return nil, ErrDestinyServerDown
+			return nil, nil, ErrDestinyServerDown
 		}
 		slog.With("status", resp.Status(), "status code", resp.StatusCode()).Error("failed to get profile")
-		return nil, fmt.Errorf("failed to get characters")
+		return nil, nil, fmt.Errorf("failed to get characters")
 	}
 
 	if resp.JSON200 == nil {
-		return nil, fmt.Errorf("no response found")
+		return nil, nil, fmt.Errorf("no response found")
+	}
+
+	memberIDs := make([]string, 0)
+	if resp.JSON200.Response.ProfileTransitoryData.Data != nil {
+		data := resp.JSON200.Response.ProfileTransitoryData.Data
+		if data.PartyMembers != nil {
+			for _, m := range *data.PartyMembers {
+				if m.MembershipId != nil {
+					memberIDs = append(memberIDs, *m.MembershipId)
+				}
+			}
+		}
 	}
 
 	if resp.JSON200.Response.Characters == nil {
-		return nil, fmt.Errorf("no response found")
+		return nil, nil, fmt.Errorf("no response found")
 	}
 	manifest, err := a.ManifestService.Get(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("manifest required for characters: %w", err)
+		return nil, nil, fmt.Errorf("manifest required for characters: %w", err)
 	}
 	results := make([]api.Character, 0)
 	for _, c := range *resp.JSON200.Response.Characters.Data {
@@ -363,7 +375,7 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 		}
 		return strings.Compare(a.Class, b.Class)
 	})
-	return results, nil
+	return results, memberIDs, nil
 }
 
 func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {

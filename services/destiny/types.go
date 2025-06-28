@@ -578,11 +578,12 @@ const (
 type RequestInfo = int32
 
 const (
-	Characters          RequestInfo = 200
+	CharactersCode      RequestInfo = 200
 	CharactersEquipment RequestInfo = 205
 	ItemInstanceCode    RequestInfo = 300
 	ItemPerksCode       RequestInfo = 302
 	ItemStatsCode       RequestInfo = 304
 	ItemSocketsCode     RequestInfo = 305
 	ItemCommonDataCode  RequestInfo = 307
+	TransitoryCode      RequestInfo = 1000
 )
