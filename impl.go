@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"log/slog"
 	"oneTrick/api"
+	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
@@ -107,14 +108,12 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		return nil, err
 	}
 
-	// 2. Get 3 latest activity history TODO: Update to check dates aren't too far off
-	// Bug currently pulls older matches from other sessions
 	activityHistories, err := s.D2Service.GetAllPVPActivity(
 		ctx,
 		membershipID,
 		membershipType,
 		characterID,
-		3,
+		2,
 		0,
 	)
 	if err != nil {
@@ -123,10 +122,12 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 	}
 	// TODO: Save to currentSession the last seen history ID and timestamp, If it's been the same for a long time we should kill the currentSession
 
-	// 3. Check 3 activity history to see if we have aggregates for them
 	IDs := make([]string, 0)
+	// Only choose activities that happened after starting the session
 	for _, activity := range activityHistories {
-		IDs = append(IDs, activity.InstanceID)
+		if activity.Period.Compare(currentSession.StartedAt) == 1 {
+			IDs = append(IDs, activity.InstanceID)
+		}
 	}
 	aggregates, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
 	if err != nil {
@@ -439,6 +440,7 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 		Id:           u.ID,
 		MembershipId: u.PrimaryMembershipID,
 		Characters:   characters,
+		Fireteam:     ptr.Of(fireteam),
 	}, nil
 }
 

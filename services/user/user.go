@@ -46,8 +46,13 @@ func (s *userService) GetUser(ctx context.Context, ID string) (*User, error) {
 		Operator: "==",
 		Value:    ID,
 	}
+	q3 := firestore.PropertyFilter{
+		Path:     "primaryMembershipId",
+		Operator: "==",
+		Value:    ID,
+	}
 	orFilter := firestore.OrFilter{
-		Filters: []firestore.EntityFilter{q1, q2},
+		Filters: []firestore.EntityFilter{q1, q2, q3},
 	}
 
 	iter := s.DB.Collection(userCollection).WhereEntity(orFilter).Documents(ctx)

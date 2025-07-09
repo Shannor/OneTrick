@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -19,6 +20,11 @@ type ManifestService interface {
 	Get(ctx context.Context) (*Manifest, error)
 	Update(ctx context.Context) error
 }
+
+const (
+	InventoryBucketCollection = "inventoryBucket"
+	ItemCategoryCollection    = "itemCategory"
+)
 
 // ManifestService provides access to the current Destiny manifest data
 type manifestService struct {
@@ -170,7 +176,27 @@ func (m *manifestService) Update(ctx context.Context) error {
 		}
 		m.Current = data
 	}
+
+	// TODO: Add logic to upload data to firebase for testing
+	err = updateTables(ctx, m.db, m.Current)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to update table entries")
+	}
 	log.Info().Msg("set manifest in memory successfully")
+	return nil
+}
+
+func updateTables(ctx context.Context, db *firestore.Client, manifest *Manifest) error {
+	if manifest == nil {
+		return nil
+	}
+	for _, definition := range manifest.InventoryBucketDefinition {
+		_, err := db.Collection(InventoryBucketCollection).Doc(strconv.FormatInt(definition.Hash, 10)).Set(ctx, definition)
+		if err != nil {
+			log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+		}
+
+	}
 	return nil
 }
 
