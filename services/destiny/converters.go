@@ -16,7 +16,13 @@ func setBaseBungieURL(value *string) string {
 
 	return fmt.Sprintf("%s%s", "https://www.bungie.net", *value)
 }
-func TransformItemToDetails(item *bungie.DestinyItem, manifest Manifest) *api.ItemProperties {
+func TransformItemToDetails(
+	item *bungie.DestinyItem,
+	items map[string]ItemDefinition,
+	damages map[string]DamageType,
+	perks map[string]PerkDefinition,
+	stats map[string]StatDefinition,
+) *api.ItemProperties {
 	if item == nil {
 		return nil
 	}
@@ -24,31 +30,31 @@ func TransformItemToDetails(item *bungie.DestinyItem, manifest Manifest) *api.It
 
 	// Generate Base Info
 	if item.Item != nil {
-		result.BaseInfo = generateBaseInfo(item, manifest)
+		result.BaseInfo = generateBaseInfo(item, items, damages)
 	}
 
 	// Generate Perks
 	if item.Perks != nil && item.Perks.Data != nil {
-		result.Perks = generatePerks(item, manifest)
+		result.Perks = generatePerks(item, perks)
 	}
 
 	// Generate Sockets
 	if item.Sockets != nil && item.Sockets.Data != nil {
-		result.Sockets = generateSockets(item, manifest)
+		result.Sockets = generateSockets(item, items)
 	}
 
 	// Generate Stats
 	if item.Stats != nil && item.Stats.Data != nil {
-		result.Stats = generateStats(item, manifest)
+		result.Stats = generateStats(item, stats)
 	}
 
 	return &result
 }
 
-func TransformCharacter(item *bungie.CharacterComponent, manifest Manifest) api.Character {
-	class := manifest.ClassDefinition[strconv.Itoa(int(*item.ClassHash))]
-	race := manifest.RaceDefinition[strconv.Itoa(int(*item.RaceHash))]
-	title := manifest.RecordDefinition[strconv.Itoa(int(*item.TitleRecordHash))]
+func TransformCharacter(item *bungie.CharacterComponent, classes map[string]ClassDefinition, races map[string]RaceDefinition, records map[string]RecordDefinition) api.Character {
+	class := classes[strconv.Itoa(int(*item.ClassHash))]
+	race := races[strconv.Itoa(int(*item.RaceHash))]
+	title := records[strconv.Itoa(int(*item.TitleRecordHash))]
 	return api.Character{
 		Class:               class.DisplayProperties.Name,
 		EmblemBackgroundURL: setBaseBungieURL(item.EmblemBackgroundPath),
@@ -60,10 +66,10 @@ func TransformCharacter(item *bungie.CharacterComponent, manifest Manifest) api.
 	}
 
 }
-func generateBaseInfo(item *bungie.DestinyItem, manifest Manifest) api.BaseItemInfo {
+func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition, damages map[string]DamageType) api.BaseItemInfo {
 	c := *item.Item.ItemComponent
 	hash := strconv.Itoa(int(*c.ItemHash))
-	name := manifest.InventoryItemDefinition[hash].DisplayProperties.Name
+	name := items[hash].DisplayProperties.Name
 
 	base := api.BaseItemInfo{
 		BucketHash: int64(*c.BucketHash),
@@ -76,7 +82,7 @@ func generateBaseInfo(item *bungie.DestinyItem, manifest Manifest) api.BaseItemI
 		instance := *item.Instance.ItemInstanceComponent
 		if instance.DamageTypeHash != nil {
 			hash := strconv.Itoa(int(*instance.DamageTypeHash))
-			def := manifest.DamageTypeDefinition[hash]
+			def := damages[hash]
 			dc := def.Color
 
 			base.Damage = &api.DamageInfo{
@@ -95,10 +101,10 @@ func generateBaseInfo(item *bungie.DestinyItem, manifest Manifest) api.BaseItemI
 	return base
 }
 
-func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
-	var perks []api.Perk
+func generatePerks(item *bungie.DestinyItem, perks map[string]PerkDefinition) []api.Perk {
+	var results []api.Perk
 	for _, p := range *item.Perks.Data.Perks {
-		perk, ok := manifest.SandboxPerkDefinition[strconv.Itoa(int(*p.PerkHash))]
+		perk, ok := perks[strconv.Itoa(int(*p.PerkHash))]
 		if !ok {
 			slog.Warn("Perk not found in manifest", "perkHash", strconv.Itoa(int(*p.PerkHash)))
 			continue
@@ -106,24 +112,24 @@ func generatePerks(item *bungie.DestinyItem, manifest Manifest) []api.Perk {
 		if !perk.IsDisplayable {
 			continue
 		}
-		perks = append(perks, api.Perk{
+		results = append(results, api.Perk{
 			Hash:        int64(*p.PerkHash),
 			IconPath:    ptr.Of(setBaseBungieURL(p.IconPath)),
 			Name:        perk.DisplayProperties.Name,
 			Description: &perk.DisplayProperties.Description,
 		})
 	}
-	return perks
+	return results
 }
 
-func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket {
+func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) *[]api.Socket {
 	var sockets []api.Socket
 	for _, s := range *item.Sockets.Data.Sockets {
 		if s.PlugHash == nil {
 			slog.Warn("Socket has no plug hash")
 			continue
 		}
-		socket, ok := manifest.InventoryItemDefinition[strconv.Itoa(int(*s.PlugHash))]
+		socket, ok := items[strconv.Itoa(int(*s.PlugHash))]
 		if !ok {
 			slog.Warn("Socket not found in manifest", "socketHash", strconv.Itoa(int(*s.PlugHash)))
 			continue
@@ -144,14 +150,14 @@ func generateSockets(item *bungie.DestinyItem, manifest Manifest) *[]api.Socket 
 	return &sockets
 }
 
-func generateStats(item *bungie.DestinyItem, manifest Manifest) api.Stats {
+func generateStats(item *bungie.DestinyItem, statDefinitions map[string]StatDefinition) api.Stats {
 	stats := make(api.Stats)
 	for key, s := range *item.Stats.Data.Stats {
 		if s.StatHash == nil || s.Value == nil {
 			slog.Warn("Missing stat hash or value for stat: ", key)
 			continue
 		}
-		stat, ok := manifest.StatDefinition[strconv.Itoa(int(*s.StatHash))]
+		stat, ok := statDefinitions[strconv.Itoa(int(*s.StatHash))]
 		if !ok {
 			slog.Warn("Stat not found in manifest: ", strconv.Itoa(int(*s.StatHash)))
 			continue
@@ -223,18 +229,18 @@ func uintToInt64[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](item *T) *int64
 	return ptr.Of(int64(*item))
 }
 
-func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, manifest Manifest) *api.ActivityHistory {
+func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activities map[string]ActivityDefinition, modes map[string]ActivityModeDefinition) *api.ActivityHistory {
 	if history == nil {
 		return nil
 	}
 
-	definition := manifest.ActivityDefinition[strconv.Itoa(int(*history.ReferenceId))]
-	activity, ok := manifest.ActivityDefinition[strconv.Itoa(int(*history.DirectorActivityHash))]
+	definition := activities[strconv.Itoa(int(*history.ReferenceId))]
+	activity, ok := activities[strconv.Itoa(int(*history.DirectorActivityHash))]
 	if !ok {
 		slog.Warn("Activity Directory not found in manifest: ", history.DirectorActivityHash)
 		return nil
 	}
-	activityMode := manifest.ActivityModeDefinition[strconv.Itoa(definition.DirectActivityModeHash)]
+	activityMode := modes[strconv.Itoa(definition.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(history.Mode))
 	return &api.ActivityHistory{
 		ActivityHash: *uintToInt64(history.DirectorActivityHash),
@@ -278,33 +284,33 @@ func TransformTeams(teams *[]bungie.TeamEntry) []api.Team {
 	return result
 }
 
-func TransformPeriodGroups(period []bungie.StatsPeriodGroup, manifest Manifest) []api.ActivityHistory {
+func TransformPeriodGroups(period []bungie.StatsPeriodGroup, activities map[string]ActivityDefinition, modes map[string]ActivityModeDefinition) []api.ActivityHistory {
 	if period == nil {
 		return nil
 	}
 	var result []api.ActivityHistory
 	for _, group := range period {
-		result = append(result, *TransformPeriodGroup(&group, manifest))
+		result = append(result, *TransformPeriodGroup(&group, activities, modes))
 	}
 	return result
 }
 
-func TransformPeriodGroup(period *bungie.StatsPeriodGroup, manifest Manifest) *api.ActivityHistory {
+func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string]ActivityDefinition, modes map[string]ActivityModeDefinition) *api.ActivityHistory {
 	if period == nil {
 		return nil
 	}
 
-	definition, ok := manifest.ActivityDefinition[strconv.Itoa(int(*period.ActivityDetails.ReferenceId))]
+	definition, ok := activities[strconv.Itoa(int(*period.ActivityDetails.ReferenceId))]
 	if !ok {
 		slog.Warn("Activity locale not found in manifest: ", period.ActivityDetails.ReferenceId)
 		return nil
 	}
-	activity, ok := manifest.ActivityDefinition[strconv.Itoa(int(*period.ActivityDetails.DirectorActivityHash))]
+	activity, ok := activities[strconv.Itoa(int(*period.ActivityDetails.DirectorActivityHash))]
 	if !ok {
 		slog.Warn("Activity Directory not found in manifest: ", period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
-	activityMode := manifest.ActivityModeDefinition[strconv.Itoa(activity.DirectActivityModeHash)]
+	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
 	return &api.ActivityHistory{
 		ActivityHash:   *uintToInt64(period.ActivityDetails.DirectorActivityHash),
@@ -350,7 +356,7 @@ func ToPlayerStats(values *map[string]bungie.HistoricalStatsValue) *api.PlayerSt
 	return personalValues
 }
 
-func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry, manifest *Manifest) *api.InstancePerformance {
+func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry, items map[string]ItemDefinition) *api.InstancePerformance {
 	if entry == nil {
 		return nil
 	}
@@ -358,7 +364,7 @@ func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry,
 
 	result.Extra = BungieStatValueToUniqueStatValue(entry.Extended.Values)
 	result.PlayerStats = *ToPlayerStats(entry.Values)
-	result.Weapons = WeaponsToInstanceWeapons(entry.Extended.Weapons, manifest)
+	result.Weapons = WeaponsToInstanceWeapons(entry.Extended.Weapons, items)
 	return result
 }
 
@@ -380,7 +386,7 @@ func BungieStatValueToUniqueStatValue(values *map[string]bungie.HistoricalStatsV
 	return &result
 }
 
-func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, manifest *Manifest) map[string]api.WeaponInstanceMetrics {
+func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, items map[string]ItemDefinition) map[string]api.WeaponInstanceMetrics {
 	if values == nil {
 		return nil
 	}
@@ -397,7 +403,7 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, manifest *
 			ReferenceID: &ref,
 			Stats:       BungieStatValueToUniqueStatValue(v.Values),
 		}
-		def, ok := manifest.InventoryItemDefinition[strconv.Itoa(int(*v.ReferenceId))]
+		def, ok := items[strconv.Itoa(int(*v.ReferenceId))]
 		if ok {
 			r.Display = &api.Display{
 				Description: def.ItemTypeAndTierDisplayName,
@@ -522,13 +528,13 @@ func generateSourceSystem(membershipType *int32) api.SourceSystem {
 
 	}
 }
-func generateClassStats(manifest *Manifest, stats map[string]int32) map[string]api.ClassStat {
-	if manifest == nil {
+func generateClassStats(statDefinitions map[string]StatDefinition, stats map[string]int32) map[string]api.ClassStat {
+	if statDefinitions == nil {
 		return nil
 	}
 	results := make(map[string]api.ClassStat)
 	for key, value := range stats {
-		info, ok := manifest.StatDefinition[key]
+		info, ok := statDefinitions[key]
 		if !ok {
 			slog.Warn("Missing stat", "statKey", key)
 			continue

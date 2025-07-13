@@ -35,7 +35,7 @@ type Server struct {
 func (s Server) UpdateManifest(ctx context.Context, request api.UpdateManifestRequestObject) (api.UpdateManifestResponseObject, error) {
 
 	go func() {
-		err := s.D2ManifestService.Update(ctx)
+		err := s.D2ManifestService.Migrate(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to perform an update")
 		}
@@ -284,7 +284,7 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 
 func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {
 	if request.Body.Name != nil {
-		// Update name
+		// Migrate name
 	}
 	if request.Body.CompletedAt != nil {
 		err := s.SessionService.Complete(ctx, request.SessionId)
