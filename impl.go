@@ -120,7 +120,6 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		l.Error().Err(err).Msg("failed to fetch membership type")
 		return nil, err
 	}
-	// TODO: Save to currentSession the last seen history ID and timestamp, If it's been the same for a long time we should kill the currentSession
 
 	IDs := make([]string, 0)
 	// Only choose activities that happened after starting the session
@@ -129,6 +128,15 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 			IDs = append(IDs, activity.InstanceID)
 		}
 	}
+
+	if len(IDs) > 0 {
+		last := IDs[0]
+		err := s.SessionService.SetLastActivity(ctx, sessionID, last)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	aggregates, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
 	if err != nil {
 		l.Error().Err(err).Msg("failed to fetch aggregate data")
@@ -275,7 +283,18 @@ func (s Server) GetPublicSessionAggregates(ctx context.Context, request api.GetP
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
-	result, err := s.SessionService.Start(ctx, request.Params.XUserID, request.Body.CharacterID)
+	if request.Params.XUserID != request.Body.UserID {
+		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
+	}
+	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
+	if err != nil {
+		return nil, err
+	}
+	createdBy := api.AuditField{
+		ID:       u.ID,
+		Username: u.DisplayName,
+	}
+	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy)
 	if err != nil {
 		return api.StartSession400JSONResponse{Message: err.Error()}, nil
 	}

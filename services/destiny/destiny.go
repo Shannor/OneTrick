@@ -4,7 +4,6 @@ import (
 	"cloud.google.com/go/firestore"
 	"context"
 	"fmt"
-	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"log/slog"
 	"net/http"
@@ -125,11 +124,11 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 
 	activities, err := a.ManifestService.GetActivities(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot enhance activities")
+		return nil, fmt.Errorf("cannot enhance activities: %v", err)
 	}
 	modes, err := a.ManifestService.GetActivityModes(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "cannot enhance activities")
+		return nil, fmt.Errorf("cannot enhance activities: %v", err)
 	}
 
 	return TransformPeriodGroups(*resp.JSON200.Response.Activities, activities, modes), nil
