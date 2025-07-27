@@ -527,13 +527,18 @@
             "application/json": {
               "schema": {
                 "required": [
-                  "characterId"
+                  "characterId",
+                  "userId"
                 ],
                 "type": "object",
                 "properties": {
                   "characterId": {
                     "type": "string",
                     "x-go-name": "characterID"
+                  },
+                  "userId": {
+                    "type": "string",
+                    "x-go-name": "userID"
                   }
                 }
               }
@@ -2475,6 +2480,12 @@
               "firestore": "name"
             }
           },
+          "startedBy": {
+            "$ref": "#/components/schemas/AuditField"
+          },
+          "completedBy": {
+            "$ref": "#/components/schemas/AuditField"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -2567,6 +2578,28 @@
           },
           "iconPath": {
             "type": "string"
+          }
+        }
+      },
+      "AuditField": {
+        "type": "object",
+        "required": [
+          "id",
+          "username"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "id"
+            },
+            "x-go-name": "ID"
+          },
+          "username": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "username"
+            }
           }
         }
       },

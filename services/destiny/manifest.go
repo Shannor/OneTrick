@@ -10,21 +10,49 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"oneTrick/utils"
 	"os"
+	"strconv"
 	"time"
 )
 
 type ManifestService interface {
-	Init() error
-	Get(ctx context.Context) (*Manifest, error)
-	Update(ctx context.Context) error
+	Migrate(ctx context.Context) error
+
+	GetPlaces(ctx context.Context) (map[string]PlaceDefinition, error)
+	GetActivities(ctx context.Context) (map[string]ActivityDefinition, error)
+	GetClasses(ctx context.Context) (map[string]ClassDefinition, error)
+	GetInventoryBuckets(ctx context.Context) (map[string]InventoryBucketDefinition, error)
+	GetRaces(ctx context.Context) (map[string]RaceDefinition, error)
+	GetItemCategories(ctx context.Context) (map[string]ItemCategory, error)
+	GetDamageTypes(ctx context.Context) (map[string]DamageType, error)
+	GetActivityModes(ctx context.Context) (map[string]ActivityModeDefinition, error)
+	GetStats(ctx context.Context) (map[string]StatDefinition, error)
+	GetItems(ctx context.Context) (map[string]ItemDefinition, error)
+	GetPerks(ctx context.Context) (map[string]PerkDefinition, error)
+	GetRecords(ctx context.Context) (map[string]RecordDefinition, error)
 }
+type ManifestCollection string
+
+const (
+	PlaceCollection            ManifestCollection = "d2Places"
+	ActivityCollection         ManifestCollection = "d2Activities"
+	ClassCollection            ManifestCollection = "d2Classes"
+	InventoryBucketCollection  ManifestCollection = "d2InventoryBuckets"
+	RaceCollection             ManifestCollection = "d2Races"
+	ItemCategoryCollection     ManifestCollection = "d2ItemCategories"
+	DamageCollection           ManifestCollection = "d2DamageTypes"
+	ActivityModeCollection     ManifestCollection = "d2ActivityModes"
+	StatDefinitionCollection   ManifestCollection = "d2StatDefinitions"
+	ItemDefinitionCollection   ManifestCollection = "d2ItemDefinitions"
+	SandboxPerkCollection      ManifestCollection = "d2SandboxPerks"
+	RecordDefinitionCollection ManifestCollection = "d2RecordDefinitions"
+)
 
 // ManifestService provides access to the current Destiny manifest data
 type manifestService struct {
-	Current *Manifest
-	db      *firestore.Client
-	env     string
+	db  *firestore.Client
+	env string
 }
 
 func NewManifestService(db *firestore.Client, env string) ManifestService {
@@ -33,31 +61,172 @@ func NewManifestService(db *firestore.Client, env string) ManifestService {
 		env: env,
 	}
 }
-func (m *manifestService) Init() error {
-	// Check if the local file is here (local) or gcp (production)
-	// If not there, go grab the data and bring it in
-	return nil
+func (m *manifestService) GetPlaces(ctx context.Context) (map[string]PlaceDefinition, error) {
+	docs, err := m.db.Collection(string(PlaceCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[PlaceDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[PlaceDefinition, string](results, func(t PlaceDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
 }
 
-func (m *manifestService) Get(ctx context.Context) (*Manifest, error) {
-	if m.Current != nil {
-		return m.Current, nil
+func (m *manifestService) GetActivities(ctx context.Context) (map[string]ActivityDefinition, error) {
+	docs, err := m.db.Collection(string(ActivityCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
 	}
+	results, err := utils.GetAllToStructs[ActivityDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[ActivityDefinition, string](results, func(t ActivityDefinition) string {
+		return strconv.FormatInt(int64(t.Hash), 10)
+	})
+}
 
-	if m.env == "production" {
-		data, err := readManifestFromMount()
-		if err != nil {
-			return nil, err
-		}
-		m.Current = data
-	} else {
-		data, err := readManifestFromLocal(ctx)
-		if err != nil {
-			return nil, err
-		}
-		m.Current = data
+func (m *manifestService) GetClasses(ctx context.Context) (map[string]ClassDefinition, error) {
+	docs, err := m.db.Collection(string(ClassCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
 	}
-	return m.Current, nil
+	results, err := utils.GetAllToStructs[ClassDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[ClassDefinition, string](results, func(t ClassDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetInventoryBuckets(ctx context.Context) (map[string]InventoryBucketDefinition, error) {
+	docs, err := m.db.Collection(string(InventoryBucketCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[InventoryBucketDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[InventoryBucketDefinition, string](results, func(t InventoryBucketDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetRaces(ctx context.Context) (map[string]RaceDefinition, error) {
+	docs, err := m.db.Collection(string(RaceCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[RaceDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[RaceDefinition, string](results, func(t RaceDefinition) string {
+		return strconv.FormatInt(int64(t.Hash), 10)
+	})
+}
+
+func (m *manifestService) GetItemCategories(ctx context.Context) (map[string]ItemCategory, error) {
+	docs, err := m.db.Collection(string(ItemCategoryCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[ItemCategory](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[ItemCategory, string](results, func(t ItemCategory) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetDamageTypes(ctx context.Context) (map[string]DamageType, error) {
+	docs, err := m.db.Collection(string(DamageCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[DamageType](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[DamageType, string](results, func(t DamageType) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetActivityModes(ctx context.Context) (map[string]ActivityModeDefinition, error) {
+	docs, err := m.db.Collection(string(ActivityModeCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[ActivityModeDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[ActivityModeDefinition, string](results, func(t ActivityModeDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetStats(ctx context.Context) (map[string]StatDefinition, error) {
+	docs, err := m.db.Collection(string(StatDefinitionCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[StatDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[StatDefinition, string](results, func(t StatDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetItems(ctx context.Context) (map[string]ItemDefinition, error) {
+	docs, err := m.db.Collection(string(ItemDefinitionCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[ItemDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[ItemDefinition, string](results, func(t ItemDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetPerks(ctx context.Context) (map[string]PerkDefinition, error) {
+	docs, err := m.db.Collection(string(SandboxPerkCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[PerkDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[PerkDefinition, string](results, func(t PerkDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetRecords(ctx context.Context) (map[string]RecordDefinition, error) {
+	docs, err := m.db.Collection(string(RecordDefinitionCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[RecordDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ToMap[RecordDefinition, string](results, func(t RecordDefinition) string {
+		return strconv.FormatInt(int64(t.Hash), 10)
+	})
 }
 
 func readManifestFromLocal(ctx context.Context) (*Manifest, error) {
@@ -131,46 +300,249 @@ func readManifestFromMount() (*Manifest, error) {
 	return manifest, nil
 }
 
-func (m *manifestService) Update(ctx context.Context) error {
+func (m *manifestService) Migrate(ctx context.Context) error {
 	update, err := checkManifestUpdate(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("failed the check manifest: %v", err)
 	}
+	l := log.With().Str("version", update.Version).Logger()
 
-	if update.ShouldUpdate {
-		log.Info().Msg("need to update the manifest")
-		err := setLatestManifest(ctx, m.env, update.ManifestURL)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to update to latest manifest")
-			return err
-		}
-		err = updateManifest(ctx, m.db, update.Version)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to set latest manifest version")
-			return err
-		}
-		log.Info().Msg("updated manifest in bucket and firebase")
-	} else {
-		if m.Current != nil {
-			log.Info().Msg("no need to update and already have most up to date manifest")
-			return nil
-		}
+	if !update.ShouldUpdate {
+		l.Info().Msg("up to date")
+		return nil
 	}
 
+	l.Info().Msg("update required")
+	err = setLatestManifest(ctx, m.env, update.ManifestURL)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to update to latest manifest")
+		return err
+	}
+
+	var manifest *Manifest
 	if m.env == "production" {
-		data, err := readManifestFromMount()
+		manifest, err = readManifestFromMount()
 		if err != nil {
 			return fmt.Errorf("failed to set the updated mainfest at run time: %v", err)
 		}
-		m.Current = data
 	} else {
-		data, err := readManifestFromLocal(ctx)
+		manifest, err = readManifestFromLocal(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to set the updated mainfest at run time: %v", err)
 		}
-		m.Current = data
 	}
-	log.Info().Msg("set manifest in memory successfully")
+
+	err = migrateD2Data(ctx, m.db, manifest)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to migrate table entries")
+	}
+
+	err = updateManifestVersion(ctx, m.db, update.Version)
+	if err != nil {
+		l.Error().Err(err).Msg("failed to set latest manifest version")
+		return err
+	}
+
+	return nil
+}
+
+func migrateD2Data(ctx context.Context, db *firestore.Client, manifest *Manifest) error {
+	if manifest == nil {
+		log.Error().Msg("no manifest provided. cannot perform migration")
+		return nil
+	}
+	log.Info().Msg("starting the migration")
+	startTime := time.Now()
+
+	// Create a channel to wait for all goroutines to finish
+	migrationsDone := make(chan bool)
+
+	// InventoryBucketDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.InventoryBucketDefinition {
+			_, err := db.Collection(string(InventoryBucketCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(InventoryBucketCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// ClassDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.ClassDefinition {
+			_, err := db.Collection(string(ClassCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(ClassCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// PlaceDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.PlaceDefinition {
+			_, err := db.Collection(string(PlaceCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(PlaceCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// DamageTypeDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.DamageTypeDefinition {
+			_, err := db.Collection(string(DamageCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save damage type")
+			}
+		}
+		log.Info().Str("collection", string(DamageCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// ActivityModeDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.ActivityModeDefinition {
+			_, err := db.Collection(string(ActivityModeCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save activity mode")
+			}
+		}
+		log.Info().Str("collection", string(ActivityModeCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// ActivityDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.ActivityDefinition {
+			_, err := db.Collection(string(ActivityCollection)).Doc(strconv.FormatInt(int64(definition.Hash), 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(ActivityCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// ItemCategoryDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.ItemCategoryDefinition {
+			_, err := db.Collection(string(ItemCategoryCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(ItemCategoryCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// InventoryItemDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.InventoryItemDefinition {
+			_, err := db.Collection(string(ItemDefinitionCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(ItemDefinitionCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// StatDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.StatDefinition {
+			_, err := db.Collection(string(StatDefinitionCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(StatDefinitionCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// RaceDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.RaceDefinition {
+			_, err := db.Collection(string(RaceCollection)).Doc(strconv.FormatInt(int64(definition.Hash), 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Float64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(RaceCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// PerkDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.SandboxPerkDefinition {
+			_, err := db.Collection(string(SandboxPerkCollection)).Doc(strconv.FormatInt(definition.Hash, 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int64("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(SandboxPerkCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// RecordDefinition
+	go func() {
+		loopStartTime := time.Now()
+		for _, definition := range manifest.RecordDefinition {
+			_, err := db.Collection(string(RecordDefinitionCollection)).Doc(strconv.FormatInt(int64(definition.Hash), 10)).Set(
+				ctx, definition,
+			)
+			if err != nil {
+				log.Error().Int("hash", definition.Hash).Err(err).Msg("failed to save definition")
+			}
+		}
+		log.Info().Str("collection", string(RecordDefinitionCollection)).Dur("duration", time.Since(loopStartTime)).Msg("finished migrating collection")
+		migrationsDone <- true
+	}()
+
+	// Wait for all migrations to complete
+	for i := 0; i < 12; i++ {
+		<-migrationsDone
+	}
+
+	log.Info().Dur("totalDuration", time.Since(startTime)).Msg("completed all migrations")
 	return nil
 }
 
@@ -218,13 +590,15 @@ func setLatestManifest(ctx context.Context, env, URL string) error {
 	return nil
 }
 
-func updateManifest(ctx context.Context, db *firestore.Client, version string) error {
+func updateManifestVersion(ctx context.Context, db *firestore.Client, version string) error {
 	_, err := db.
 		Collection(ConfigurationCollection).
 		Doc(DestinyDocument).
-		Set(ctx, map[string]interface{}{
-			"manifestVersion": version,
-		}, firestore.MergeAll)
+		Set(
+			ctx, map[string]interface{}{
+				"manifestVersion": version,
+			}, firestore.MergeAll,
+		)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to update config")
 		return err
@@ -234,7 +608,9 @@ func updateManifest(ctx context.Context, db *firestore.Client, version string) e
 
 func requestManifestInformation(ctx context.Context) (*ManifestResponse, error) {
 	// Create a request to the Bungie.net manifest endpoint
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.bungie.net/Platform/Destiny2/Manifest/", nil)
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, "https://www.bungie.net/Platform/Destiny2/Manifest/", nil,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("building request failed: %w", err)
 	}
@@ -340,11 +716,13 @@ func downloadAndUpload(ctx context.Context, url, bucketName, objectName string) 
 		return fmt.Errorf("failed to upload to bucket: %w", err)
 	}
 
-	slog.Info("Successfully downloaded and uploaded JSON file",
+	slog.Info(
+		"Successfully downloaded and uploaded JSON file",
 		"url", url,
 		"bucket", bucketName,
 		"object", objectName,
-		"size", len(respBody))
+		"size", len(respBody),
+	)
 
 	return nil
 }

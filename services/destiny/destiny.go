@@ -121,11 +121,17 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	if resp.JSON200.Response.Activities == nil {
 		return nil, fmt.Errorf("no activities found")
 	}
-	manifest, err := a.ManifestService.Get(ctx)
+
+	activities, err := a.ManifestService.GetActivities(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("manifest is not provided")
+		return nil, fmt.Errorf("cannot enhance activities: %v", err)
 	}
-	return TransformPeriodGroups(*resp.JSON200.Response.Activities, *manifest), nil
+	modes, err := a.ManifestService.GetActivityModes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot enhance activities: %v", err)
+	}
+
+	return TransformPeriodGroups(*resp.JSON200.Response.Activities, activities, modes), nil
 }
 
 func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, activityID string) (*EnrichedActivity, error) {
@@ -149,10 +155,11 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		return nil, nil
 	}
 
-	manifest, err := a.ManifestService.Get(ctx)
+	items, err := a.ManifestService.GetItems(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("manifest is not provided")
+		return nil, fmt.Errorf("cannot enrich because missing items: %v", err)
 	}
+
 	var (
 		performance   *api.InstancePerformance
 		personalStats *map[string]bungie.HistoricalStatsValue
@@ -161,15 +168,21 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		if entry.CharacterId == nil {
 			continue
 		}
-		// TODO: Only getting it for one character. Change for everyone
 		if *entry.CharacterId == characterID {
-			performance = CarnageEntryToInstancePerformance(&entry, manifest)
+			performance = CarnageEntryToInstancePerformance(&entry, items)
 			personalStats = entry.Values
 			break
 		}
-
 	}
-	details := TransformHistoricActivity(data.ActivityDetails, *manifest)
+	activities, err := a.ManifestService.GetActivities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	modes, err := a.ManifestService.GetActivityModes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	details := TransformHistoricActivity(data.ActivityDetails, activities, modes)
 	details.Period = *data.Period
 	details.PersonalValues = ToPlayerStats(personalStats)
 	if details.PersonalValues != nil && performance != nil {
@@ -217,11 +230,24 @@ func (a *service) GetItemDetails(ctx context.Context, membershipID string, membe
 	if response.JSON200.DestinyItem == nil {
 		return nil, nil
 	}
-	manifest, err := a.ManifestService.Get(ctx)
+
+	items, err := a.ManifestService.GetItems(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("manifest is not provided")
+		return nil, err
 	}
-	return TransformItemToDetails(response.JSON200.DestinyItem, *manifest), nil
+	damageTypes, err := a.ManifestService.GetDamageTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stats, err := a.ManifestService.GetStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	perks, err := a.ManifestService.GetPerks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return TransformItemToDetails(response.JSON200.DestinyItem, items, damageTypes, perks, stats), nil
 }
 
 func (a *service) GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error) {
@@ -235,7 +261,7 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 		return nil, nil, nil, err
 	}
 
-	// TODO: Update snapshot to include the guns information as it is now, since mods and perks could change on the same gun.
+	// TODO: Migrate snapshot to include the guns information as it is now, since mods and perks could change on the same gun.
 
 	if test.JSON200 == nil {
 		return nil, nil, nil, fmt.Errorf("no response found")
@@ -243,7 +269,7 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 
 	timeStamp := test.JSON200.Response.ResponseMintedTimestamp
 
-	// TODO: Update this function to take a snapshot for all characters at once
+	// TODO: Migrate this function to take a snapshot for all characters at once
 	results := make([]bungie.ItemComponent, 0)
 	if test.JSON200.Response.CharacterEquipment.Data != nil {
 		equipment := *test.JSON200.Response.CharacterEquipment.Data
@@ -278,16 +304,16 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 
 	}
 
-	manifest, err := a.ManifestService.Get(ctx)
+	statDefinitions, err := a.ManifestService.GetStats(ctx)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get manifest but still will generate stats")
+		log.Warn().Err(err).Msg("failed to get statDefinitions but still will generate stats")
 	}
 	stats := make(map[string]api.ClassStat)
 	if test.JSON200.Response.Characters.Data != nil {
 		characters := *test.JSON200.Response.Characters.Data
 		for ID, character := range characters {
 			if characterID == ID && character.Stats != nil {
-				stats = generateClassStats(manifest, *character.Stats)
+				stats = generateClassStats(statDefinitions, *character.Stats)
 			}
 		}
 
@@ -360,13 +386,21 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 	if resp.JSON200.Response.Characters == nil {
 		return nil, nil, fmt.Errorf("no response found")
 	}
-	manifest, err := a.ManifestService.Get(ctx)
+	classes, err := a.ManifestService.GetClasses(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("manifest required for characters: %w", err)
+		return nil, nil, fmt.Errorf("manifest required for characters: %v", err)
+	}
+	races, err := a.ManifestService.GetRaces(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	records, err := a.ManifestService.GetRecords(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	results := make([]api.Character, 0)
 	for _, c := range *resp.JSON200.Response.Characters.Data {
-		r := TransformCharacter(&c, *manifest)
+		r := TransformCharacter(&c, classes, races, records)
 		results = append(results, r)
 	}
 	slices.SortFunc(results, func(a, b api.Character) int {

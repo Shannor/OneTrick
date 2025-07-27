@@ -64,11 +64,6 @@ func main() {
 	firestore := gcp.CreateFirestore(context.Background())
 
 	manifestService := destiny.NewManifestService(firestore, string(env.Environment))
-	err = manifestService.Init()
-	if err != nil {
-		log.Fatal().Err(err).Msg("need manifest to start the service")
-		return
-	}
 
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)

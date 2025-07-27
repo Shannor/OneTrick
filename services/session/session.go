@@ -14,12 +14,13 @@ import (
 )
 
 type Service interface {
-	Start(ctx context.Context, userID string, characterID string) (*api.Session, error)
+	Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField) (*api.Session, error)
 	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 	Get(ctx context.Context, ID string) (*api.Session, error)
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
 	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus) ([]api.Session, error)
 	Complete(ctx context.Context, ID string) error
+	SetLastActivity(ctx context.Context, ID, activityID string) error
 }
 type service struct {
 	db *firestore.Client
@@ -37,7 +38,7 @@ const (
 	collection = "sessions"
 )
 
-func (s service) Start(ctx context.Context, userID string, characterID string) (*api.Session, error) {
+func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField) (*api.Session, error) {
 	if ok, err := s.HasActive(ctx, userID, characterID); ok || err != nil {
 		return nil, fmt.Errorf("session already active")
 	}
@@ -48,6 +49,7 @@ func (s service) Start(ctx context.Context, userID string, characterID string) (
 		Name:         ptr.Of(generator.SessionName()),
 		AggregateIDs: make([]string, 0),
 		Status:       ptr.Of(api.SessionPending),
+		StartedBy:    &startedBy,
 	}
 	ref := s.db.Collection(collection).NewDoc()
 	result.ID = ref.ID
@@ -170,6 +172,23 @@ func (s service) Complete(ctx context.Context, ID string) error {
 		slog.With("sessionID", ID).Warn("session already completed")
 	}
 
+	return nil
+}
+
+func (s service) SetLastActivity(ctx context.Context, ID, activityID string) error {
+	_, err := s.db.Collection(collection).Doc(ID).Update(ctx, []firestore.Update{
+		{
+			Path:  "lastSeenActivityId",
+			Value: activityID,
+		},
+		{
+			Path:  "lastSeenTimestamp",
+			Value: time.Now(),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update session: %v", err)
+	}
 	return nil
 }
 

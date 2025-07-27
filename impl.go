@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"log/slog"
 	"oneTrick/api"
+	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
@@ -34,7 +35,7 @@ type Server struct {
 func (s Server) UpdateManifest(ctx context.Context, request api.UpdateManifestRequestObject) (api.UpdateManifestResponseObject, error) {
 
 	go func() {
-		err := s.D2ManifestService.Update(ctx)
+		err := s.D2ManifestService.Migrate(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to perform an update")
 		}
@@ -107,27 +108,35 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		return nil, err
 	}
 
-	// 2. Get 3 latest activity history TODO: Update to check dates aren't too far off
-	// Bug currently pulls older matches from other sessions
 	activityHistories, err := s.D2Service.GetAllPVPActivity(
 		ctx,
 		membershipID,
 		membershipType,
 		characterID,
-		3,
+		2,
 		0,
 	)
 	if err != nil {
 		l.Error().Err(err).Msg("failed to fetch membership type")
 		return nil, err
 	}
-	// TODO: Save to currentSession the last seen history ID and timestamp, If it's been the same for a long time we should kill the currentSession
 
-	// 3. Check 3 activity history to see if we have aggregates for them
 	IDs := make([]string, 0)
+	// Only choose activities that happened after starting the session
 	for _, activity := range activityHistories {
-		IDs = append(IDs, activity.InstanceID)
+		if activity.Period.Compare(currentSession.StartedAt) == 1 {
+			IDs = append(IDs, activity.InstanceID)
+		}
 	}
+
+	if len(IDs) > 0 {
+		last := IDs[0]
+		err := s.SessionService.SetLastActivity(ctx, sessionID, last)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	aggregates, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
 	if err != nil {
 		l.Error().Err(err).Msg("failed to fetch aggregate data")
@@ -274,7 +283,18 @@ func (s Server) GetPublicSessionAggregates(ctx context.Context, request api.GetP
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
-	result, err := s.SessionService.Start(ctx, request.Params.XUserID, request.Body.CharacterID)
+	if request.Params.XUserID != request.Body.UserID {
+		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
+	}
+	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
+	if err != nil {
+		return nil, err
+	}
+	createdBy := api.AuditField{
+		ID:       u.ID,
+		Username: u.DisplayName,
+	}
+	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy)
 	if err != nil {
 		return api.StartSession400JSONResponse{Message: err.Error()}, nil
 	}
@@ -283,7 +303,7 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 
 func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {
 	if request.Body.Name != nil {
-		// Update name
+		// Migrate name
 	}
 	if request.Body.CompletedAt != nil {
 		err := s.SessionService.Complete(ctx, request.SessionId)
@@ -439,6 +459,7 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 		Id:           u.ID,
 		MembershipId: u.PrimaryMembershipID,
 		Characters:   characters,
+		Fireteam:     ptr.Of(fireteam),
 	}, nil
 }
 
