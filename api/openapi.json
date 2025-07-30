@@ -990,13 +990,21 @@
             "application/json": {
               "schema": {
                 "required": [
-                  "sessionId"
+                  "sessionId",
+                  "fireteam"
                 ],
                 "type": "object",
                 "properties": {
                   "sessionId": {
                     "type": "string",
                     "x-go-name": "sessionID"
+                  },
+                  "fireteam": {
+                    "type": "object",
+                    "description": "fireteam member user id mapped to their chosen character id",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -1015,7 +1023,7 @@
                 }
               }
             }
-          }
+          },
         }
       }
     }

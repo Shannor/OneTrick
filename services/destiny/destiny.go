@@ -10,6 +10,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
+	"oneTrick/set"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,13 +19,14 @@ import (
 
 type Service interface {
 	GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error)
-	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, []string, error)
+	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
 	GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
+	GetPartyMembers(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]bungie.PartyMember, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetIronBannerActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
-	GetEnrichedActivity(ctx context.Context, characterID string, activityID string) (*EnrichedActivity, error)
+	GetEnrichedActivity(ctx context.Context, activityID string, characterIDs []string) (*EnrichedActivity, error)
 	Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error)
 }
 
@@ -134,25 +136,23 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	return TransformPeriodGroups(*resp.JSON200.Response.Activities, activities, modes), nil
 }
 
-func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, activityID string) (*EnrichedActivity, error) {
+func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, characterIDs []string) (*EnrichedActivity, error) {
 	id, err := strconv.ParseInt(activityID, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
+
+	l := log.With().Str("activityId", activityID).Logger()
+
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
-		slog.With(
-			"error",
-			err.Error(),
-			"activity id",
-			activityID,
-		).Error("Failed to get post game carnage report")
+		l.Error().Err(err).Msg("Failed to get post game carnage report")
 		return nil, err
 	}
 	data := resp.JSON200.PostGameCarnageReportData
 	if data.Entries == nil || data.ActivityDetails == nil {
-		slog.With("activity id", activityID).Error("No data found for activity")
-		return nil, nil
+		l.Error().Msg("No data found for activity")
+		return nil, fmt.Errorf("nil data response")
 	}
 
 	items, err := a.ManifestService.GetItems(ctx)
@@ -160,17 +160,18 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 		return nil, fmt.Errorf("cannot enrich because missing items: %v", err)
 	}
 
-	var (
-		performance   *api.InstancePerformance
-		personalStats *map[string]bungie.HistoricalStatsValue
-	)
+	performances := make(map[string]api.InstancePerformance)
+	characterSet := set.FromSlice(characterIDs)
 	for _, entry := range *data.Entries {
 		if entry.CharacterId == nil {
 			continue
 		}
-		if *entry.CharacterId == characterID {
-			performance = CarnageEntryToInstancePerformance(&entry, items)
-			personalStats = entry.Values
+		if characterSet.Contains(*entry.CharacterId) {
+			p := CarnageEntryToInstancePerformance(&entry, items)
+			if p == nil {
+				continue
+			}
+			performances[*entry.CharacterId] = *p
 			break
 		}
 	}
@@ -184,16 +185,10 @@ func (a *service) GetEnrichedActivity(ctx context.Context, characterID string, a
 	}
 	details := TransformHistoricActivity(data.ActivityDetails, activities, modes)
 	details.Period = *data.Period
-	details.PersonalValues = ToPlayerStats(personalStats)
-	if details.PersonalValues != nil && performance != nil {
-		performance.PlayerStats = *details.PersonalValues
-	} else {
-		slog.Warn("No personal stats found for activity")
-	}
 	result := EnrichedActivity{
 		Period:          data.Period,
 		Activity:        details,
-		Performance:     performance,
+		Performances:    performances,
 		Teams:           TransformTeams(data.Teams),
 		PostGameEntries: *data.Entries,
 	}
@@ -348,55 +343,43 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 	return loadout
 }
 
-func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, []string, error) {
+func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
 	var components []int32
-	components = append(components, CharactersCode, TransitoryCode)
+	components = append(components, CharactersCode)
 	params := &bungie.Destiny2GetProfileParams{
 		Components: &components,
 	}
 	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), primaryMembershipId, params)
 	if err != nil {
 		slog.With("error", err.Error()).Error("failed to get profile")
-		return nil, nil, err
+		return nil, err
 	}
 	if resp.StatusCode() != http.StatusOK {
 		if resp.StatusCode() == http.StatusServiceUnavailable {
-			return nil, nil, ErrDestinyServerDown
+			return nil, ErrDestinyServerDown
 		}
 		slog.With("status", resp.Status(), "status code", resp.StatusCode()).Error("failed to get profile")
-		return nil, nil, fmt.Errorf("failed to get characters")
+		return nil, fmt.Errorf("failed to get characters")
 	}
 
 	if resp.JSON200 == nil {
-		return nil, nil, fmt.Errorf("no response found")
-	}
-
-	memberIDs := make([]string, 0)
-	if resp.JSON200.Response.ProfileTransitoryData.Data != nil {
-		data := resp.JSON200.Response.ProfileTransitoryData.Data
-		if data.PartyMembers != nil {
-			for _, m := range *data.PartyMembers {
-				if m.MembershipId != nil {
-					memberIDs = append(memberIDs, *m.MembershipId)
-				}
-			}
-		}
+		return nil, fmt.Errorf("no response found")
 	}
 
 	if resp.JSON200.Response.Characters == nil {
-		return nil, nil, fmt.Errorf("no response found")
+		return nil, fmt.Errorf("no response found")
 	}
 	classes, err := a.ManifestService.GetClasses(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("manifest required for characters: %v", err)
+		return nil, fmt.Errorf("manifest required for characters: %v", err)
 	}
 	races, err := a.ManifestService.GetRaces(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	records, err := a.ManifestService.GetRecords(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	results := make([]api.Character, 0)
 	for _, c := range *resp.JSON200.Response.Characters.Data {
@@ -409,7 +392,39 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 		}
 		return strings.Compare(a.Class, b.Class)
 	})
-	return results, memberIDs, nil
+	return results, nil
+}
+
+func (a *service) GetPartyMembers(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]bungie.PartyMember, error) {
+	var components []int32
+	components = append(components, TransitoryCode)
+	params := &bungie.Destiny2GetProfileParams{
+		Components: &components,
+	}
+	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), primaryMembershipId, params)
+	if err != nil {
+		slog.With("error", err.Error()).Error("failed to get profile")
+		return nil, err
+	}
+	if resp.StatusCode() != http.StatusOK {
+		if resp.StatusCode() == http.StatusServiceUnavailable {
+			return nil, ErrDestinyServerDown
+		}
+		slog.With("status", resp.Status(), "status code", resp.StatusCode()).Error("failed to get profile")
+		return nil, fmt.Errorf("failed to get characters")
+	}
+
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("no response found")
+	}
+
+	if resp.JSON200.Response.ProfileTransitoryData.Data == nil {
+		return nil, nil
+	}
+	if resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers == nil {
+		return nil, nil
+	}
+	return *resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers, nil
 }
 
 func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {

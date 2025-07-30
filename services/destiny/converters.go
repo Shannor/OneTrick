@@ -2,6 +2,7 @@ package destiny
 
 import (
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
@@ -290,7 +291,12 @@ func TransformPeriodGroups(period []bungie.StatsPeriodGroup, activities map[stri
 	}
 	var result []api.ActivityHistory
 	for _, group := range period {
-		result = append(result, *TransformPeriodGroup(&group, activities, modes))
+		r := TransformPeriodGroup(&group, activities, modes)
+		if r == nil {
+			log.Warn().Msg("period group returned nil")
+			continue
+		}
+		result = append(result, *r)
 	}
 	return result
 }
@@ -302,12 +308,12 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 
 	definition, ok := activities[strconv.Itoa(int(*period.ActivityDetails.ReferenceId))]
 	if !ok {
-		slog.Warn("Activity locale not found in manifest: ", period.ActivityDetails.ReferenceId)
+		log.Warn().Msgf("Activity locale not found in manifest: %d ", period.ActivityDetails.ReferenceId)
 		return nil
 	}
 	activity, ok := activities[strconv.Itoa(int(*period.ActivityDetails.DirectorActivityHash))]
 	if !ok {
-		slog.Warn("Activity Directory not found in manifest: ", period.ActivityDetails.DirectorActivityHash)
+		log.Warn().Msgf("Activity Directory not found in manifest: %d", period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
 	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]

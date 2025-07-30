@@ -18,10 +18,9 @@ import (
 // Service defines the interface for working with character snapshots and aggregates.
 type Service interface {
 
-	// Create creates a new snapshot for a given user and character.
-	// Takes a context, user ID, and CharacterSnapshot as input.
-	// Returns the ID of the created snapshot or an error if the operation fails.
-	Create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error)
+	// Save saves a new snapshot for the specified character for a user. Returns the
+	// snapshot data on success and an error if the generating or save to the DB fails
+	Save(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error)
 
 	// GetAllByCharacter retrieves all snapshots for a given user and character.
 	// Snapshots are returned in reverse chronological order based on their timestamp.
@@ -33,12 +32,12 @@ type Service interface {
 	// Takes a context, user ID, character ID, and snapshot ID as input.
 	// Returns the requested CharacterSnapshot or an error if the snapshot is not found or cannot be retrieved.
 	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
+
 	GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error)
 
 	FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
 	LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink
 	EnrichInstancePerformance(snapshot *api.CharacterSnapshot, performance api.InstancePerformance) (*api.InstancePerformance, error)
-	GenerateSnapshot(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error)
 }
 
 const (
@@ -62,7 +61,7 @@ func NewService(db *firestore.Client, userService user.Service, d2Service destin
 	}
 }
 
-func (s *service) Create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error) {
+func (s *service) create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error) {
 
 	if snapshot.Hash == "" {
 		hash, err := utils.HashMap(snapshot.Loadout)
@@ -236,7 +235,7 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 	return result, nil
 }
 
-func (s *service) GenerateSnapshot(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error) {
+func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error) {
 
 	membershipType, err := s.UserService.GetMembershipType(ctx, userID, membershipID)
 	if err != nil {
@@ -367,4 +366,19 @@ func (s *service) FindBestFit(ctx context.Context, userID string, characterID st
 		return nil, nil, err
 	}
 	return snap, &link, nil
+}
+
+func (s *service) Save(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error) {
+	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build data: %w", err)
+	}
+	if data == nil {
+		return nil, fmt.Errorf("failed to generate snapshot")
+	}
+	_, err = s.create(ctx, userID, *data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create snapshot: %w", err)
+	}
+	return data, nil
 }

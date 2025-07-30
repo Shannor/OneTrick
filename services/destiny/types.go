@@ -504,7 +504,7 @@ type ActivityModeDefinition struct {
 
 type EnrichedActivity struct {
 	Activity        *api.ActivityHistory                `json:"activity" firestore:"activity"`
-	Performance     *api.InstancePerformance            `json:"performance" firestore:"performance"`
+	Performances    map[string]api.InstancePerformance  `json:"performances" firestore:"performances"`
 	Teams           []api.Team                          `json:"teams" firestore:"teams"`
 	Period          *time.Time                          `json:"period" firestore:"period"`
 	PostGameEntries []bungie.PostGameCarnageReportEntry `json:"postGameEntries" firestore:"postGameEntries"`
