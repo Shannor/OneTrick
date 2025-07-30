@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"oneTrick/envvars"
 	"oneTrick/utils"
 	"os"
 	"strconv"
@@ -231,6 +232,7 @@ func (m *manifestService) GetRecords(ctx context.Context) (map[string]RecordDefi
 
 func readManifestFromLocal(ctx context.Context) (*Manifest, error) {
 	var manifest *Manifest
+	log.Info().Msg("reading manifest from local files")
 	_, err := os.Stat(LocalManifestLocation)
 	// Need to download the file
 	if err != nil {
@@ -312,37 +314,41 @@ func (m *manifestService) Migrate(ctx context.Context) error {
 		return nil
 	}
 
-	l.Info().Msg("update required")
+	l.Info().Msg("manifest update required")
 	err = setLatestManifest(ctx, m.env, update.ManifestURL)
 	if err != nil {
 		l.Error().Err(err).Msg("failed to update to latest manifest")
 		return err
 	}
 
+	l.Info().Msg("reading new manifest")
 	var manifest *Manifest
-	if m.env == "production" {
-		manifest, err = readManifestFromMount()
+	if m.env == string(envvars.DevEnv) {
+		manifest, err = readManifestFromLocal(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to set the updated mainfest at run time: %v", err)
 		}
 	} else {
-		manifest, err = readManifestFromLocal(ctx)
+		manifest, err = readManifestFromMount()
 		if err != nil {
 			return fmt.Errorf("failed to set the updated mainfest at run time: %v", err)
 		}
 	}
 
+	l.Info().Msg("starting migration steps")
 	err = migrateD2Data(ctx, m.db, manifest)
 	if err != nil {
 		l.Error().Err(err).Msg("failed to migrate table entries")
 	}
 
+	l.Info().Msg("updating version")
 	err = updateManifestVersion(ctx, m.db, update.Version)
 	if err != nil {
 		l.Error().Err(err).Msg("failed to set latest manifest version")
 		return err
 	}
 
+	l.Info().Msg("migration finished")
 	return nil
 }
 
