@@ -583,10 +583,12 @@ func checkManifestUpdate(ctx context.Context, db *firestore.Client) (ManifestUpd
 func setLatestManifest(ctx context.Context, env, URL string) error {
 	manifestURL := setBaseBungieURL(&URL)
 	if env == "production" {
+		log.Info().Str("manifestUrl", manifestURL).Msg("downloading and uploading manifest")
 		err := downloadAndUpload(ctx, manifestURL, DestinyBucket, ManifestObjectName)
 		if err != nil {
 			return err
 		}
+		log.Info().Msg("download and upload finished")
 	} else {
 		err := downloadJSON(context.Background(), manifestURL, LocalManifestLocation)
 		if err != nil {
@@ -678,57 +680,42 @@ func downloadAndUpload(ctx context.Context, url, bucketName, objectName string) 
 		return fmt.Errorf("bad response status: %s (code: %d)", resp.Status, resp.StatusCode)
 	}
 
-	// Optionally, you can verify it's valid JSON before uploading
-	// Create a temporary file to validate JSON
-	tmpFile, err := os.CreateTemp("", "json-validation-*.json")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	defer os.Remove(tmpName) // Clean up after ourselves
+	log.Info().
+		Str("url", url).
+		Int64("size", resp.ContentLength).
+		Msg("downloaded file from source")
 
-	// Copy response to temp file for validation
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
+	//tmpFile, err := os.CreateTemp("", "tmp-download-file.json")
+	//if err != nil {
+	//	return fmt.Errorf("failed to create temp file: %w", err)
+	//}
+	//tmpName := tmpFile.Name()
+	//defer func(name string) {
+	//	err := os.Remove(name)
+	//	if err != nil {
+	//		log.Error().Err(err).Msg("failed to remove tempfile on defer")
+	//	}
+	//}(tmpName) // Clean up after ourselves
+	//
+	//respBody, err := io.ReadAll(resp.Body)
+	//if err != nil {
+	//	return fmt.Errorf("failed to read response body: %w", err)
+	//}
+	//
+	//if _, err := tmpFile.Write(respBody); err != nil {
+	//	return fmt.Errorf("failed to write to temp file: %w", err)
+	//}
+	//defer tmpFile.Close()
 
-	if _, err := tmpFile.Write(respBody); err != nil {
-		return fmt.Errorf("failed to write to temp file: %w", err)
-	}
-	tmpFile.Close()
-
-	// Validate JSON
-	validateFile, err := os.Open(tmpName)
-	if err != nil {
-		return fmt.Errorf("failed to open temp file: %w", err)
-	}
-	defer validateFile.Close()
-
-	var jsonObj interface{}
-	jsonErr := json.NewDecoder(validateFile).Decode(&jsonObj)
-	if jsonErr != nil {
-		return fmt.Errorf("downloaded file is not valid JSON: %w", jsonErr)
-	}
-
-	// Upload to GCP bucket
-	uploadFile, err := os.Open(tmpName)
-	if err != nil {
-		return fmt.Errorf("failed to open temp file for upload: %w", err)
-	}
-	defer uploadFile.Close()
-
-	if err := uploadToBucket(ctx, bucketName, objectName, uploadFile); err != nil {
+	if err := uploadToBucket(ctx, bucketName, objectName, resp.Body); err != nil {
 		return fmt.Errorf("failed to upload to bucket: %w", err)
 	}
 
-	slog.Info(
-		"Successfully downloaded and uploaded JSON file",
-		"url", url,
-		"bucket", bucketName,
-		"object", objectName,
-		"size", len(respBody),
-	)
+	log.Info().
+		Str("url", url).
+		Str("bucket", bucketName).
+		Str("object", objectName).
+		Msg("Successfully uploaded the JSON file to gcp")
 
 	return nil
 }
@@ -744,7 +731,7 @@ func uploadToBucket(ctx context.Context, bucketName, objectName string, data io.
 	bucket := client.Bucket(bucketName)
 	obj := bucket.Object(objectName)
 	// Set timeout for the upload operation
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
 	defer cancel()
 
 	wc := obj.NewWriter(ctx)
