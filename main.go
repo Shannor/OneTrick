@@ -31,19 +31,17 @@ func main() {
 	logID := "application-log"
 	ctx := context.Background()
 
-	writer, err := zlg.NewCloudLoggingWriter(ctx, projectID, logID, zlg.CloudLoggingOptions{})
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create GCP writer")
-	}
-
-	log.Logger = log.Output(writer)
-
 	env := envvars.GetEvn()
 	if envvars.IsDev(env) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
-		multi := zerolog.MultiLevelWriter(consoleWriter, writer)
-		log.Logger = log.Output(multi)
+		log.Logger = log.Output(consoleWriter)
+	} else {
+		writer, err := zlg.NewCloudLoggingWriter(ctx, projectID, logID, zlg.CloudLoggingOptions{})
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create GCP writer")
+		}
+		log.Logger = log.Output(writer)
 	}
 
 	log.Info().Str("Env", string(env.Environment)).Msg("Starting Up")
