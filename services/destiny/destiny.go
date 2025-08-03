@@ -20,7 +20,7 @@ import (
 type Service interface {
 	GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error)
 	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
-	GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error)
+	GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*bungie.DestinyItem, error)
 	GetPartyMembers(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]bungie.PartyMember, error)
 	GetQuickPlayActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
@@ -195,7 +195,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, ch
 	return &result, nil
 }
 
-func (a *service) GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*api.ItemProperties, error) {
+func (a *service) GetItemDetails(ctx context.Context, membershipID string, membershipType int64, weaponInstanceID string) (*bungie.DestinyItem, error) {
 	components := []int32{ItemPerksCode, ItemStatsCode, ItemSocketsCode, ItemCommonDataCode, ItemInstanceCode}
 	membershipIdInt64, err := strconv.ParseInt(membershipID, 10, 64)
 	if err != nil {
@@ -226,23 +226,7 @@ func (a *service) GetItemDetails(ctx context.Context, membershipID string, membe
 		return nil, nil
 	}
 
-	items, err := a.ManifestService.GetItems(ctx)
-	if err != nil {
-		return nil, err
-	}
-	damageTypes, err := a.ManifestService.GetDamageTypes(ctx)
-	if err != nil {
-		return nil, err
-	}
-	stats, err := a.ManifestService.GetStats(ctx)
-	if err != nil {
-		return nil, err
-	}
-	perks, err := a.ManifestService.GetPerks(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return TransformItemToDetails(response.JSON200.DestinyItem, items, damageTypes, perks, stats), nil
+	return response.JSON200.DestinyItem, nil
 }
 
 func (a *service) GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error) {
@@ -313,11 +297,32 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 		}
 
 	}
-	loadout := a.buildLoadout(ctx, membershipID, membershipType, results)
+	loadout, err := a.buildLoadout(ctx, membershipID, membershipType, results)
+	if err != nil {
+		log.Error().Err(err).Msg("couldn't build the loadout")
+		return nil, nil, nil, err
+	}
 	return loadout, stats, timeStamp, nil
 }
 
-func (a *service) buildLoadout(ctx context.Context, membershipID int64, membershipType int64, items []bungie.ItemComponent) api.Loadout {
+func (a *service) buildLoadout(ctx context.Context, membershipID int64, membershipType int64, items []bungie.ItemComponent) (api.Loadout, error) {
+
+	d2Items, err := a.ManifestService.GetItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	damageTypes, err := a.ManifestService.GetDamageTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stats, err := a.ManifestService.GetStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	perks, err := a.ManifestService.GetPerks(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	loadout := make(api.Loadout)
 	for _, item := range items {
@@ -328,11 +333,12 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 		snap := api.ItemSnapshot{
 			InstanceID: *item.ItemInstanceId,
 		}
-		details, err := a.GetItemDetails(ctx, strconv.FormatInt(membershipID, 10), membershipType, *item.ItemInstanceId)
+		d, err := a.GetItemDetails(ctx, strconv.FormatInt(membershipID, 10), membershipType, *item.ItemInstanceId)
 		if err != nil {
 			slog.With("error", err.Error()).Error("failed to get item details")
 			continue
 		}
+		details := TransformItemToDetails(d, d2Items, damageTypes, perks, stats)
 		snap.Name = details.BaseInfo.Name
 		snap.ItemHash = details.BaseInfo.ItemHash
 		snap.ItemProperties = *details
@@ -340,7 +346,7 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 		loadout[strconv.FormatInt(snap.ItemProperties.BaseInfo.BucketHash, 10)] = snap
 	}
 
-	return loadout
+	return loadout, nil
 }
 
 func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {

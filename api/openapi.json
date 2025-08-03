@@ -82,31 +82,6 @@
         }
       }
     },
-    "/manifest": {
-      "post": {
-        "operationId": "UpdateManifest",
-        "responses": {
-          "200": {
-            "description": "Return of success of updating manifest if needed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "success"
-                  ],
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/profile": {
       "get": {
         "operationId": "Profile",

@@ -32,20 +32,6 @@ type Server struct {
 	SessionService    session.Service
 }
 
-func (s Server) UpdateManifest(ctx context.Context, _ api.UpdateManifestRequestObject) (api.UpdateManifestResponseObject, error) {
-
-	go func() {
-		err := s.D2ManifestService.Migrate(ctx)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to perform an update")
-		}
-	}()
-
-	return api.UpdateManifest200JSONResponse{
-		Success: true,
-	}, nil
-}
-
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	sessionID := request.SessionId
 	l := log.With().Str("sessionID", sessionID).Logger()
