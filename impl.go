@@ -177,23 +177,23 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		}
 	}
 
-	aggregates, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
+	existingAggs, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
 	if err != nil {
 		l.Error().Err(err).Msg("failed to fetch aggregate data")
 		return nil, err
 	}
 
-	activityToAgg := make(map[string]*api.Aggregate)
+	existingAggMap := make(map[string]*api.Aggregate)
 	aggIDs := make([]string, 0)
-	for _, agg := range aggregates {
-		activityToAgg[agg.ActivityID] = &agg
+	for _, agg := range existingAggs {
+		existingAggMap[agg.ActivityID] = &agg
 		aggIDs = append(aggIDs, agg.ID)
 	}
 
 	updatedAgg := false
 
 	for _, history := range histories {
-		agg := activityToAgg[history.InstanceID]
+		agg := existingAggMap[history.InstanceID]
 
 		updateNeeded := make([]ActionableMember, 0)
 		for _, member := range memberData {
@@ -216,7 +216,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		for _, data := range updateNeeded {
 			charIDs = append(charIDs, data.CharacterID)
 		}
-		// TODO: Update this to take a list of character IDs and return data on the activity response for all characters
+
 		activity, err := s.D2Service.GetEnrichedActivity(ctx, history.InstanceID, charIDs)
 		if err != nil {
 			l.Error().Err(err).Msg("failed to fetch activity data")
@@ -248,6 +248,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 		}
 	}
 
+	// TODO: This needs to change to be per members agg. A member won't be in every game since we choose two
 	for _, member := range memberData {
 		l.Info().Strs("aggIDs", aggIDs).Msg("Adding aggregate IDs to session for member")
 		err = s.SessionService.AddAggregateIDs(ctx, member.SessionID, aggIDs)

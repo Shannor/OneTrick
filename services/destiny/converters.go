@@ -230,18 +230,10 @@ func uintToInt64[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](item *T) *int64
 	return ptr.Of(int64(*item))
 }
 
-func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activities map[string]ActivityDefinition, modes map[string]ActivityModeDefinition) *api.ActivityHistory {
+func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activityDefinition, directorDef ActivityDefinition, modeDefinition ActivityModeDefinition) *api.ActivityHistory {
 	if history == nil {
 		return nil
 	}
-
-	definition := activities[strconv.Itoa(int(*history.ReferenceId))]
-	activity, ok := activities[strconv.Itoa(int(*history.DirectorActivityHash))]
-	if !ok {
-		slog.Warn("Activity Directory not found in manifest: ", history.DirectorActivityHash)
-		return nil
-	}
-	activityMode := modes[strconv.Itoa(definition.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(history.Mode))
 	return &api.ActivityHistory{
 		ActivityHash: *uintToInt64(history.DirectorActivityHash),
@@ -249,11 +241,11 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activiti
 		IsPrivate:    history.IsPrivate,
 		Mode:         &mode,
 		ReferenceID:  *uintToInt64(history.ReferenceId),
-		Location:     definition.DisplayProperties.Name,
-		Description:  definition.DisplayProperties.Description,
-		Activity:     activity.DisplayProperties.Name,
-		ImageURL:     setBaseBungieURL(&definition.PgcrImage),
-		ActivityIcon: setBaseBungieURL(&activityMode.DisplayProperties.Icon),
+		Location:     activityDefinition.DisplayProperties.Name,
+		Description:  activityDefinition.DisplayProperties.Description,
+		Activity:     directorDef.DisplayProperties.Name,
+		ImageURL:     setBaseBungieURL(&activityDefinition.PgcrImage),
+		ActivityIcon: setBaseBungieURL(&modeDefinition.DisplayProperties.Icon),
 	}
 }
 
