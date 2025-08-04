@@ -2,12 +2,13 @@ package destiny
 
 import (
 	"fmt"
-	"github.com/rs/zerolog/log"
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
 	"strconv"
+
+	"github.com/rs/zerolog/log"
 )
 
 func setBaseBungieURL(value *string) string {
@@ -127,12 +128,12 @@ func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) 
 	var sockets []api.Socket
 	for _, s := range *item.Sockets.Data.Sockets {
 		if s.PlugHash == nil {
-			slog.Warn("Socket has no plug hash")
+			log.Warn().Msg("Socket has no plug hash")
 			continue
 		}
 		socket, ok := items[strconv.Itoa(int(*s.PlugHash))]
 		if !ok {
-			slog.Warn("Socket not found in manifest", "socketHash", strconv.Itoa(int(*s.PlugHash)))
+			log.Warn().Uint32("socketHash", *s.PlugHash).Msg("Socket not found in manifest")
 			continue
 		}
 
