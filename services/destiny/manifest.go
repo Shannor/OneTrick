@@ -1,11 +1,12 @@
 package destiny
 
 import (
-	"cloud.google.com/go/firestore"
 	"context"
 	"fmt"
 	"oneTrick/utils"
 	"strconv"
+
+	"cloud.google.com/go/firestore"
 )
 
 // ManifestService provides access to Destiny 2 manifest definitions stored in Firestore
