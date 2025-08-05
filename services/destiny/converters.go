@@ -7,6 +7,8 @@ import (
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
 	"strconv"
+
+	"github.com/rs/zerolog/log"
 )
 
 func setBaseBungieURL(value *string) string {
@@ -126,12 +128,12 @@ func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) 
 	var sockets []api.Socket
 	for _, s := range *item.Sockets.Data.Sockets {
 		if s.PlugHash == nil {
-			slog.Warn("Socket has no plug hash")
+			log.Warn().Msg("Socket has no plug hash")
 			continue
 		}
 		socket, ok := items[strconv.Itoa(int(*s.PlugHash))]
 		if !ok {
-			slog.Warn("Socket not found in manifest", "socketHash", strconv.Itoa(int(*s.PlugHash)))
+			log.Warn().Uint32("socketHash", *s.PlugHash).Msg("Socket not found in manifest")
 			continue
 		}
 
@@ -229,18 +231,10 @@ func uintToInt64[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](item *T) *int64
 	return ptr.Of(int64(*item))
 }
 
-func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activities map[string]ActivityDefinition, modes map[string]ActivityModeDefinition) *api.ActivityHistory {
+func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activityDefinition, directorDef ActivityDefinition, modeDefinition ActivityModeDefinition) *api.ActivityHistory {
 	if history == nil {
 		return nil
 	}
-
-	definition := activities[strconv.Itoa(int(*history.ReferenceId))]
-	activity, ok := activities[strconv.Itoa(int(*history.DirectorActivityHash))]
-	if !ok {
-		slog.Warn("Activity Directory not found in manifest: ", history.DirectorActivityHash)
-		return nil
-	}
-	activityMode := modes[strconv.Itoa(definition.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(history.Mode))
 	return &api.ActivityHistory{
 		ActivityHash: *uintToInt64(history.DirectorActivityHash),
@@ -248,11 +242,11 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activiti
 		IsPrivate:    history.IsPrivate,
 		Mode:         &mode,
 		ReferenceID:  *uintToInt64(history.ReferenceId),
-		Location:     definition.DisplayProperties.Name,
-		Description:  definition.DisplayProperties.Description,
-		Activity:     activity.DisplayProperties.Name,
-		ImageURL:     setBaseBungieURL(&definition.PgcrImage),
-		ActivityIcon: setBaseBungieURL(&activityMode.DisplayProperties.Icon),
+		Location:     activityDefinition.DisplayProperties.Name,
+		Description:  activityDefinition.DisplayProperties.Description,
+		Activity:     directorDef.DisplayProperties.Name,
+		ImageURL:     setBaseBungieURL(&activityDefinition.PgcrImage),
+		ActivityIcon: setBaseBungieURL(&modeDefinition.DisplayProperties.Icon),
 	}
 }
 
@@ -290,7 +284,12 @@ func TransformPeriodGroups(period []bungie.StatsPeriodGroup, activities map[stri
 	}
 	var result []api.ActivityHistory
 	for _, group := range period {
-		result = append(result, *TransformPeriodGroup(&group, activities, modes))
+		r := TransformPeriodGroup(&group, activities, modes)
+		if r == nil {
+			log.Warn().Msg("period group returned nil")
+			continue
+		}
+		result = append(result, *r)
 	}
 	return result
 }
@@ -302,12 +301,12 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 
 	definition, ok := activities[strconv.Itoa(int(*period.ActivityDetails.ReferenceId))]
 	if !ok {
-		slog.Warn("Activity locale not found in manifest: ", period.ActivityDetails.ReferenceId)
+		log.Warn().Msgf("Activity locale not found in manifest: %d ", period.ActivityDetails.ReferenceId)
 		return nil
 	}
 	activity, ok := activities[strconv.Itoa(int(*period.ActivityDetails.DirectorActivityHash))]
 	if !ok {
-		slog.Warn("Activity Directory not found in manifest: ", period.ActivityDetails.DirectorActivityHash)
+		log.Warn().Msgf("Activity Directory not found in manifest: %d", period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
 	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]

@@ -66,7 +66,7 @@ func main() {
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
-	userService := user.NewUserService(firestore)
+	userService := user.NewUserService(firestore, destinyService)
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService)

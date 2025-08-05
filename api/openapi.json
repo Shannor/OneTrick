@@ -82,31 +82,6 @@
         }
       }
     },
-    "/manifest": {
-      "post": {
-        "operationId": "UpdateManifest",
-        "responses": {
-          "200": {
-            "description": "Return of success of updating manifest if needed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "success"
-                  ],
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/profile": {
       "get": {
         "operationId": "Profile",
@@ -990,13 +965,21 @@
             "application/json": {
               "schema": {
                 "required": [
-                  "sessionId"
+                  "sessionId",
+                  "fireteam"
                 ],
                 "type": "object",
                 "properties": {
                   "sessionId": {
                     "type": "string",
                     "x-go-name": "sessionID"
+                  },
+                  "fireteam": {
+                    "type": "object",
+                    "description": "fireteam member user id mapped to their chosen character id",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -1015,7 +998,7 @@
                 }
               }
             }
-          }
+          },
         }
       }
     }

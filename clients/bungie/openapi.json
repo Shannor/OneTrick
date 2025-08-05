@@ -31823,6 +31823,7 @@
       },
       "Destiny.Components.Profiles.DestinyProfileTransitoryPartyMember": {
         "type": "object",
+        "x-go-name": "PartyMember",
         "properties": {
           "membershipId": {
             "type": "string",
