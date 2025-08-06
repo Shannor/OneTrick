@@ -1,10 +1,8 @@
 package destiny
 
 import (
-	"cloud.google.com/go/firestore"
 	"context"
 	"fmt"
-	"github.com/rs/zerolog/log"
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
@@ -15,6 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/firestore"
+	"github.com/rs/zerolog/log"
 )
 
 type Service interface {
@@ -403,12 +404,24 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 	if err != nil {
 		return nil, err
 	}
-	records, err := a.ManifestService.GetRecords(ctx)
-	if err != nil {
-		return nil, err
+	data := *resp.JSON200.Response.Characters.Data
+	records := make(map[string]RecordDefinition)
+	for _, d := range data {
+		if d.TitleRecordHash != nil {
+			record, err := a.ManifestService.GetRecord(ctx, int64(*d.TitleRecordHash))
+			if err != nil {
+				log.Warn().Msg("missing id for title record")
+				continue
+			}
+			if record == nil {
+				log.Warn().Uint32("Hash", *d.TitleRecordHash).Msg("record was nil")
+				continue
+			}
+			records[strconv.Itoa(record.Hash)] = *record
+		}
 	}
 	results := make([]api.Character, 0)
-	for _, c := range *resp.JSON200.Response.Characters.Data {
+	for _, c := range data {
 		r := TransformCharacter(&c, classes, races, records)
 		results = append(results, r)
 	}

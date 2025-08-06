@@ -32,6 +32,14 @@ type Server struct {
 	SessionService    session.Service
 }
 
+func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestObject) (api.GetFireteamResponseObject, error) {
+	members, err := s.UserService.GetFireteam(ctx, request.Params.XUserID)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetFireteam200JSONResponse(members), nil
+}
+
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	sessionID := request.SessionId
 	l := log.With().Str("sessionID", sessionID).Logger()
@@ -519,7 +527,6 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 		Id:           u.ID,
 		MembershipId: u.PrimaryMembershipID,
 		Characters:   characters,
-		Fireteam:     nil,
 	}, nil
 }
 

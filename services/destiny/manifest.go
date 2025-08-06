@@ -74,6 +74,11 @@ type ManifestService interface {
 	// More efficient than GetActivityModes when only one activity mode is needed
 	// Returns nil and an error if the activity mode isn't found
 	GetActivityMode(ctx context.Context, hash int64) (*ActivityModeDefinition, error)
+
+	// GetRecord retrieves a single record definition from the manifest by its hash
+	// More efficient than GetRecords when only one record is needed
+	// Returns nil and an error if the record isn't found
+	GetRecord(ctx context.Context, hash int64) (*RecordDefinition, error)
 }
 type ManifestCollection string
 
@@ -326,6 +331,27 @@ func (m *manifestService) GetActivityMode(ctx context.Context, hash int64) (*Act
 	var result ActivityModeDefinition
 	if err := doc.DataTo(&result); err != nil {
 		return nil, fmt.Errorf("failed to convert activity mode definition: %w", err)
+	}
+
+	return &result, nil
+}
+
+// GetRecord retrieves a single record definition from the manifest by its hash
+func (m *manifestService) GetRecord(ctx context.Context, hash int64) (*RecordDefinition, error) {
+	if hash == 0 {
+		return nil, fmt.Errorf("record hash cannot be zero")
+	}
+
+	hashStr := strconv.FormatInt(hash, 10)
+
+	doc, err := m.db.Collection(string(RecordDefinitionCollection)).Doc(hashStr).Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get record definition: %w", err)
+	}
+
+	var result RecordDefinition
+	if err := doc.DataTo(&result); err != nil {
+		return nil, fmt.Errorf("failed to convert record definition: %w", err)
 	}
 
 	return &result, nil
