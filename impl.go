@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/fatih/structs"
-	"github.com/rs/zerolog/log"
 	"log/slog"
 	"oneTrick/api"
-	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
@@ -17,6 +14,9 @@ import (
 	"oneTrick/validator"
 	"strconv"
 	"time"
+
+	"github.com/fatih/structs"
+	"github.com/rs/zerolog/log"
 )
 
 // ensure that we've conformed to the `ServerInterface` with a compile-time check
@@ -513,18 +513,13 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 		return nil, fmt.Errorf("failed to fetch characters: %w", err)
 	}
 
-	fireteam, err := s.UserService.GetFireteam(ctx, u.ID)
-	if err != nil {
-		return nil, err
-	}
-
 	return api.Profile200JSONResponse{
 		DisplayName:  u.DisplayName,
 		UniqueName:   u.UniqueName,
 		Id:           u.ID,
 		MembershipId: u.PrimaryMembershipID,
 		Characters:   characters,
-		Fireteam:     ptr.Of(fireteam),
+		Fireteam:     nil,
 	}, nil
 }
 
