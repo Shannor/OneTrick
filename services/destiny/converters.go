@@ -65,6 +65,12 @@ func TransformCharacter(item *bungie.CharacterComponent, classes map[string]Clas
 		Light:               int64(*item.Light),
 		Race:                race.DisplayProperties.Name,
 		CurrentTitle:        title.TitleInfo.TitlesByGender.Male,
+		EmblemColor: api.Color{
+			Alpha: *item.EmblemColor.Alpha,
+			Blue:  *item.EmblemColor.Blue,
+			Green: *item.EmblemColor.Green,
+			Red:   *item.EmblemColor.Red,
+		},
 	}
 
 }

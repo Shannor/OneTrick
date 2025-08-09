@@ -1,16 +1,17 @@
 package user
 
 import (
-	"cloud.google.com/go/firestore"
 	"context"
 	"errors"
 	"fmt"
-	"github.com/rs/zerolog/log"
-	"google.golang.org/api/iterator"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"strconv"
 	"time"
+
+	"cloud.google.com/go/firestore"
+	"github.com/rs/zerolog/log"
+	"google.golang.org/api/iterator"
 )
 
 type Service interface {

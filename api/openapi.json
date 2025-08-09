@@ -2119,6 +2119,7 @@
           "light",
           "emblemBackgroundURL",
           "emblemURL",
+          "emblemColor",
           "currentTitle",
           "race",
           "class"
@@ -2154,6 +2155,9 @@
             "x-oapi-codegen-extra-tags": {
               "firestore": "currentTitle"
             }
+          },
+          "emblemColor": {
+            "$ref": "#/components/schemas/Color"
           },
           "race": {
             "type": "string",
