@@ -84,3 +84,5 @@ Content-Type: application/json
   "prefix": "Zone 6 Weegee",
   "page": 0
 }
+###
+POST http://localhost:8080/admin/backfill-character-ids

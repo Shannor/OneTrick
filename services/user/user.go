@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
+	"oneTrick/utils"
 	"strconv"
 	"time"
 
@@ -19,6 +20,13 @@ type Service interface {
 	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
 	GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error)
+	// BackfillCharacterIDs fetches characters from Destiny for the user's primary membership
+	// and updates the user's characterIds field in Firestore.
+	BackfillCharacterIDs(ctx context.Context, userID string) error
+	// GetAll returns all users. Used for admin backfills.
+	GetAll(ctx context.Context) ([]User, error)
+	// GetByCharacterID returns the user that owns the provided characterID. If not found returns (nil, nil).
+	GetByCharacterID(ctx context.Context, characterID string) (*User, error)
 }
 type userService struct {
 	db        *firestore.Client
@@ -158,4 +166,80 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 	}
 
 	return fireteam, nil
+}
+
+// BackfillCharacterIDs fetches the user's characters from Destiny and updates the
+// characterIds array on the User document. This is useful for users created before
+// character IDs were persisted or when data needs to be refreshed.
+func (s *userService) BackfillCharacterIDs(ctx context.Context, userID string) error {
+	u, err := s.GetUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch user: %w", err)
+	}
+	if u.PrimaryMembershipID == "" {
+		return fmt.Errorf("user missing primary membership id")
+	}
+	// Find membership type for the primary membership
+	membershipType := int64(0)
+	for _, m := range u.Memberships {
+		if m.ID == u.PrimaryMembershipID {
+			membershipType = m.Type
+			break
+		}
+	}
+	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("failed to parse primary membership id: %w", err)
+	}
+	chars, err := s.d2Service.GetCharacters(ctx, pmId, membershipType)
+	if err != nil {
+		return fmt.Errorf("failed to fetch characters: %w", err)
+	}
+	charIDs := make([]string, 0, len(chars))
+	for _, c := range chars {
+		charIDs = append(charIDs, c.Id)
+	}
+	// Merge update to only set the characterIds field
+	_, err = s.db.Collection(userCollection).Doc(u.ID).Set(ctx, map[string]any{
+		"characterIds": charIDs,
+	}, firestore.MergeAll)
+	if err != nil {
+		return fmt.Errorf("failed to update user character ids: %w", err)
+	}
+	return nil
+}
+
+// GetAll returns all users in the system. Intended for admin backfills.
+func (s *userService) GetAll(ctx context.Context) ([]User, error) {
+	docs, err := s.db.Collection(userCollection).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[User](docs)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// GetByCharacterID returns the user that owns the provided characterID. If not found returns (nil, nil).
+func (s *userService) GetByCharacterID(ctx context.Context, characterID string) (*User, error) {
+	if characterID == "" {
+		return nil, nil
+	}
+	q := s.db.Collection(userCollection).
+		Where("characterIds", "array-contains", characterID).
+		Limit(1)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	u := &User{}
+	if err := docs[0].DataTo(u); err != nil {
+		return nil, err
+	}
+	return u, nil
 }

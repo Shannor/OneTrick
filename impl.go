@@ -287,11 +287,6 @@ func SetAggregate(ctx context.Context, s Server, userID string, characterID stri
 		link.SessionID = sessionID
 	}
 
-	// Clear Personal values for an aggregate, we don't want to save that.
-	if activity.PersonalValues != nil {
-		activity.PersonalValues = nil
-	}
-
 	agg, err := s.AggregateService.AddAggregate(ctx, characterID, *activity, *link, *enrichedPerformance)
 	if err != nil {
 		return nil, err
@@ -510,6 +505,7 @@ func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse primary membership id")
 	}
+	// TODO: Decide if we want to remove since we have a dedicated call for this now
 	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
 	if err != nil {
 		if errors.Is(err, destiny.ErrDestinyServerDown) {
@@ -575,9 +571,11 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 	if bUser.PrimaryMembershipId != nil {
 		u.PrimaryMembershipID = *bUser.PrimaryMembershipId
 	}
+	membershipType := int64(0)
 	for i, mem := range *bUser.DestinyMemberships {
 		if i == 0 && bUser.PrimaryMembershipId == nil {
 			u.PrimaryMembershipID = *mem.MembershipId
+			membershipType = int64(int(*mem.MembershipType))
 		}
 		m = append(m, user.Membership{
 			ID:          *mem.MembershipId,
@@ -585,7 +583,17 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 			DisplayName: *mem.DisplayName,
 		})
 	}
+	id, _ := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	chars, err := s.D2Service.GetCharacters(ctx, id, membershipType)
+	if err != nil {
+		return nil, err
+	}
+	charIDs := make([]string, 0)
+	for _, char := range chars {
+		charIDs = append(charIDs, char.Id)
+	}
 	u.Memberships = m
+	u.CharacterIDs = charIDs
 
 	newUser, err := s.UserService.CreateUser(ctx, &u)
 	if err != nil {
@@ -757,17 +765,12 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 }
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
 	activityID := request.ActivityID
-	userID := request.Params.XUserID
-	characterID := request.Params.CharacterID
 
-	l := slog.
-		With("activityID", activityID).
-		With("userID", userID).
-		With("characterID", characterID)
-
-	activityDetails, err := s.D2Service.GetEnrichedActivity(ctx, activityID, []string{request.Params.CharacterID})
+	l := log.With().
+		Str("activityID", activityID).Logger()
+	activityDetails, teams, err := s.D2Service.GetActivity(ctx, activityID)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch weapon data for activity")
+		l.Error().Err(err).Msg("Failed to fetch weapon data for activity")
 		return nil, fmt.Errorf("failed to fetch weapon data for activity: %w", err)
 	}
 	if activityDetails == nil {
@@ -777,58 +780,92 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	agg, err := s.AggregateService.GetAggregate(ctx, activityID)
 	if err != nil {
 		if errors.Is(err, aggregate.NotFound) {
-			l.Debug("No aggregation found for activity")
+			l.Debug().Msg("No aggregation found for activity")
 		} else {
-			l.With("error", err.Error()).Error("unexpected error fetching aggregation")
+			l.Error().Err(err).Msg("unexpected error fetching aggregation")
 			return nil, err
 		}
 	}
 
-	characterInGame := false
-	for _, entry := range activityDetails.PostGameEntries {
-		if entry.CharacterId != nil && *entry.CharacterId == characterID {
-			characterInGame = true
-			break
-		}
-	}
-
 	entries := make([]map[string]any, 0)
-	for _, entry := range activityDetails.PostGameEntries {
+	for _, entry := range *activityDetails.Entries {
 		entries = append(entries, structs.Map(entry))
 	}
-	if !characterInGame {
-		return api.GetActivity200JSONResponse{
-			Activity:        *activityDetails.Activity,
-			Teams:           activityDetails.Teams,
-			Aggregate:       agg,
-			PostGameEntries: &entries,
-		}, nil
+	var IDs []string
+	for _, link := range agg.SnapshotLinks {
+		if link.SnapshotID == nil {
+			continue
+		}
+		IDs = append(IDs, *link.SnapshotID)
 	}
-
-	if s.SnapshotService.LookupLink(agg, characterID) != nil {
-		return api.GetActivity200JSONResponse{
-			Activity:        *activityDetails.Activity,
-			Teams:           activityDetails.Teams,
-			Aggregate:       agg,
-			PostGameEntries: &entries,
-		}, nil
-	}
-
-	performance, ok := activityDetails.Performances[characterID]
-	if !ok {
-		return nil, fmt.Errorf("no performance for character: %s", characterID)
-	}
-	// Backfill an aggregate on lookup when looking at an activity
-	a, err := SetAggregate(ctx, s, userID, characterID, activityDetails.Activity, *activityDetails.Period, performance, nil)
+	snapshots := make(map[string]api.CharacterSnapshot)
+	snaps, err := s.SnapshotService.GetByIDs(ctx, IDs)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to set aggregate")
 		return nil, err
 	}
-
+	for _, snap := range snaps {
+		snapshots[snap.CharacterID] = snap
+	}
+	// Build users map keyed by characterId when available
+	users := make(map[string]api.User)
+	for characterID, snap := range snapshots {
+		u, err := s.UserService.GetUser(ctx, snap.UserID)
+		if err != nil {
+			l.Error().Err(err).Str("characterId", characterID).Msg("failed to fetch user by character id")
+			continue
+		}
+		if u == nil {
+			continue
+		}
+		// Map service user to API user
+		apiUser := api.User{
+			ID:                  u.ID,
+			MemberID:            u.MemberID,
+			PrimaryMembershipID: u.PrimaryMembershipID,
+			UniqueName:          u.UniqueName,
+			DisplayName:         u.DisplayName,
+			CreatedAt:           u.CreatedAt,
+			CharacterIDs:        u.CharacterIDs,
+		}
+		// memberships
+		if len(u.Memberships) > 0 {
+			ms := make([]api.Membership, 0, len(u.Memberships))
+			for _, m := range u.Memberships {
+				ms = append(ms, api.Membership{ID: m.ID, Type: m.Type, DisplayName: m.DisplayName})
+			}
+			apiUser.Memberships = ms
+		}
+		users[characterID] = apiUser
+	}
 	return api.GetActivity200JSONResponse{
-		Activity:        *activityDetails.Activity,
-		Teams:           activityDetails.Teams,
-		Aggregate:       a,
+		Activity:        agg.ActivityDetails,
+		Teams:           teams,
+		Aggregate:       agg,
 		PostGameEntries: &entries,
+		Snapshots:       snapshots,
+		Users:           users,
+	}, nil
+
+}
+
+// Admin endpoint to backfill character IDs for all users
+func (s Server) BackfillAllUsersCharacterIds(ctx context.Context, request api.BackfillAllUsersCharacterIdsRequestObject) (api.BackfillAllUsersCharacterIdsResponseObject, error) {
+	users, err := s.UserService.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var updated int32
+	var failed int32
+	for _, u := range users {
+		if err := s.UserService.BackfillCharacterIDs(ctx, u.ID); err != nil {
+			slog.With("userId", u.ID, "error", err.Error()).Warn("failed to backfill character ids")
+			failed++
+			continue
+		}
+		updated++
+	}
+	return api.BackfillAllUsersCharacterIds200JSONResponse{
+		Updated: updated,
+		Failed:  failed,
 	}, nil
 }

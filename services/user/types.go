@@ -10,6 +10,7 @@ type User struct {
 	DisplayName         string       `json:"displayName" firestore:"displayName"`
 	Memberships         []Membership `json:"memberships" firestore:"memberships"`
 	CreatedAt           time.Time    `json:"createdAt" firestore:"createdAt"`
+	CharacterIDs        []string     `json:"characterIDs" firestore:"characterIds"`
 }
 
 type Membership struct {

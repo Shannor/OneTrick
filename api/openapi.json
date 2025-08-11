@@ -30,6 +30,37 @@
         }
       }
     },
+    "/admin/backfill-character-ids": {
+      "post": {
+        "operationId": "BackfillAllUsersCharacterIds",
+        "responses": {
+          "200": {
+            "description": "Summary of backfilled users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "updated",
+                    "failed"
+                  ],
+                  "properties": {
+                    "updated": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "failed": {
+                      "type": "integer",
+                      "format": "int32"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/search": {
       "summary": "return a list from bungie of matching users",
       "post": {
@@ -39,7 +70,10 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["prefix", "page"],
+                "required": [
+                  "prefix",
+                  "page"
+                ],
                 "properties": {
                   "prefix": {
                     "type": "string"
@@ -478,15 +512,8 @@
         "operationId": "GetActivity",
         "parameters": [
           {
-            "$ref": "#/components/parameters/X-User-ID"
-          },
-          {
-            "$ref": "#/components/parameters/X-Membership-ID"
-          },
-          {
             "name": "characterId",
             "in": "query",
-            "required": true,
             "x-go-name": "characterID",
             "schema": {
               "type": "string"
@@ -512,7 +539,9 @@
                   "type": "object",
                   "required": [
                     "activity",
-                    "teams"
+                    "teams",
+                    "snapshots",
+                    "users"
                   ],
                   "properties": {
                     "activity": {
@@ -527,10 +556,22 @@
                     "aggregate": {
                       "$ref": "#/components/schemas/Aggregate"
                     },
+                    "snapshots": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/CharacterSnapshot"
+                      }
+                    },
                     "postGameEntries": {
                       "type": "array",
                       "items": {
                         "type": "object"
+                      }
+                    },
+                    "users": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/User"
                       }
                     }
                   }
@@ -963,7 +1004,7 @@
           {
             "in": "query",
             "name": "id",
-            "x-go-name":"ID",
+            "x-go-name": "ID",
             "required": true,
             "schema": {
               "type": "string"
@@ -1054,7 +1095,7 @@
                 }
               }
             }
-          },
+          }
         }
       }
     }
@@ -1373,9 +1414,6 @@
             "x-oapi-codegen-extra-tags": {
               "firestore": "mode"
             }
-          },
-          "personalValues": {
-            "$ref": "#/components/schemas/PlayerStats"
           }
         }
       },
@@ -2076,7 +2114,7 @@
           }
         }
       },
-      "FireteamMember" : {
+      "FireteamMember": {
         "x-oapi-codegen-extra-tags": {
           "firestore": "fireteamMember"
         },
@@ -2094,7 +2132,7 @@
               "firestore": "id"
             }
           },
-          "membershipId":{
+          "membershipId": {
             "type": "string",
             "x-go-name": "membershipID",
             "x-oapi-codegen-extra-tags": {
@@ -2606,7 +2644,7 @@
           "displayName": {
             "type": "string"
           },
-          "membershipId":{
+          "membershipId": {
             "x-go-name": "membershipID",
             "type": "string"
           },
@@ -2615,6 +2653,107 @@
           },
           "iconPath": {
             "type": "string"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "memberId",
+          "memberships",
+          "primaryMembershipId",
+          "displayName",
+          "uniqueName",
+          "createdAt",
+          "characterIds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "id"
+            },
+            "x-go-name": "ID"
+          },
+          "memberId": {
+            "type": "string",
+            "x-go-name": "memberID",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "memberId"
+            }
+          },
+          "primaryMembershipId": {
+            "type": "string",
+            "x-go-name": "primaryMembershipID",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "primaryMembershipId"
+            }
+          },
+          "uniqueName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "uniqueName"
+            }
+          },
+          "displayName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "displayName"
+            }
+          },
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Membership"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "createdAt"
+            }
+          },
+          "characterIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "characterIds"
+            },
+            "x-go-name": "characterIDs"
+          }
+        }
+      },
+      "Membership": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "displayName"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "x-go-name": "ID",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "id"
+            }
+          },
+          "type": {
+            "type": "integer",
+            "format": "int64",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "type"
+            }
+          },
+          "displayName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "displayName"
+            }
           }
         }
       },

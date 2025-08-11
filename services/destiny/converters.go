@@ -318,18 +318,17 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
 	return &api.ActivityHistory{
-		ActivityHash:   *uintToInt64(period.ActivityDetails.DirectorActivityHash),
-		InstanceID:     *period.ActivityDetails.InstanceId,
-		IsPrivate:      period.ActivityDetails.IsPrivate,
-		Mode:           &mode,
-		ReferenceID:    *uintToInt64(period.ActivityDetails.ReferenceId),
-		Location:       definition.DisplayProperties.Name,
-		Description:    definition.DisplayProperties.Description,
-		Activity:       activity.DisplayProperties.Name,
-		ImageURL:       setBaseBungieURL(&definition.PgcrImage),
-		ActivityIcon:   setBaseBungieURL(&activityMode.DisplayProperties.Icon),
-		PersonalValues: ToPlayerStats(period.Values),
-		Period:         *period.Period,
+		ActivityHash: *uintToInt64(period.ActivityDetails.DirectorActivityHash),
+		InstanceID:   *period.ActivityDetails.InstanceId,
+		IsPrivate:    period.ActivityDetails.IsPrivate,
+		Mode:         &mode,
+		ReferenceID:  *uintToInt64(period.ActivityDetails.ReferenceId),
+		Location:     definition.DisplayProperties.Name,
+		Description:  definition.DisplayProperties.Description,
+		Activity:     activity.DisplayProperties.Name,
+		ImageURL:     setBaseBungieURL(&definition.PgcrImage),
+		ActivityIcon: setBaseBungieURL(&activityMode.DisplayProperties.Icon),
+		Period:       *period.Period,
 	}
 }
 
