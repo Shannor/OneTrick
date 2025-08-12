@@ -38,3 +38,6 @@ GET http://www.bungie.net/common/destiny2_content/json/en/aggregate-63d9dc4b-3a6
 <> 2025-01-04T115704.200.json
 <> 2025-01-03T190136.200.json
 <> 2025-01-03T190019.200.json
+
+###
+GET https://www.bungie.net/common/destiny2_content/json/en/aggregate-8bd9cafb-b4d8-44e8-a890-c24c3133befd.json
