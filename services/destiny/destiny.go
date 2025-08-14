@@ -28,6 +28,7 @@ type Service interface {
 	GetCompetitiveActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetIronBannerActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, count int64, page int64) ([]api.ActivityHistory, error)
 	GetActivity(ctx context.Context, activityID string) (*bungie.PostGameCarnageReportData, []api.Team, error)
+	GetPerformances(ctx context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error)
 	GetEnrichedActivity(ctx context.Context, activityID string, characterIDs []string) (*EnrichedActivity, error)
 	Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error)
 }
@@ -136,6 +137,44 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	}
 
 	return TransformPeriodGroups(*resp.JSON200.Response.Activities, activities, modes), nil
+}
+
+func (a *service) GetPerformances(ctx context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error) {
+	id, err := strconv.ParseInt(activityID, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid activity ID: %w", err)
+	}
+
+	l := log.With().Str("activityId", activityID).Logger()
+
+	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
+	if err != nil {
+		l.Error().Err(err).Msg("Failed to get post game carnage report")
+		return nil, err
+	}
+	data := resp.JSON200.PostGameCarnageReportData
+	if data.Entries == nil || data.ActivityDetails == nil {
+		l.Error().Msg("No data found for activity")
+		return nil, fmt.Errorf("nil data response")
+	}
+
+	performances := make(map[string]api.InstancePerformance)
+	characterSet := set.FromSlice(characterIDs)
+	items := buildItemsSet(ctx, data, characterSet, a)
+	for _, entry := range *data.Entries {
+		if entry.CharacterId == nil {
+			continue
+		}
+		if characterSet.Contains(*entry.CharacterId) {
+			p := CarnageEntryToInstancePerformance(&entry, items)
+			if p == nil {
+				continue
+			}
+			performances[*entry.CharacterId] = *p
+		}
+	}
+
+	return performances, nil
 }
 
 func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, characterIDs []string) (*EnrichedActivity, error) {

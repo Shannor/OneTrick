@@ -2,6 +2,8 @@ package snapshot
 
 import (
 	"cloud.google.com/go/firestore"
+	"github.com/rs/zerolog/log"
+
 	"context"
 	"fmt"
 	"log/slog"
@@ -198,16 +200,16 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 		Weapons:     performance.Weapons,
 	}
 	if snapshot == nil {
-		slog.Debug("No provided snapshot to perform enrichment on")
+		log.Debug().Msg("No provided snapshot to perform enrichment on")
 		return result, nil
 	}
 
 	if len(performance.Weapons) == 0 {
-		slog.Debug("No metrics provided to enrich")
+		log.Debug().Msg("No metrics provided to enrich")
 		return result, nil
 	}
 	if snapshot.Loadout == nil {
-		slog.Debug("No loadout provided to enrich")
+		log.Debug().Msg("No loadout provided to enrich")
 		return result, nil
 	}
 

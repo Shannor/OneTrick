@@ -107,11 +107,11 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 
 	l = l.With().Int("fireteamSize", len(members)).Logger()
 	memberData := make([]ActionableMember, 0)
-	l.Debug().Msg("Starting to save data for fireteam")
 	// Need to get current sessions for fireteam members
+	l.Info().Msg("Starting to build up membership information")
 	for _, member := range members {
 		ll := l.With().
-			Str("fireteamMemberId", member.ID).
+			Str("fireteamUserId", member.ID).
 			Str("fireteamDisplayName", member.DisplayName).
 			Logger()
 
@@ -120,18 +120,14 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 			ll.Warn().Msg("failed to find member passed in the fireteam request body")
 			continue
 		}
-
-		_, err = s.SnapshotService.Save(ctx, member.ID, member.MembershipID, charID)
-		if err != nil {
-			ll.Warn().Err(err).Msg("failed to save")
-			continue
-		}
+		ll = ll.With().Str("characterId", charID).Logger()
 
 		active, err := s.SessionService.GetActive(ctx, member.ID, charID)
 		if err != nil {
-			ll.Warn().Err(err).Msg("no active active found")
+			ll.Warn().Err(err).Msg("no active session found for user and character")
 			continue
 		}
+
 		memberData = append(memberData, ActionableMember{
 			CharacterID:  charID,
 			UserID:       member.ID,
@@ -139,6 +135,18 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 			SessionID:    active.ID,
 		})
 	}
+
+	l.Info().Msgf("Members count :%d\n", len(memberData))
+
+	l.Debug().Msg("Starting to save data for fireteam")
+	for _, member := range memberData {
+		_, err = s.SnapshotService.Save(ctx, member.UserID, member.MembershipID, member.SessionID)
+		if err != nil {
+			l.Warn().Err(err).Msg("failed to save")
+			continue
+		}
+	}
+	l.Info().Msg("Saved data for fireteam members")
 
 	membershipType, err := s.UserService.GetMembershipType(ctx, userID, membershipID)
 	if err != nil {
@@ -163,13 +171,13 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 	IDs := make([]string, 0)
 	histories := make([]api.ActivityHistory, 0)
 	// Only choose activities that happened after starting the session
-	// TODO: or maybe using the last seen activity
 	for _, activity := range activityHistories {
 		if activity.Period.Compare(currentSession.StartedAt) == 1 {
 			IDs = append(IDs, activity.InstanceID)
 			histories = append(histories, activity)
 		}
 	}
+	l.Info().Msgf("Activities Found: %+v", IDs)
 
 	if len(IDs) == 0 {
 		return api.SessionCheckIn200JSONResponse(false), nil
@@ -187,9 +195,13 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 
 	existingAggs, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
 	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch aggregate data")
+		l.Error().
+			Err(err).
+			Strs("activityIDs", IDs).Msg("failed to fetch aggregates by the provided IDs")
 		return nil, err
 	}
+
+	l.Info().Msgf("Length of existing Aggs: %d", len(existingAggs))
 
 	existingAggMap := make(map[string]*api.Aggregate)
 	aggIDs := make([]string, 0)
@@ -225,15 +237,15 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 			charIDs = append(charIDs, data.CharacterID)
 		}
 
-		activity, err := s.D2Service.GetEnrichedActivity(ctx, history.InstanceID, charIDs)
+		performances, err := s.D2Service.GetPerformances(ctx, history.InstanceID, charIDs)
 		if err != nil {
-			l.Error().Err(err).Msg("failed to fetch activity data")
+			l.Error().Err(err).Msg("failed to fetch performances")
 			return nil, err
 		}
 		for i, member := range updateNeeded {
-			performance, ok := activity.Performances[member.CharacterID]
+			performance, ok := performances[member.CharacterID]
 			if !ok {
-				l.Warn().Msg("no performance found for character")
+				l.Warn().Str("memberUserId", member.UserID).Msg("no performance found for member")
 				continue
 			}
 			a, err := SetAggregate(
@@ -255,6 +267,7 @@ func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRe
 			}
 		}
 	}
+	l.Info().Strs("aggregateIds", aggIDs).Msgf("Aggregates to add")
 
 	// TODO: This needs to change to be per members agg. A member won't be in every game since we choose two
 	for _, member := range memberData {
@@ -402,6 +415,10 @@ func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSession
 	if err != nil {
 		l.With("error", err.Error()).Error("Failed to fetch session")
 		return nil, err
+	}
+	if len(ses.AggregateIDs) == 0 {
+		l.Error("No aggregate IDs found")
+		return nil, fmt.Errorf("no aggregate found")
 	}
 	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
 	if err != nil {
@@ -777,6 +794,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 		return nil, fmt.Errorf("no activity details found for activity ID: %s", activityID)
 	}
 
+	// TODO: Come to fix this when no aggregate has been made for an activity
 	agg, err := s.AggregateService.GetAggregate(ctx, activityID)
 	if err != nil {
 		if errors.Is(err, aggregate.NotFound) {

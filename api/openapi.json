@@ -2556,10 +2556,26 @@
             }
           },
           "startedBy": {
-            "$ref": "#/components/schemas/AuditField"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuditField"
+              }
+            ],
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "startedBy"
+            }
           },
           "completedBy": {
-            "$ref": "#/components/schemas/AuditField"
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuditField"
+              }
+            ],
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "completedBy"
+            }
           },
           "status": {
             "type": "string",
