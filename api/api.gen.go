@@ -557,6 +557,12 @@ type LoginJSONBody struct {
 	Code string `json:"code"`
 }
 
+// GetTopLoadoutsParams defines parameters for GetTopLoadouts.
+type GetTopLoadoutsParams struct {
+	CharacterID string `form:"characterId" json:"characterId"`
+	UserID      string `form:"userId" json:"userId"`
+}
+
 // ProfileParams defines parameters for Profile.
 type ProfileParams struct {
 	XUserID       XUserID       `json:"X-User-ID"`
@@ -694,6 +700,9 @@ type ServerInterface interface {
 
 	// (POST /login)
 	Login(c *gin.Context)
+
+	// (GET /metrics/top-loadouts)
+	GetTopLoadouts(c *gin.Context, params GetTopLoadoutsParams)
 
 	// (GET /ping)
 	GetPing(c *gin.Context)
@@ -1037,6 +1046,54 @@ func (siw *ServerInterfaceWrapper) Login(c *gin.Context) {
 	}
 
 	siw.Handler.Login(c)
+}
+
+// GetTopLoadouts operation middleware
+func (siw *ServerInterfaceWrapper) GetTopLoadouts(c *gin.Context) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetTopLoadoutsParams
+
+	// ------------- Required query parameter "characterId" -------------
+
+	if paramValue := c.Query("characterId"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument characterId is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterID)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter characterId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "userId" -------------
+
+	if paramValue := c.Query("userId"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument userId is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "userId", c.Request.URL.Query(), &params.UserID)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetTopLoadouts(c, params)
 }
 
 // GetPing operation middleware
@@ -1845,6 +1902,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/admin/backfill-character-ids", wrapper.BackfillAllUsersCharacterIds)
 	router.GET(options.BaseURL+"/fireteam", wrapper.GetFireteam)
 	router.POST(options.BaseURL+"/login", wrapper.Login)
+	router.GET(options.BaseURL+"/metrics/top-loadouts", wrapper.GetTopLoadouts)
 	router.GET(options.BaseURL+"/ping", wrapper.GetPing)
 	router.GET(options.BaseURL+"/profile", wrapper.Profile)
 	router.GET(options.BaseURL+"/public/profile", wrapper.GetPublicProfile)
@@ -1983,6 +2041,26 @@ type LoginResponseObject interface {
 type Login200JSONResponse AuthResponse
 
 func (response Login200JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetTopLoadoutsRequestObject struct {
+	Params GetTopLoadoutsParams
+}
+
+type GetTopLoadoutsResponseObject interface {
+	VisitGetTopLoadoutsResponse(w http.ResponseWriter) error
+}
+
+type GetTopLoadouts200JSONResponse struct {
+	Count map[string]int      `json:"count"`
+	Items []CharacterSnapshot `json:"items"`
+}
+
+func (response GetTopLoadouts200JSONResponse) VisitGetTopLoadoutsResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
@@ -2332,6 +2410,9 @@ type StrictServerInterface interface {
 	// (POST /login)
 	Login(ctx context.Context, request LoginRequestObject) (LoginResponseObject, error)
 
+	// (GET /metrics/top-loadouts)
+	GetTopLoadouts(ctx context.Context, request GetTopLoadoutsRequestObject) (GetTopLoadoutsResponseObject, error)
+
 	// (GET /ping)
 	GetPing(ctx context.Context, request GetPingRequestObject) (GetPingResponseObject, error)
 
@@ -2561,6 +2642,33 @@ func (sh *strictHandler) Login(ctx *gin.Context) {
 		ctx.Status(http.StatusInternalServerError)
 	} else if validResponse, ok := response.(LoginResponseObject); ok {
 		if err := validResponse.VisitLoginResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetTopLoadouts operation middleware
+func (sh *strictHandler) GetTopLoadouts(ctx *gin.Context, params GetTopLoadoutsParams) {
+	var request GetTopLoadoutsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetTopLoadouts(ctx, request.(GetTopLoadoutsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetTopLoadouts")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetTopLoadoutsResponseObject); ok {
+		if err := validResponse.VisitGetTopLoadoutsResponse(ctx.Writer); err != nil {
 			ctx.Error(err)
 		}
 	} else if response != nil {
@@ -3123,20 +3231,21 @@ var swaggerSpec = []string{
 	"XVUoR0/R2lEQdEMhF46+vqU2JBPdpTbPbBM8i/bpXNgzQvsYW8v4gLYrp+7QsDUKhCZ5lYJ3y+vadGJg",
 	"DojRnFDQ3RtsvVb/N5Jdn4r60xNFaXThf734bgZ3FiCE/ShB5xtsCqs1J0DTfIu8Z84BBn0xRBzMStjy",
 	"p/0f4PFvwegys0OrhjaKmfXNFogIlLInGvm+oeZF3yv89dPuk2Zv5TfRYTnxRj9eyutJRhXv6lGhBc91",
-	"E/aXwnnfqwmZVGyzURKY1A6Dq30fEgq3xnU6Gca6Ij+AaWnuam+WopFtCuuD+LrC+z+WANtLHruiAIWu",
-	"rFAyksfeSvJVjsySI2W1yklykM/UudAjBxku5EWQGdb6F+Qzvff2Obr5ymeH+MxnJBudEYc56c6NHOeQ",
-	"/kkCJgsGSOyW+jCXKux+b8yKXn23/b0p836mUItr3pkQY6nZL8y/F7/XUVE/rNKG9QNIhOurobxOn/0s",
-	"P8Dx7YiHH5QdK0KHA76nlKR3TUB2IHyLu0HbPcS+aDqpRsuQl80rfzzSDnSbjQ+dtCJDXyTY0w2o+NvR",
-	"IDAphOLBsDxjv7M37PO8736X70/u+lh66Fv0NE0sIU374zAdTUfqYhQsrd0zIoxUcliTz4fJbcfFBvYp",
-	"6N5eQobF23YxY52y0vNUuRQTdFW3+7SntLofZjATxDUeY05SLXpzq/DMtiMLDa319xZMJtpE03Qu3n9J",
-	"39diOm8VAN3krrjJxtk0Kx229obtvK+Jtz9k4u2rXTnWrowHaiGudCobYf3F3CGr8U5iLgctxtPHdxbR",
-	"nsc1KU7t9Nzf9GVBjRGat5w9Ehvf9u6kZUj3gJo6VFu/stZe+aF6iG+e0coOFknE0V9mqT4vcLFfJ7uB",
-	"43STZi5EBCL0Eee6CHPnK5SF3a+vjpeRRlVIGFmh6g3uUvCDztF9GVkUP9cmfVl517kro6ek6aiWGH/+",
-	"P4e8c2TrRhhmhBa+BhX+PEGF1kqCSsZlxT1Hyr3jWvXtp2v1Df/NMQrqIa+uZI4QXcizOZ0D8+Wclmfx",
-	"C/bx78H6CkxtTYT9yHTDT10OOpzC2+9hCOdiuHsZ2gyLaWo/x+Czd49vDay75jPUfypX5FQaVuIHaF+a",
-	"wdbPqmADPDzOtfCGt0Toxe/NRRy7EfJ0gCsniNGZvDilPtUhO1Cf6l1BcrQY8y4/+eOIy9kcVn+noDkd",
-	"wv9q9oESBj2CP7r9r3hue2EuLy5yluA8Y0Je/vXFX19oojbPxeXFBS7Jefoto7ot5+E8YUW0+7T7ZwAA",
-	"AP//oX7x8wCXAAA=",
+	"E/aXwnnfqwmZVGyzURKY1A5DYZzwC8nKM9s1utd1uGflGzfsCNvphBZwXYx25By2Tm5hY8i4Nof9Y099",
+	"9GyHWsJN6xgI2CNO2nXCiBpsbHEdc0g9R1Sysq50Mt3N9npyy2CuuWKIoW6Nb36yI6FbPgJLKM3HAJqz",
+	"opFtOjeC+LrOjj+WhtxLHruiAIWurNYzqs1ee/NVUc1SVGW1yklykM/UudAjBxkuJAHJDOn3BflM7719",
+	"jm6+8tkhPvMZyYb/xGFOunMjx2ntP0lEbkH7w26pD3OpzoH3xm7tNRDY35s+gmeK5bnusAlBvJr9wvx7",
+	"8Xsddvfjdm1YP4BEuL57zGsl28/yAxzfDqn5Uf+xInQ4o3BKSXrXRPwHzDLczQrsIfZF06o3Woa8bF75",
+	"45F2oJ1xvH3dCj1+kWhiN2Lnb0eDwKQYnQfD8oz9kOOwU/2+++HHP7lvbemhr2nUNLGENP21w3Q0Lc+L",
+	"UbC0ds+IOGXJYU0+Hya3HRcb2Kege3sJGRZv29WydU5Uz1PlUkzQVd325gPesJsgrvGY4BFjlFuFZ7Yd",
+	"WWhorT/oYUodTLhWF3v4L+kLgUxrtwKgb1FQ3GQDuZqVDlt7w3be18zuHzKz+9WuHGtXxgPFNle6VgJh",
+	"/UnmIavxTmIuBy3G08d3FtGex3XBTm0l3t9VaEGNEZq3nD0Sm0DxLj1mSDcZm0JnWyC11l75oYKbb57R",
+	"yg5W4cTRX2apPi9wsV8nu4HjdJNmLkQEIvQR57rKd+crlIXdr6+Ol5FGVUgYWaHqDe5S8INOAn8ZWRQ/",
+	"1yZ9WXnXuYylp6TpqJ4rf/4/h7xzZOtGGGaEFr4GFf48QYXWSoJKxpVdeI5UnVy0d0HYbyObVGPz2fCQ",
+	"HvIKl+YI0YU8m9M5MF/OaXkWv2BMSnuwgAdTW3Rjv2LeTVa3Pzy/P4W338MQzsVwF3+0GRbT1H7vw2fv",
+	"Ht8aWHfNd87/VK7IqTSsxA/QvpWFrZ9VwQZ4eJxr4Q1vidCL35ubXnYj5OkAV04QozN5cUoBtEN2oADa",
+	"u+PmaDHm3a7zxxGXszms/hBGczqE/1n2AyUMegR/dPtf8dw2W11eXOQswXnGhLz864u/vtBEbZ6Ly4sL",
+	"XJLz9FtGdcnZw3nCimj3affPAAAA//8hgVjWYZkAAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

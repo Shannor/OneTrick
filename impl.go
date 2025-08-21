@@ -10,6 +10,7 @@ import (
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
+	"oneTrick/services/stats"
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"strconv"
@@ -30,6 +31,21 @@ type Server struct {
 	SnapshotService   snapshot.Service
 	AggregateService  aggregate.Service
 	SessionService    session.Service
+	StatsService      stats.Service
+}
+
+func (s Server) GetTopLoadouts(ctx context.Context, request api.GetTopLoadoutsRequestObject) (api.GetTopLoadoutsResponseObject, error) {
+	userID := request.Params.UserID
+	characterID := request.Params.CharacterID
+
+	result, counts, err := s.StatsService.GetTopLoadouts(ctx, characterID, userID)
+	if err != nil {
+		return api.GetTopLoadouts200JSONResponse{}, err
+	}
+	return api.GetTopLoadouts200JSONResponse{
+		Items: result,
+		Count: counts,
+	}, nil
 }
 
 func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestObject) (api.GetFireteamResponseObject, error) {
@@ -670,6 +686,7 @@ func NewServer(
 	aggregateService aggregate.Service,
 	sessionService session.Service,
 	manifestService destiny.ManifestService,
+	statsService stats.Service,
 ) Server {
 	return Server{
 		D2Service:         service,
@@ -679,6 +696,7 @@ func NewServer(
 		AggregateService:  aggregateService,
 		SessionService:    sessionService,
 		D2ManifestService: manifestService,
+		StatsService:      statsService,
 	}
 }
 

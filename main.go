@@ -2,14 +2,6 @@ package main
 
 import (
 	"context"
-	"github.com/getkin/kin-openapi/openapi3filter"
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
-	"github.com/go-resty/resty/v2"
-	"github.com/mark-ignacio/zerolog-gcp"
-	"github.com/oapi-codegen/gin-middleware"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
@@ -20,9 +12,19 @@ import (
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
+	"oneTrick/services/stats"
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"os"
+
+	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/go-resty/resty/v2"
+	"github.com/mark-ignacio/zerolog-gcp"
+	"github.com/oapi-codegen/gin-middleware"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -70,6 +72,7 @@ func main() {
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService)
+	statsService := stats.NewService(firestore, snapshotService)
 	server := NewServer(
 		destinyService,
 		d2AuthAService,
@@ -78,6 +81,7 @@ func main() {
 		aggregateService,
 		sessionService,
 		manifestService,
+		statsService,
 	)
 
 	defer firestore.Close()
