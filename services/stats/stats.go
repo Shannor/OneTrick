@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/ptr"
 	"oneTrick/services/snapshot"
 	"oneTrick/utils"
-	"sort"
+	"slices"
 
 	"cloud.google.com/go/firestore"
+	"github.com/rs/zerolog/log"
 )
 
 // Service defines operations for retrieving stats-related data.
@@ -19,8 +21,10 @@ type Service interface {
 	// is present in snapshotLinks and the linked snapshotId matches the provided snapshotID.
 	// This is the foundational data needed to compute overall stats for a loadout.
 	GetAggregatesForSnapshot(ctx context.Context, characterID string, snapshotID string) ([]api.Aggregate, error)
+	GetAggregatesByCharacterID(ctx context.Context, characterID string, gameModeFilter []string) ([]api.Aggregate, error)
 
-	GetTopLoadouts(ctx context.Context, characterID string, userID string) ([]api.CharacterSnapshot, map[string]int, error)
+	GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string) ([]api.CharacterSnapshot, map[string]int, error)
+	GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
 }
 
 type service struct {
@@ -60,68 +64,44 @@ func (s *service) GetAggregatesForSnapshot(ctx context.Context, characterID stri
 	return results, nil
 }
 
-func (s *service) GetTopLoadouts(ctx context.Context, characterID string, userID string) ([]api.CharacterSnapshot, map[string]int, error) {
-	if characterID == "" || userID == "" {
-		return nil, nil, fmt.Errorf("characterID and userID are required")
-	}
-	// 1) Get all snapshot IDs for this user and character
-	snapshotDocs, err := s.DB.Collection(snapshotsCollection).
-		Where("userId", "==", userID).
-		Where("characterId", "==", characterID).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(snapshotDocs) == 0 {
-		return nil, nil, nil
-	}
-	type MinimalSnapshot struct {
-		ID string `firestore:"id"`
-	}
-	snapshotIDs := make([]string, 0, len(snapshotDocs))
-	for _, d := range snapshotDocs {
-		var ms MinimalSnapshot
-		if err := d.DataTo(&ms); err != nil {
-			return nil, nil, err
-		}
-		if ms.ID != "" {
-			snapshotIDs = append(snapshotIDs, ms.ID)
-		}
-	}
-	if len(snapshotIDs) == 0 {
-		return nil, nil, nil
-	}
-
-	// 2) Query aggregates in batches of 30 using IN filter and count by snapshotId
-	const inLimit = 30
-	counts := map[string]int{}
+func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID string, gameModeFilter []string) ([]api.Aggregate, error) {
 	field := fmt.Sprintf("snapshotLinks.%s.snapshotId", characterID)
-	for i := 0; i < len(snapshotIDs); i += inLimit {
-		end := i + inLimit
-		if end > len(snapshotIDs) {
-			end = len(snapshotIDs)
-		}
-		batch := snapshotIDs[i:end]
-		aggDocs, err := s.DB.Collection(aggregatesCollection).
-			Where(field, "in", batch).
-			Documents(ctx).GetAll()
-		if err != nil {
-			return nil, nil, err
-		}
-		aggs, err := utils.GetAllToStructs[api.Aggregate](aggDocs)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, agg := range aggs {
-			link, ok := agg.SnapshotLinks[characterID]
-			if !ok || link.SnapshotID == nil || *link.SnapshotID == "" {
-				continue
-			}
-			counts[*link.SnapshotID]++
-		}
+	q := s.DB.Collection(aggregatesCollection).Where(field, "!=", "null")
+
+	if len(gameModeFilter) > 0 {
+		q = q.Where("activityHistory.mode", "in", gameModeFilter)
 	}
 
-	// 3) Sort snapshot IDs by count desc and return top 10
+	aggDocs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	aggs, err := utils.GetAllToStructs[api.Aggregate](aggDocs)
+	if err != nil {
+		return nil, err
+	}
+	return aggs, nil
+}
+
+// GetMostUsedLoadouts returns the top 10 most used loadouts for the given characterID.
+// Implementation details:
+// - This yields all activity aggregates where this character was linked to the specified snapshot (loadout).
+// - We then sort the results by the number of sessions (sessions.length) and return the top 10.
+func (s *service) GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string) ([]api.CharacterSnapshot, map[string]int, error) {
+	if characterID == "" {
+		return nil, nil, fmt.Errorf("characterID is required")
+	}
+
+	counts := map[string]int{}
+	for _, agg := range aggs {
+		link, ok := agg.SnapshotLinks[characterID]
+		if !ok || link.SnapshotID == nil || *link.SnapshotID == "" {
+			continue
+		}
+		counts[*link.SnapshotID]++
+	}
+
+	// 3) Sort snapshot IDs by count desc and return the top 10
 	type pair struct {
 		id    string
 		count int
@@ -130,11 +110,12 @@ func (s *service) GetTopLoadouts(ctx context.Context, characterID string, userID
 	for id, c := range counts {
 		pairs = append(pairs, pair{id: id, count: c})
 	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].count == pairs[j].count {
-			return pairs[i].id < pairs[j].id
+
+	slices.SortFunc(pairs, func(a, b pair) int {
+		if a.count == b.count {
+			return 0
 		}
-		return pairs[i].count > pairs[j].count
+		return b.count - a.count
 	})
 
 	limit := 10
@@ -144,14 +125,154 @@ func (s *service) GetTopLoadouts(ctx context.Context, characterID string, userID
 
 	ids := make([]string, 0, limit)
 	finalCount := make(map[string]int)
+	order := make(map[string]int, len(pairs))
 	for idx := 0; idx < limit; idx++ {
 		ids = append(ids, pairs[idx].id)
 		finalCount[pairs[idx].id] = pairs[idx].count
+		order[pairs[idx].id] = idx + 1
 	}
 
 	loadouts, err := s.snapshotService.GetByIDs(ctx, ids)
 	if err != nil {
 		return nil, nil, err
 	}
+	slices.SortFunc(loadouts, func(a, b api.CharacterSnapshot) int {
+		if order[a.ID] == order[b.ID] {
+			return 0
+		}
+		return order[a.ID] - order[b.ID]
+	})
 	return loadouts, finalCount, nil
+}
+
+func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error) {
+	if characterID == "" {
+		return nil, nil, nil, fmt.Errorf("characterID is required")
+	}
+
+	type stat struct {
+		Kills   int
+		Deaths  int
+		Assists int
+	}
+	stats := make(map[string]stat)
+	counts := make(map[string]int)
+	for _, agg := range aggs {
+		link, ok := agg.SnapshotLinks[characterID]
+		if !ok || link.SnapshotID == nil || *link.SnapshotID == "" {
+			continue
+		}
+		performance, ok := agg.Performance[characterID]
+		if !ok {
+			log.Warn().Str("characterID", characterID).Msg("no performance found for character")
+			continue
+		}
+		s := stats[*link.SnapshotID]
+		s.Kills += int(*performance.PlayerStats.Kills.Value)
+		s.Deaths += int(*performance.PlayerStats.Deaths.Value)
+		s.Assists += int(*performance.PlayerStats.Assists.Value)
+		stats[*link.SnapshotID] = s
+		counts[*link.SnapshotID]++
+	}
+
+	// TODO: In the future we would want to omit any loadouts that have not been used more than X times,
+
+	// 3) Sort snapshot IDs by K/D and KD/A
+	type pair struct {
+		id     string
+		stats  stat
+		counts int
+	}
+	pairs := make([]pair, 0, len(stats))
+	log.Debug().Str("characterID", characterID).Int("Required Games Count", minimumGames).Msg("skipping loadout")
+	skipped := 0
+	for id, obj := range stats {
+		if counts[id] <= minimumGames {
+			skipped++
+			continue
+		}
+		pairs = append(pairs, pair{id: id, stats: obj, counts: counts[id]})
+	}
+	log.Debug().Int("skipped", skipped).Msg("loadouts skipped")
+
+	slices.SortFunc(pairs, func(a, b pair) int {
+		kda := getKD(a.stats.Kills, a.stats.Deaths)
+		kdb := getKD(b.stats.Kills, b.stats.Deaths)
+		if kda == kdb {
+			return 0
+		}
+		if kda < kdb {
+			return 1
+		}
+		return -1
+	})
+
+	l := int(limit)
+	if len(pairs) < l {
+		l = len(pairs)
+	}
+
+	ids := make([]string, 0, l)
+	finalPlayerStats := make(map[string]api.PlayerStats)
+	finalCount := make(map[string]int)
+	order := make(map[string]int, len(pairs))
+
+	for idx := 0; idx < l; idx++ {
+		ids = append(ids, pairs[idx].id)
+		finalCount[pairs[idx].id] = pairs[idx].counts
+		order[pairs[idx].id] = int(idx + 1)
+		s := pairs[idx].stats
+		finalPlayerStats[pairs[idx].id] = api.PlayerStats{
+			Assists: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", s.Assists)),
+				Value:        ptr.Of(float64(s.Assists)),
+			}),
+			Deaths: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", s.Deaths)),
+				Value:        ptr.Of(float64(s.Deaths)),
+			}),
+			Kills: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", s.Kills)),
+				Value:        ptr.Of(float64(s.Kills)),
+			}),
+			Kd: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(s.Kills, s.Deaths))),
+				Value:        ptr.Of(getKD(s.Kills, s.Deaths)),
+			}),
+			Kda: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(s.Kills, s.Deaths, s.Assists))),
+				Value:        ptr.Of(getKDA(s.Kills, s.Deaths, s.Assists)),
+			}),
+		}
+	}
+
+	if len(ids) == 0 {
+		return nil, nil, nil, fmt.Errorf("no loadouts found")
+	}
+	loadouts, err := s.snapshotService.GetByIDs(ctx, ids)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get loadouts")
+		return nil, nil, nil, err
+	}
+	slices.SortFunc(loadouts, func(a, b api.CharacterSnapshot) int {
+		if order[a.ID] == order[b.ID] {
+			return 0
+		}
+		return order[a.ID] - order[b.ID]
+	})
+	return loadouts, finalPlayerStats, finalCount, nil
+}
+
+func getKD(kills int, deaths int) float64 {
+	if deaths == 0 {
+		return float64(kills)
+	}
+	return float64(kills) / float64(deaths)
+}
+
+func getKDA(kills int, deaths int, assists int) float64 {
+	if deaths == 0 {
+		return float64(kills) + float64(assists)
+	}
+	return (float64(kills) + float64(assists)) / float64(deaths)
 }

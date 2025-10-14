@@ -485,6 +485,22 @@ func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	}
 }
 
+func gameModeToActivityModes(gameMode api.MetricGameMode) ([]string, error) {
+	switch gameMode {
+	case api.GameModeAny:
+		return nil, nil
+	case api.GameModeCompetitive:
+		return []string{"Control Competitive", "Zone Control", "Survival", "Clash Competitive"}, nil
+	case api.GameModeQuickPlay:
+		return []string{"Control Quickplay", "Control", "Rift", "Clash", "Clash Quickplay"}, nil
+	case api.GameModeIronBanner:
+		return []string{"Iron Banner Zone Control", "Iron Banner Control", "Iron Banner", "Iron Banner Supremacy", "Iron Banner Rift", "Iron Banner Clash"}, nil
+	case api.GameModeTrials:
+		return []string{"Trials of Osiris", "Trials Survival", "Trials Countdown"}, nil
+	default:
+		return nil, nil
+	}
+}
 func TransformUserSearchDetail(detail bungie.UserSearchDetail) *api.SearchUserResult {
 	if detail.BungieNetMembershipId == nil {
 		return nil

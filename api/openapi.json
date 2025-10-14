@@ -1099,9 +1099,9 @@
         }
       }
     },
-    "/metrics/top-loadouts": {
+    "/metrics/best-performing-loadouts": {
       "get": {
-        "operationId": "GetTopLoadouts",
+        "operationId": "GetBestPerformingLoadouts",
         "parameters": [
           {
             "in": "query",
@@ -1120,6 +1120,40 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "gameMode",
+            "x-go-type-name": "MetricGameMode",
+            "schema": {
+              "type": "string",
+              "x-go-type-name": "MetricGameMode",
+              "enum": [
+                "GameModeAny",
+                "GameModeQuickPlay",
+                "GameModeCompetitive",
+                "GameModeTrials",
+                "GameModeIronBanner"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "in": "query",
+            "name": "minimumGames",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+            }
           }
         ],
         "responses": {
@@ -1130,6 +1164,7 @@
                 "schema": {
                   "required": [
                     "items",
+                    "stats",
                     "count"
                   ],
                   "type": "object",
@@ -1138,6 +1173,12 @@
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/CharacterSnapshot"
+                      }
+                    },
+                    "stats": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/PlayerStats"
                       }
                     },
                     "count": {

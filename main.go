@@ -85,15 +85,6 @@ func main() {
 	)
 
 	defer firestore.Close()
-	// Load OpenAPI spec file
-	swagger, err := api.GetSwagger()
-	if err != nil {
-		log.Error().Err(err).Msg("failed to load swagger spec file")
-		return
-	}
-	// Clear out the servers array in the swagger spec, that skips validating
-	// that server names match. We don't know how this thing will be run.
-	swagger.Servers = nil
 
 	r := gin.Default()
 	r.Use(cors.Default())
@@ -107,6 +98,15 @@ func main() {
 		c.File("./api/openapi.json")
 	})
 
+	// Load OpenAPI spec file
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to load swagger spec file")
+		return
+	}
+	// Clear out the servers array in the swagger spec, that skips validating
+	// that server names match. We don't know how this thing will be run.
+	swagger.Servers = nil
 	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
 		Options: openapi3filter.Options{
 			AuthenticationFunc: validator.Authenticate,

@@ -34,16 +34,40 @@ type Server struct {
 	StatsService      stats.Service
 }
 
-func (s Server) GetTopLoadouts(ctx context.Context, request api.GetTopLoadoutsRequestObject) (api.GetTopLoadoutsResponseObject, error) {
-	userID := request.Params.UserID
-	characterID := request.Params.CharacterID
+const (
+	DefaultMinimumGames = 5
+	DefaultLoadoutCount = 10
+)
 
-	result, counts, err := s.StatsService.GetTopLoadouts(ctx, characterID, userID)
-	if err != nil {
-		return api.GetTopLoadouts200JSONResponse{}, err
+func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBestPerformingLoadoutsRequestObject) (api.GetBestPerformingLoadoutsResponseObject, error) {
+	characterID := request.Params.CharacterID
+	count := DefaultLoadoutCount
+	if request.Params.Count != nil {
+		count = *request.Params.Count
 	}
-	return api.GetTopLoadouts200JSONResponse{
+	gameMode := api.GameModeAny
+	if request.Params.GameMode != nil {
+		gameMode = *request.Params.GameMode
+	}
+	minimumGames := DefaultMinimumGames
+	if request.Params.MinimumGames != nil {
+		minimumGames = *request.Params.MinimumGames
+	}
+	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(gameMode)
+	if err != nil {
+		return api.GetBestPerformingLoadouts200JSONResponse{}, err
+	}
+	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, characterID, gameModeFilter)
+	if err != nil {
+		return api.GetBestPerformingLoadouts200JSONResponse{}, err
+	}
+	result, performanceStats, counts, err := s.StatsService.GetBestPerformingLoadouts(ctx, aggs, characterID, int8(count), minimumGames)
+	if err != nil {
+		return api.GetBestPerformingLoadouts200JSONResponse{}, err
+	}
+	return api.GetBestPerformingLoadouts200JSONResponse{
 		Items: result,
+		Stats: performanceStats,
 		Count: counts,
 	}, nil
 }
