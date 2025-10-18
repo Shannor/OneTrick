@@ -45,15 +45,11 @@ func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBe
 	if request.Params.Count != nil {
 		count = *request.Params.Count
 	}
-	gameMode := api.GameModeAny
-	if request.Params.GameMode != nil {
-		gameMode = *request.Params.GameMode
-	}
 	minimumGames := DefaultMinimumGames
 	if request.Params.MinimumGames != nil {
 		minimumGames = *request.Params.MinimumGames
 	}
-	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(gameMode)
+	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
 	}
@@ -722,6 +718,23 @@ func NewServer(
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
 	}
+}
+func (s Server) GetSnapshotAggregates(ctx context.Context, request api.GetSnapshotAggregatesRequestObject) (api.GetSnapshotAggregatesResponseObject, error) {
+	snap, err := s.SnapshotService.Get(ctx, request.SnapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
+	if err != nil {
+		return nil, err
+	}
+	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, snap.CharacterID, gameModeFilter)
+	if err != nil {
+		return nil, err
+	}
+
+	return api.GetSnapshotAggregates200JSONResponse(aggs), nil
 }
 
 func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsRequestObject) (api.GetSnapshotsResponseObject, error) {

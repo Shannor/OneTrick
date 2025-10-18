@@ -1,7 +1,6 @@
 package session
 
 import (
-	"cloud.google.com/go/firestore"
 	"context"
 	"fmt"
 	"log/slog"
@@ -11,6 +10,8 @@ import (
 	"oneTrick/utils"
 	"slices"
 	"time"
+
+	"cloud.google.com/go/firestore"
 )
 
 type Service interface {
@@ -126,6 +127,8 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 		case api.SessionPending:
 			query = query.Limit(1)
 		}
+	} else {
+		query = query.OrderBy("startedAt", firestore.Desc).Limit(10)
 	}
 	docs, err := query.Documents(ctx).GetAll()
 	if err != nil {
