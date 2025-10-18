@@ -10,6 +10,7 @@ import (
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
+	"oneTrick/services/stats"
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"strconv"
@@ -30,6 +31,41 @@ type Server struct {
 	SnapshotService   snapshot.Service
 	AggregateService  aggregate.Service
 	SessionService    session.Service
+	StatsService      stats.Service
+}
+
+const (
+	DefaultMinimumGames = 5
+	DefaultLoadoutCount = 10
+)
+
+func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBestPerformingLoadoutsRequestObject) (api.GetBestPerformingLoadoutsResponseObject, error) {
+	characterID := request.Params.CharacterID
+	count := DefaultLoadoutCount
+	if request.Params.Count != nil {
+		count = *request.Params.Count
+	}
+	minimumGames := DefaultMinimumGames
+	if request.Params.MinimumGames != nil {
+		minimumGames = *request.Params.MinimumGames
+	}
+	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
+	if err != nil {
+		return api.GetBestPerformingLoadouts200JSONResponse{}, err
+	}
+	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, characterID, gameModeFilter)
+	if err != nil {
+		return api.GetBestPerformingLoadouts200JSONResponse{}, err
+	}
+	result, performanceStats, counts, err := s.StatsService.GetBestPerformingLoadouts(ctx, aggs, characterID, int8(count), minimumGames)
+	if err != nil {
+		return api.GetBestPerformingLoadouts200JSONResponse{}, err
+	}
+	return api.GetBestPerformingLoadouts200JSONResponse{
+		Items: result,
+		Stats: performanceStats,
+		Count: counts,
+	}, nil
 }
 
 func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestObject) (api.GetFireteamResponseObject, error) {
@@ -670,6 +706,7 @@ func NewServer(
 	aggregateService aggregate.Service,
 	sessionService session.Service,
 	manifestService destiny.ManifestService,
+	statsService stats.Service,
 ) Server {
 	return Server{
 		D2Service:         service,
@@ -679,7 +716,25 @@ func NewServer(
 		AggregateService:  aggregateService,
 		SessionService:    sessionService,
 		D2ManifestService: manifestService,
+		StatsService:      statsService,
 	}
+}
+func (s Server) GetSnapshotAggregates(ctx context.Context, request api.GetSnapshotAggregatesRequestObject) (api.GetSnapshotAggregatesResponseObject, error) {
+	snap, err := s.SnapshotService.Get(ctx, request.SnapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
+	if err != nil {
+		return nil, err
+	}
+	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, snap.CharacterID, gameModeFilter)
+	if err != nil {
+		return nil, err
+	}
+
+	return api.GetSnapshotAggregates200JSONResponse(aggs), nil
 }
 
 func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsRequestObject) (api.GetSnapshotsResponseObject, error) {

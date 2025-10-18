@@ -35,6 +35,7 @@ type Service interface {
 	// Returns the requested CharacterSnapshot or an error if the snapshot is not found or cannot be retrieved.
 	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
 
+	/**/
 	GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error)
 
 	FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)

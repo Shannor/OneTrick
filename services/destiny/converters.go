@@ -485,6 +485,22 @@ func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	}
 }
 
+func gameModeToActivityModes(gameMode api.GameMode) ([]string, error) {
+	switch gameMode {
+	case api.GameModeAll:
+		return nil, nil
+	case api.GameModeCompetitive:
+		return []string{"Control Competitive", "Zone Control", "Survival", "Clash Competitive"}, nil
+	case api.GameModeQuickPlay:
+		return []string{"Control Quickplay", "Control", "Rift", "Clash", "Clash Quickplay"}, nil
+	case api.GameModeIronBanner:
+		return []string{"Iron Banner Zone Control", "Iron Banner Control", "Iron Banner", "Iron Banner Supremacy", "Iron Banner Rift", "Iron Banner Clash"}, nil
+	case api.GameModeTrials:
+		return []string{"Trials of Osiris", "Trials Survival", "Trials Countdown"}, nil
+	default:
+		return nil, nil
+	}
+}
 func TransformUserSearchDetail(detail bungie.UserSearchDetail) *api.SearchUserResult {
 	if detail.BungieNetMembershipId == nil {
 		return nil
@@ -545,7 +561,7 @@ func generateClassStats(statDefinitions map[string]StatDefinition, stats map[str
 		}
 		i := api.ClassStat{
 			Name:            info.DisplayProperties.Name,
-			Icon:            info.DisplayProperties.Name,
+			Icon:            setBaseBungieURL(&info.DisplayProperties.Icon),
 			HasIcon:         info.DisplayProperties.HasIcon,
 			Description:     info.DisplayProperties.Description,
 			StatCategory:    info.StatCategory,

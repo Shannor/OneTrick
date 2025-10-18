@@ -398,16 +398,38 @@
     "/snapshots/{snapshotId}": {
       "get": {
         "operationId": "GetSnapshot",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "description": "Returns a snapshot in the system for a character",
         "parameters": [
           {
-            "$ref": "#/components/parameters/X-User-ID"
-          },
+            "name": "snapshotId",
+            "in": "path",
+            "x-go-name": "snapshotID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The unique identifier for the snapshot."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Specific character snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterSnapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/snapshots/{snapshotId}/aggregates": {
+      "get": {
+        "operationId": "GetSnapshotAggregates",
+        "description": "Returns a collection of aggregate metrics for a snapshot",
+        "parameters": [
           {
             "name": "snapshotId",
             "in": "path",
@@ -419,22 +441,28 @@
             "description": "The unique identifier for the snapshot."
           },
           {
-            "name": "characterId",
+            "name": "gameMode",
             "in": "query",
-            "x-go-name": "characterID",
-            "required": true,
+            "x-go-name": "gameMode",
             "schema": {
-              "type": "string"
-            }
+              "$ref": "#/components/schemas/GameMode"
+            },
+            "description": "The game mode for the snapshot metrics"
           }
         ],
         "responses": {
           "200": {
-            "description": "Specific character snapshot",
+            "description": "Aggregates for a snapshot",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CharacterSnapshot"
+                  "required": [
+                    "aggregates"
+                  ],
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Aggregate"
+                  }
                 }
               }
             }
@@ -1092,6 +1120,93 @@
               "application/json": {
                 "schema": {
                   "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics/best-performing-loadouts": {
+      "get": {
+        "operationId": "GetBestPerformingLoadouts",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "characterId",
+            "x-go-name": "characterID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "userId",
+            "x-go-name": "userID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "gameMode",
+            "schema": {
+              "$ref": "#/components/schemas/GameMode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "in": "query",
+            "name": "minimumGames",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Return the top snapshots for a user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "required": [
+                    "items",
+                    "stats",
+                    "count"
+                  ],
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CharacterSnapshot"
+                      }
+                    },
+                    "stats": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/PlayerStats"
+                      }
+                    },
+                    "count": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2810,6 +2925,23 @@
           "SystemSteam",
           "SystemStadia",
           "SystemUnknown"
+        ]
+      },
+      "GameMode": {
+        "type": "string",
+        "enum": [
+          "allGameModes",
+          "quickplay",
+          "competitive",
+          "trials",
+          "ironBanner"
+        ],
+        "x-enum-varnames": [
+          "GameModeAll",
+          "GameModeQuickPlay",
+          "GameModeCompetitive",
+          "GameModeTrials",
+          "GameModeIronBanner"
         ]
       }
     }

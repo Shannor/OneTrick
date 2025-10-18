@@ -2,14 +2,6 @@ package main
 
 import (
 	"context"
-	"github.com/getkin/kin-openapi/openapi3filter"
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
-	"github.com/go-resty/resty/v2"
-	"github.com/mark-ignacio/zerolog-gcp"
-	"github.com/oapi-codegen/gin-middleware"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"log/slog"
 	"net/http"
 	"oneTrick/api"
@@ -20,9 +12,19 @@ import (
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
+	"oneTrick/services/stats"
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"os"
+
+	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/go-resty/resty/v2"
+	"github.com/mark-ignacio/zerolog-gcp"
+	"github.com/oapi-codegen/gin-middleware"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -70,6 +72,7 @@ func main() {
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService)
+	statsService := stats.NewService(firestore, snapshotService)
 	server := NewServer(
 		destinyService,
 		d2AuthAService,
@@ -78,18 +81,10 @@ func main() {
 		aggregateService,
 		sessionService,
 		manifestService,
+		statsService,
 	)
 
 	defer firestore.Close()
-	// Load OpenAPI spec file
-	swagger, err := api.GetSwagger()
-	if err != nil {
-		log.Error().Err(err).Msg("failed to load swagger spec file")
-		return
-	}
-	// Clear out the servers array in the swagger spec, that skips validating
-	// that server names match. We don't know how this thing will be run.
-	swagger.Servers = nil
 
 	r := gin.Default()
 	r.Use(cors.Default())
@@ -103,6 +98,15 @@ func main() {
 		c.File("./api/openapi.json")
 	})
 
+	// Load OpenAPI spec file
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to load swagger spec file")
+		return
+	}
+	// Clear out the servers array in the swagger spec, that skips validating
+	// that server names match. We don't know how this thing will be run.
+	swagger.Servers = nil
 	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
 		Options: openapi3filter.Options{
 			AuthenticationFunc: validator.Authenticate,
