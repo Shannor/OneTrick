@@ -19,7 +19,7 @@ type Service interface {
 	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 	Get(ctx context.Context, ID string) (*api.Session, error)
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
-	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus) ([]api.Session, error)
+	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error)
 	Complete(ctx context.Context, ID string) error
 	SetLastActivity(ctx context.Context, ID, activityID string) error
 }
@@ -111,7 +111,7 @@ func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
 	return result, nil
 }
 
-func (s service) GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus) ([]api.Session, error) {
+func (s service) GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error) {
 	query := s.db.Collection(collection).Query
 
 	if userID != nil {
@@ -121,15 +121,24 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 		query = query.Where("characterId", "==", *characterID)
 	}
 
+	if count > 0 {
+		query = query.Limit(count)
+	} else {
+		query = query.OrderBy("startedAt", firestore.Desc).Limit(10)
+	}
+
+	if offset > 0 {
+		query = query.Offset(offset)
+	}
+
 	if status != nil {
 		query = query.Where("status", "==", *status)
 		switch *status {
 		case api.SessionPending:
 			query = query.Limit(1)
 		}
-	} else {
-		query = query.OrderBy("startedAt", firestore.Desc).Limit(10)
 	}
+
 	docs, err := query.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err

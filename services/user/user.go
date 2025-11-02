@@ -20,9 +20,10 @@ type Service interface {
 	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
 	GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error)
-	// BackfillCharacterIDs fetches characters from Destiny for the user's primary membership
+	// BackfillCharacters fetches characters from Destiny for the user's primary membership
 	// and updates the user's characterIds field in Firestore.
-	BackfillCharacterIDs(ctx context.Context, userID string) error
+	BackfillCharacters(ctx context.Context, userID string) error
+	UpdateCharacters(ctx context.Context, userID string, characters []api.Character) error
 	// GetAll returns all users. Used for admin backfills.
 	GetAll(ctx context.Context) ([]User, error)
 	// GetByCharacterID returns the user that owns the provided characterID. If not found returns (nil, nil).
@@ -36,7 +37,8 @@ type userService struct {
 var _ Service = (*userService)(nil)
 
 const (
-	userCollection = "users"
+	userCollection         = "users"
+	characterSubCollection = "characters"
 )
 
 func NewUserService(client *firestore.Client, service destiny.Service) Service {
@@ -168,10 +170,10 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 	return fireteam, nil
 }
 
-// BackfillCharacterIDs fetches the user's characters from Destiny and updates the
+// BackfillCharacters fetches the user's characters from Destiny and updates the
 // characterIds array on the User document. This is useful for users created before
 // character IDs were persisted or when data needs to be refreshed.
-func (s *userService) BackfillCharacterIDs(ctx context.Context, userID string) error {
+func (s *userService) BackfillCharacters(ctx context.Context, userID string) error {
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch user: %w", err)
@@ -199,12 +201,29 @@ func (s *userService) BackfillCharacterIDs(ctx context.Context, userID string) e
 	for _, c := range chars {
 		charIDs = append(charIDs, c.Id)
 	}
-	// Merge update to only set the characterIds field
 	_, err = s.db.Collection(userCollection).Doc(u.ID).Set(ctx, map[string]any{
-		"characterIds": charIDs,
+		"characters":            chars,
+		"characterIds":          charIDs,
+		"lastUpdatedCharacters": time.Now(),
 	}, firestore.MergeAll)
 	if err != nil {
 		return fmt.Errorf("failed to update user character ids: %w", err)
+	}
+	return nil
+}
+
+func (s *userService) UpdateCharacters(ctx context.Context, userID string, characters []api.Character) error {
+	charIDs := make([]string, 0, len(characters))
+	for _, c := range characters {
+		charIDs = append(charIDs, c.Id)
+	}
+	_, err := s.db.Collection(userCollection).Doc(userID).Set(ctx, map[string]any{
+		"characterIds":          charIDs,
+		"characters":            characters,
+		"lastUpdatedCharacters": time.Now(),
+	}, firestore.MergeAll)
+	if err != nil {
+		return fmt.Errorf("failed to update user characters: %w", err)
 	}
 	return nil
 }

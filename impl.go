@@ -12,7 +12,6 @@ import (
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
 	"oneTrick/services/user"
-	"oneTrick/validator"
 	"strconv"
 	"time"
 
@@ -32,6 +31,83 @@ type Server struct {
 	AggregateService  aggregate.Service
 	SessionService    session.Service
 	StatsService      stats.Service
+}
+
+func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {
+	if request.Params.XUserID != request.UserID {
+		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
+		// If not block the users from hitting it.
+	}
+	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
+	if err != nil {
+		return nil, err
+	}
+	createdBy := api.AuditField{
+		ID:       u.ID,
+		Username: u.DisplayName,
+	}
+	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy)
+	if err != nil {
+		return api.StartUserSession400JSONResponse{Message: err.Error()}, nil
+	}
+	return api.StartUserSession201JSONResponse(*result), nil
+}
+
+func (s Server) GetUserSessions(ctx context.Context, request api.GetUserSessionsRequestObject) (api.GetUserSessionsResponseObject, error) {
+	offset := 0
+	if request.Params.Page > 1 {
+		offset = int(request.Params.Count) * int(request.Params.Page-1)
+	}
+	result, err := s.SessionService.GetAll(
+		ctx,
+		&request.UserID,
+		&request.Params.CharacterID,
+		(*api.SessionStatus)(request.Params.Status),
+		int(request.Params.Count),
+		offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return api.GetUserSessions200JSONResponse(result), nil
+}
+
+func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (api.GetUserResponseObject, error) {
+	u, err := s.UserService.GetUser(ctx, request.UserID)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		// Perform update for characters if needed
+		if u.LastUpdatedCharacters.Add(time.Hour).Before(time.Now()) {
+			log.Info().Str("userId", u.ID).Msg("Updating characters for user")
+			t := int64(0)
+			for _, membership := range u.Memberships {
+				if membership.ID == u.PrimaryMembershipID {
+					t = membership.Type
+					break
+				}
+			}
+			pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to parse primary membership id")
+				return
+			}
+
+			characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+			err = s.UserService.UpdateCharacters(ctx, u.ID, characters)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to update characters")
+			}
+		}
+	}()
+	return api.GetUser200JSONResponse{
+		DisplayName:  u.DisplayName,
+		UniqueName:   u.UniqueName,
+		Id:           u.ID,
+		MembershipId: u.PrimaryMembershipID,
+		Characters:   u.Characters,
+	}, nil
 }
 
 const (
@@ -344,7 +420,7 @@ func SetAggregate(ctx context.Context, s Server, userID string, characterID stri
 }
 
 func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
-	result, err := s.SessionService.GetAll(ctx, &request.Params.XUserID, &request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
+	result, err := s.SessionService.GetAll(ctx, &request.Params.XUserID, &request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status), 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +428,7 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 }
 
 func (s Server) GetPublicSessions(ctx context.Context, request api.GetPublicSessionsRequestObject) (api.GetPublicSessionsResponseObject, error) {
-	result, err := s.SessionService.GetAll(ctx, nil, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status))
+	result, err := s.SessionService.GetAll(ctx, nil, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status), 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -498,87 +574,6 @@ func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestO
 	return api.GetSnapshot200JSONResponse(*result), nil
 }
 
-func (s Server) GetPublicProfile(ctx context.Context, request api.GetPublicProfileRequestObject) (api.GetPublicProfileResponseObject, error) {
-	u, err := s.UserService.GetUser(ctx, request.Params.ID)
-	if err != nil {
-		return nil, err
-	}
-	t := int64(0)
-	for _, membership := range u.Memberships {
-		if membership.ID == u.PrimaryMembershipID {
-			t = membership.Type
-			break
-		}
-	}
-	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse primary membership id")
-	}
-	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
-	if err != nil {
-		if errors.Is(err, destiny.ErrDestinyServerDown) {
-			return api.GetPublicProfile503JSONResponse{
-				Message: "Destiny Server is down. Please wait while they get it back up and running",
-				Status:  api.ErrDestinyServerDown,
-			}, nil
-		}
-		return nil, fmt.Errorf("failed to fetch characters: %w", err)
-	}
-
-	return api.GetPublicProfile200JSONResponse{
-		DisplayName:  u.DisplayName,
-		UniqueName:   u.UniqueName,
-		Id:           u.ID,
-		MembershipId: u.PrimaryMembershipID,
-		Characters:   characters,
-	}, nil
-}
-
-func (s Server) Profile(ctx context.Context, request api.ProfileRequestObject) (api.ProfileResponseObject, error) {
-	access, ok := validator.FromContext(ctx)
-	if !ok {
-		return nil, fmt.Errorf("missing access info")
-	}
-	if ok, err := s.D2AuthService.HasAccess(ctx, request.Params.XMembershipID, access.AccessToken); !ok || err != nil {
-		return nil, fmt.Errorf("invalid access token")
-	}
-
-	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
-	if err != nil {
-		return nil, err
-	}
-	t := int64(0)
-	for _, membership := range u.Memberships {
-		if membership.ID == u.PrimaryMembershipID {
-			t = membership.Type
-			break
-		}
-	}
-	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse primary membership id")
-	}
-	// TODO: Decide if we want to remove since we have a dedicated call for this now
-	characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
-	if err != nil {
-		if errors.Is(err, destiny.ErrDestinyServerDown) {
-			return api.Profile503JSONResponse{
-				Message: "Destiny Server is down. Please wait while they get it back up and running",
-				Status:  api.ErrDestinyServerDown,
-			}, nil
-		}
-		return nil, fmt.Errorf("failed to fetch characters: %w", err)
-	}
-
-	return api.Profile200JSONResponse{
-		DisplayName:  u.DisplayName,
-		UniqueName:   u.UniqueName,
-		Id:           u.ID,
-		MembershipId: u.PrimaryMembershipID,
-		Characters:   characters,
-	}, nil
-}
-
 func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.LoginResponseObject, error) {
 	code := request.Body.Code
 	resp, err := s.D2AuthService.GetAccessToken(ctx, code)
@@ -647,6 +642,8 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 	}
 	u.Memberships = m
 	u.CharacterIDs = charIDs
+	u.Characters = chars
+	u.LastUpdatedCharacters = time.Now()
 
 	newUser, err := s.UserService.CreateUser(ctx, &u)
 	if err != nil {
@@ -930,7 +927,7 @@ func (s Server) BackfillAllUsersCharacterIds(ctx context.Context, request api.Ba
 	var updated int32
 	var failed int32
 	for _, u := range users {
-		if err := s.UserService.BackfillCharacterIDs(ctx, u.ID); err != nil {
+		if err := s.UserService.BackfillCharacters(ctx, u.ID); err != nil {
 			slog.With("userId", u.ID, "error", err.Error()).Warn("failed to backfill character ids")
 			failed++
 			continue
