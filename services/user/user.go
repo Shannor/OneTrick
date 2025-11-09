@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"oneTrick/api"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"github.com/algolia/algoliasearch-client-go/v4/algolia/search"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/api/iterator"
 )
@@ -28,10 +30,13 @@ type Service interface {
 	GetAll(ctx context.Context) ([]User, error)
 	// GetByCharacterID returns the user that owns the provided characterID. If not found returns (nil, nil).
 	GetByCharacterID(ctx context.Context, characterID string) (*User, error)
+	UpdateUserSearch(ctx context.Context) error
+	Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, error)
 }
 type userService struct {
-	db        *firestore.Client
-	d2Service destiny.Service
+	db           *firestore.Client
+	d2Service    destiny.Service
+	searchClient *search.APIClient
 }
 
 var _ Service = (*userService)(nil)
@@ -41,10 +46,11 @@ const (
 	characterSubCollection = "characters"
 )
 
-func NewUserService(client *firestore.Client, service destiny.Service) Service {
+func NewUserService(client *firestore.Client, service destiny.Service, searchClient *search.APIClient) Service {
 	return &userService{
-		db:        client,
-		d2Service: service,
+		db:           client,
+		d2Service:    service,
+		searchClient: searchClient,
 	}
 }
 
@@ -261,4 +267,63 @@ func (s *userService) GetByCharacterID(ctx context.Context, characterID string) 
 		return nil, err
 	}
 	return u, nil
+}
+
+func (s *userService) UpdateUserSearch(ctx context.Context) error {
+	users, err := s.GetAll(ctx)
+	if err != nil {
+		return err
+	}
+	u := make([]map[string]any, 0)
+	for _, user := range users {
+		alternateNames := make([]string, 0)
+		for _, membership := range user.Memberships {
+			alternateNames = append(alternateNames, membership.DisplayName)
+		}
+		u = append(u, map[string]any{
+			"objectID":            user.ID,
+			"displayName":         user.DisplayName,
+			"uniqueName":          user.UniqueName,
+			"alternateNames":      alternateNames,
+			"bungieID":            user.MemberID,
+			"primaryMembershipID": user.PrimaryMembershipID,
+		})
+	}
+	// push data to algolia
+	result, err := s.searchClient.SaveObjects("user_index", u)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Done! Uploaded records in %d batches.", len(result))
+	return nil
+}
+
+func (s *userService) Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, error) {
+	searchParams := search.SearchParams{
+		SearchParamsObject: search.
+			NewEmptySearchParamsObject().
+			SetQuery(query),
+	}
+	response, err := s.searchClient.SearchSingleIndex(
+		s.searchClient.NewApiSearchSingleIndexRequest("user_index").WithSearchParams(&searchParams),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search algolia: %w", err)
+	}
+	results := make([]api.SearchUserResult, 0, len(response.Hits))
+
+	for _, hit := range response.Hits {
+		var result api.SearchUserResult
+		// Marshal to JSON then unmarshal to struct
+		jsonData, err := json.Marshal(hit)
+		if err != nil {
+			continue // or handle error appropriately
+		}
+		if err := json.Unmarshal(jsonData, &result); err != nil {
+			continue // or handle error appropriately
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
 }

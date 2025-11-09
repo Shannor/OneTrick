@@ -503,53 +503,54 @@ func gameModeToActivityModes(gameMode api.GameMode) ([]string, error) {
 		return nil, nil
 	}
 }
-func TransformUserSearchDetail(detail bungie.UserSearchDetail) *api.SearchUserResult {
-	if detail.BungieNetMembershipId == nil {
-		return nil
-	}
-	return &api.SearchUserResult{
-		BungieMembershipID: *detail.BungieNetMembershipId,
-		NameCode:           strconv.Itoa(int(*detail.BungieGlobalDisplayNameCode)),
-		DisplayName:        *detail.BungieGlobalDisplayName,
-		Memberships:        TransformDestinyMemberships(detail.DestinyMemberships),
-	}
-}
 
-func TransformDestinyMemberships(memberships *[]bungie.UserUserInfoCard) []api.DestinyMembership {
-	if memberships == nil {
-		return nil
-	}
-	results := make([]api.DestinyMembership, 0)
-	for _, info := range *memberships {
-		i := api.DestinyMembership{
-			DisplayName:    *info.DisplayName,
-			MembershipID:   *info.MembershipId,
-			MembershipType: generateSourceSystem(info.MembershipType),
-			IconPath:       ptr.Of(setBaseBungieURL(info.IconPath)),
-		}
-		results = append(results, i)
-	}
-	return results
-}
+//func TransformUserSearchDetail(detail bungie.UserSearchDetail) *api.SearchUserResult {
+//	if detail.BungieNetMembershipId == nil {
+//		return nil
+//	}
+//	return &api.SearchUserResult{
+//		BungieMembershipID: *detail.BungieNetMembershipId,
+//		NameCode:           strconv.Itoa(int(*detail.BungieGlobalDisplayNameCode)),
+//		DisplayName:        *detail.BungieGlobalDisplayName,
+//		Memberships:        TransformDestinyMemberships(detail.DestinyMemberships),
+//	}
+//}
 
-func generateSourceSystem(membershipType *int32) api.SourceSystem {
-	if membershipType == nil {
-		return api.SystemUnknown
-	}
-	switch *membershipType {
-	case 2:
-		return api.SystemPlayStation
-	case 3:
-		return api.SystemSteam
-	case 4:
-		return api.SystemXbox
-	case 5:
-		return api.SystemStadia
-	default:
-		return api.SystemUnknown
+//func TransformDestinyMemberships(memberships *[]bungie.UserUserInfoCard) []api.DestinyMembership {
+//	if memberships == nil {
+//		return nil
+//	}
+//	results := make([]api.DestinyMembership, 0)
+//	for _, info := range *memberships {
+//		i := api.DestinyMembership{
+//			DisplayName:    *info.DisplayName,
+//			MembershipID:   *info.MembershipId,
+//			MembershipType: generateSourceSystem(info.MembershipType),
+//			IconPath:       ptr.Of(setBaseBungieURL(info.IconPath)),
+//		}
+//		results = append(results, i)
+//	}
+//	return results
+//}
 
-	}
-}
+//	func generateSourceSystem(membershipType *int32) api.SourceSystem {
+//		if membershipType == nil {
+//			return api.SystemUnknown
+//		}
+//		switch *membershipType {
+//		case 2:
+//			return api.SystemPlayStation
+//		case 3:
+//			return api.SystemSteam
+//		case 4:
+//			return api.SystemXbox
+//		case 5:
+//			return api.SystemStadia
+//		default:
+//			return api.SystemUnknown
+//
+//		}
+//	}
 func generateClassStats(statDefinitions map[string]StatDefinition, stats map[string]int32) map[string]api.ClassStat {
 	if statDefinitions == nil {
 		return nil

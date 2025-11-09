@@ -164,13 +164,13 @@ func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObj
 }
 
 func (s Server) Search(ctx context.Context, request api.SearchRequestObject) (api.SearchResponseObject, error) {
-	results, hasMore, err := s.D2Service.Search(ctx, request.Body.Prefix, request.Body.Page)
+	results, err := s.UserService.Search(ctx, request.Body.Prefix, int(request.Body.Page))
 	if err != nil {
 		return nil, err
 	}
 	return api.Search200JSONResponse{
 		Results: results,
-		HasMore: hasMore,
+		HasMore: false,
 	}, nil
 }
 

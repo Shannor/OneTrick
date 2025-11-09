@@ -520,13 +520,13 @@ func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.
 		return nil, false, fmt.Errorf("empty response")
 	}
 	results := make([]api.SearchUserResult, 0)
-	for _, data := range *resp.JSON200.SearchResponse.SearchResults {
-		d := TransformUserSearchDetail(data)
-		if d == nil {
-			continue
-		}
-		results = append(results, *d)
-	}
+	//for _, data := range *resp.JSON200.SearchResponse.SearchResults {
+	//	d := TransformUserSearchDetail(data)
+	//	if d == nil {
+	//		continue
+	//	}
+	//	results = append(results, *d)
+	//}
 
 	return results, *resp.JSON200.SearchResponse.HasMore, nil
 }
