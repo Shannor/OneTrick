@@ -2846,25 +2846,35 @@
         },
         "required": [
           "displayName",
-          "nameCode",
-          "bungieMembershipId",
-          "memberships"
+          "primaryMembershipId",
+          "uniqueName",
+          "objectId",
+          "alternateNames"
         ],
         "properties": {
           "displayName": {
             "type": "string"
           },
-          "nameCode": {
-            "type": "string"
-          },
-          "bungieMembershipId": {
+          "bungieId": {
             "type": "string",
-            "x-go-name": "bungieMembershipID"
+            "x-go-name": "bungieID"
           },
-          "memberships": {
+          "primaryMembershipId": {
+            "type": "string",
+            "x-go-name": "primaryMembershipID"
+          },
+          "uniqueName": {
+            "type": "string",
+            "x-go-name": "uniqueName"
+          },
+          "objectId": {
+            "type": "string",
+            "x-go-name": "objectID"
+          },
+          "alternateNames": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DestinyMembership"
+              "type": "string"
             }
           }
         }
