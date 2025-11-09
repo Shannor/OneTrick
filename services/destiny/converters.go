@@ -78,12 +78,14 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 	c := *item.Item.ItemComponent
 	hash := strconv.Itoa(int(*c.ItemHash))
 	name := items[hash].DisplayProperties.Name
+	icon := items[hash].DisplayProperties.Icon
 
 	base := api.BaseItemInfo{
 		BucketHash: int64(*c.BucketHash),
 		InstanceId: *c.ItemInstanceId,
 		ItemHash:   int64(*c.ItemHash),
 		Name:       name,
+		Icon:       ptr.Of(setBaseBungieURL(&icon)),
 	}
 
 	if item.Instance != nil {

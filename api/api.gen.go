@@ -92,6 +92,12 @@ const (
 	GetSessionsParamsStatusSessionRequestPending  GetSessionsParamsStatus = "pending"
 )
 
+// Defines values for GetUserSessionsParamsStatus.
+const (
+	SessionRequestComplete GetUserSessionsParamsStatus = "complete"
+	SessionRequestPending  GetUserSessionsParamsStatus = "pending"
+)
+
 // ActivityHistory defines model for ActivityHistory.
 type ActivityHistory struct {
 	Activity string `firestore:"activity" json:"activity"`
@@ -166,6 +172,7 @@ type AuthResponse struct {
 type BaseItemInfo struct {
 	BucketHash int64       `firestore:"bucketHash" json:"bucketHash"`
 	Damage     *DamageInfo `firestore:"damageInfo" json:"damage,omitempty"`
+	Icon       *string     `firestore:"icon" json:"icon,omitempty"`
 	InstanceId string      `firestore:"instanceId" json:"instanceId"`
 	ItemHash   int64       `firestore:"itemHash" json:"itemHash"`
 	Name       string      `firestore:"name" json:"name"`
@@ -578,17 +585,6 @@ type GetBestPerformingLoadoutsParams struct {
 	MinimumGames *int      `form:"minimumGames,omitempty" json:"minimumGames,omitempty"`
 }
 
-// ProfileParams defines parameters for Profile.
-type ProfileParams struct {
-	XUserID       XUserID       `json:"X-User-ID"`
-	XMembershipID XMembershipID `json:"X-Membership-ID"`
-}
-
-// GetPublicProfileParams defines parameters for GetPublicProfile.
-type GetPublicProfileParams struct {
-	ID string `form:"id" json:"id"`
-}
-
 // GetPublicSessionsParams defines parameters for GetPublicSessions.
 type GetPublicSessionsParams struct {
 	Count       int64                          `form:"count" json:"count"`
@@ -674,6 +670,29 @@ type GetSnapshotAggregatesParams struct {
 	GameMode *GameMode `form:"gameMode,omitempty" json:"gameMode,omitempty"`
 }
 
+// GetUserSessionsParams defines parameters for GetUserSessions.
+type GetUserSessionsParams struct {
+	Count       int64                        `form:"count" json:"count"`
+	Page        int64                        `form:"page" json:"page"`
+	CharacterID string                       `form:"characterId" json:"characterId"`
+	Status      *GetUserSessionsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// GetUserSessionsParamsStatus defines parameters for GetUserSessions.
+type GetUserSessionsParamsStatus string
+
+// StartUserSessionJSONBody defines parameters for StartUserSession.
+type StartUserSessionJSONBody struct {
+	CharacterID string `json:"characterId"`
+	UserID      string `json:"userId"`
+}
+
+// StartUserSessionParams defines parameters for StartUserSession.
+type StartUserSessionParams struct {
+	XUserID       XUserID       `json:"X-User-ID"`
+	XMembershipID XMembershipID `json:"X-Membership-ID"`
+}
+
 // SessionCheckInJSONRequestBody defines body for SessionCheckIn for application/json ContentType.
 type SessionCheckInJSONRequestBody SessionCheckInJSONBody
 
@@ -694,6 +713,9 @@ type UpdateSessionJSONRequestBody UpdateSessionJSONBody
 
 // CreateSnapshotJSONRequestBody defines body for CreateSnapshot for application/json ContentType.
 type CreateSnapshotJSONRequestBody CreateSnapshotJSONBody
+
+// StartUserSessionJSONRequestBody defines body for StartUserSession for application/json ContentType.
+type StartUserSessionJSONRequestBody StartUserSessionJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -721,12 +743,6 @@ type ServerInterface interface {
 
 	// (GET /ping)
 	GetPing(c *gin.Context)
-
-	// (GET /profile)
-	Profile(c *gin.Context, params ProfileParams)
-
-	// (GET /public/profile)
-	GetPublicProfile(c *gin.Context, params GetPublicProfileParams)
 
 	// (GET /public/sessions)
 	GetPublicSessions(c *gin.Context, params GetPublicSessionsParams)
@@ -769,6 +785,15 @@ type ServerInterface interface {
 
 	// (GET /snapshots/{snapshotId}/aggregates)
 	GetSnapshotAggregates(c *gin.Context, snapshotID string, params GetSnapshotAggregatesParams)
+
+	// (GET /users/{userId})
+	GetUser(c *gin.Context, userID string)
+
+	// (GET /users/{userId}/sessions)
+	GetUserSessions(c *gin.Context, userID string, params GetUserSessionsParams)
+
+	// (POST /users/{userId}/sessions)
+	StartUserSession(c *gin.Context, userID string, params StartUserSessionParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1149,105 +1174,6 @@ func (siw *ServerInterfaceWrapper) GetPing(c *gin.Context) {
 	}
 
 	siw.Handler.GetPing(c)
-}
-
-// Profile operation middleware
-func (siw *ServerInterfaceWrapper) Profile(c *gin.Context) {
-
-	var err error
-
-	c.Set(BearerAuthScopes, []string{})
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ProfileParams
-
-	headers := c.Request.Header
-
-	// ------------- Required header parameter "X-User-ID" -------------
-	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
-		var XUserID XUserID
-		n := len(valueList)
-		if n != 1 {
-			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
-			return
-		}
-
-		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
-		if err != nil {
-			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
-			return
-		}
-
-		params.XUserID = XUserID
-
-	} else {
-		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
-		return
-	}
-
-	// ------------- Required header parameter "X-Membership-ID" -------------
-	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
-		var XMembershipID XMembershipID
-		n := len(valueList)
-		if n != 1 {
-			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
-			return
-		}
-
-		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
-		if err != nil {
-			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
-			return
-		}
-
-		params.XMembershipID = XMembershipID
-
-	} else {
-		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
-		return
-	}
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.Profile(c, params)
-}
-
-// GetPublicProfile operation middleware
-func (siw *ServerInterfaceWrapper) GetPublicProfile(c *gin.Context) {
-
-	var err error
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params GetPublicProfileParams
-
-	// ------------- Required query parameter "id" -------------
-
-	if paramValue := c.Query("id"); paramValue != "" {
-
-	} else {
-		siw.ErrorHandler(c, fmt.Errorf("Query argument id is required, but not found"), http.StatusBadRequest)
-		return
-	}
-
-	err = runtime.BindQueryParameter("form", true, true, "id", c.Request.URL.Query(), &params.ID)
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.GetPublicProfile(c, params)
 }
 
 // GetPublicSessions operation middleware
@@ -1902,6 +1828,183 @@ func (siw *ServerInterfaceWrapper) GetSnapshotAggregates(c *gin.Context) {
 	siw.Handler.GetSnapshotAggregates(c, snapshotID, params)
 }
 
+// GetUser operation middleware
+func (siw *ServerInterfaceWrapper) GetUser(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "userId" -------------
+	var userID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetUser(c, userID)
+}
+
+// GetUserSessions operation middleware
+func (siw *ServerInterfaceWrapper) GetUserSessions(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "userId" -------------
+	var userID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetUserSessionsParams
+
+	// ------------- Required query parameter "count" -------------
+
+	if paramValue := c.Query("count"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument count is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "count", c.Request.URL.Query(), &params.Count)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter count: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "page" -------------
+
+	if paramValue := c.Query("page"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument page is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "page", c.Request.URL.Query(), &params.Page)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "characterId" -------------
+
+	if paramValue := c.Query("characterId"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Query argument characterId is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "characterId", c.Request.URL.Query(), &params.CharacterID)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter characterId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "status", c.Request.URL.Query(), &params.Status)
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter status: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetUserSessions(c, userID, params)
+}
+
+// StartUserSession operation middleware
+func (siw *ServerInterfaceWrapper) StartUserSession(c *gin.Context) {
+
+	var err error
+
+	// ------------- Path parameter "userId" -------------
+	var userID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userID, runtime.BindStyledParameterOptions{Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StartUserSessionParams
+
+	headers := c.Request.Header
+
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID XUserID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-User-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-User-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XUserID = XUserID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-User-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required header parameter "X-Membership-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Membership-ID")]; found {
+		var XMembershipID XMembershipID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for X-Membership-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Membership-ID", valueList[0], &XMembershipID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter X-Membership-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.XMembershipID = XMembershipID
+
+	} else {
+		siw.ErrorHandler(c, fmt.Errorf("Header parameter X-Membership-ID is required, but not found"), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StartUserSession(c, userID, params)
+}
+
 // GinServerOptions provides options for the Gin server.
 type GinServerOptions struct {
 	BaseURL      string
@@ -1937,8 +2040,6 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/login", wrapper.Login)
 	router.GET(options.BaseURL+"/metrics/best-performing-loadouts", wrapper.GetBestPerformingLoadouts)
 	router.GET(options.BaseURL+"/ping", wrapper.GetPing)
-	router.GET(options.BaseURL+"/profile", wrapper.Profile)
-	router.GET(options.BaseURL+"/public/profile", wrapper.GetPublicProfile)
 	router.GET(options.BaseURL+"/public/sessions", wrapper.GetPublicSessions)
 	router.GET(options.BaseURL+"/public/sessions/:sessionId", wrapper.GetPublicSession)
 	router.GET(options.BaseURL+"/public/sessions/:sessionId/aggregates", wrapper.GetPublicSessionAggregates)
@@ -1953,6 +2054,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/snapshots", wrapper.CreateSnapshot)
 	router.GET(options.BaseURL+"/snapshots/:snapshotId", wrapper.GetSnapshot)
 	router.GET(options.BaseURL+"/snapshots/:snapshotId/aggregates", wrapper.GetSnapshotAggregates)
+	router.GET(options.BaseURL+"/users/:userId", wrapper.GetUser)
+	router.GET(options.BaseURL+"/users/:userId/sessions", wrapper.GetUserSessions)
+	router.POST(options.BaseURL+"/users/:userId/sessions", wrapper.StartUserSession)
 }
 
 type SessionCheckInRequestObject struct {
@@ -2114,66 +2218,6 @@ type GetPing200JSONResponse Pong
 func (response GetPing200JSONResponse) VisitGetPingResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ProfileRequestObject struct {
-	Params ProfileParams
-}
-
-type ProfileResponseObject interface {
-	VisitProfileResponse(w http.ResponseWriter) error
-}
-
-type Profile200JSONResponse Profile
-
-func (response Profile200JSONResponse) VisitProfileResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type Profile503JSONResponse struct {
-	// Message User friendly description of the error
-	Message string        `json:"message"`
-	Status  InternalError `json:"status"`
-}
-
-func (response Profile503JSONResponse) VisitProfileResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPublicProfileRequestObject struct {
-	Params GetPublicProfileParams
-}
-
-type GetPublicProfileResponseObject interface {
-	VisitGetPublicProfileResponse(w http.ResponseWriter) error
-}
-
-type GetPublicProfile200JSONResponse Profile
-
-func (response GetPublicProfile200JSONResponse) VisitGetPublicProfileResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPublicProfile503JSONResponse struct {
-	// Message User friendly description of the error
-	Message string        `json:"message"`
-	Status  InternalError `json:"status"`
-}
-
-func (response GetPublicProfile503JSONResponse) VisitGetPublicProfileResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -2441,6 +2485,84 @@ func (response GetSnapshotAggregates200JSONResponse) VisitGetSnapshotAggregatesR
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetUserRequestObject struct {
+	UserID string `json:"userId"`
+}
+
+type GetUserResponseObject interface {
+	VisitGetUserResponse(w http.ResponseWriter) error
+}
+
+type GetUser200JSONResponse Profile
+
+func (response GetUser200JSONResponse) VisitGetUserResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetUser503JSONResponse struct {
+	// Message User friendly description of the error
+	Message string        `json:"message"`
+	Status  InternalError `json:"status"`
+}
+
+func (response GetUser503JSONResponse) VisitGetUserResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetUserSessionsRequestObject struct {
+	UserID string `json:"userId"`
+	Params GetUserSessionsParams
+}
+
+type GetUserSessionsResponseObject interface {
+	VisitGetUserSessionsResponse(w http.ResponseWriter) error
+}
+
+type GetUserSessions200JSONResponse []Session
+
+func (response GetUserSessions200JSONResponse) VisitGetUserSessionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartUserSessionRequestObject struct {
+	UserID string `json:"userId"`
+	Params StartUserSessionParams
+	Body   *StartUserSessionJSONRequestBody
+}
+
+type StartUserSessionResponseObject interface {
+	VisitStartUserSessionResponse(w http.ResponseWriter) error
+}
+
+type StartUserSession201JSONResponse Session
+
+func (response StartUserSession201JSONResponse) VisitStartUserSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartUserSession400JSONResponse struct {
+	Message string `json:"message"`
+}
+
+func (response StartUserSession400JSONResponse) VisitStartUserSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
@@ -2467,12 +2589,6 @@ type StrictServerInterface interface {
 
 	// (GET /ping)
 	GetPing(ctx context.Context, request GetPingRequestObject) (GetPingResponseObject, error)
-
-	// (GET /profile)
-	Profile(ctx context.Context, request ProfileRequestObject) (ProfileResponseObject, error)
-
-	// (GET /public/profile)
-	GetPublicProfile(ctx context.Context, request GetPublicProfileRequestObject) (GetPublicProfileResponseObject, error)
 
 	// (GET /public/sessions)
 	GetPublicSessions(ctx context.Context, request GetPublicSessionsRequestObject) (GetPublicSessionsResponseObject, error)
@@ -2515,6 +2631,15 @@ type StrictServerInterface interface {
 
 	// (GET /snapshots/{snapshotId}/aggregates)
 	GetSnapshotAggregates(ctx context.Context, request GetSnapshotAggregatesRequestObject) (GetSnapshotAggregatesResponseObject, error)
+
+	// (GET /users/{userId})
+	GetUser(ctx context.Context, request GetUserRequestObject) (GetUserResponseObject, error)
+
+	// (GET /users/{userId}/sessions)
+	GetUserSessions(ctx context.Context, request GetUserSessionsRequestObject) (GetUserSessionsResponseObject, error)
+
+	// (POST /users/{userId}/sessions)
+	StartUserSession(ctx context.Context, request StartUserSessionRequestObject) (StartUserSessionResponseObject, error)
 }
 
 type StrictHandlerFunc = strictgin.StrictGinHandlerFunc
@@ -2749,60 +2874,6 @@ func (sh *strictHandler) GetPing(ctx *gin.Context) {
 		ctx.Status(http.StatusInternalServerError)
 	} else if validResponse, ok := response.(GetPingResponseObject); ok {
 		if err := validResponse.VisitGetPingResponse(ctx.Writer); err != nil {
-			ctx.Error(err)
-		}
-	} else if response != nil {
-		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// Profile operation middleware
-func (sh *strictHandler) Profile(ctx *gin.Context, params ProfileParams) {
-	var request ProfileRequestObject
-
-	request.Params = params
-
-	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.Profile(ctx, request.(ProfileRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "Profile")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		ctx.Error(err)
-		ctx.Status(http.StatusInternalServerError)
-	} else if validResponse, ok := response.(ProfileResponseObject); ok {
-		if err := validResponse.VisitProfileResponse(ctx.Writer); err != nil {
-			ctx.Error(err)
-		}
-	} else if response != nil {
-		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetPublicProfile operation middleware
-func (sh *strictHandler) GetPublicProfile(ctx *gin.Context, params GetPublicProfileParams) {
-	var request GetPublicProfileRequestObject
-
-	request.Params = params
-
-	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.GetPublicProfile(ctx, request.(GetPublicProfileRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetPublicProfile")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		ctx.Error(err)
-		ctx.Status(http.StatusInternalServerError)
-	} else if validResponse, ok := response.(GetPublicProfileResponseObject); ok {
-		if err := validResponse.VisitGetPublicProfileResponse(ctx.Writer); err != nil {
 			ctx.Error(err)
 		}
 	} else if response != nil {
@@ -3226,111 +3297,202 @@ func (sh *strictHandler) GetSnapshotAggregates(ctx *gin.Context, snapshotID stri
 	}
 }
 
+// GetUser operation middleware
+func (sh *strictHandler) GetUser(ctx *gin.Context, userID string) {
+	var request GetUserRequestObject
+
+	request.UserID = userID
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetUser(ctx, request.(GetUserRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetUser")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetUserResponseObject); ok {
+		if err := validResponse.VisitGetUserResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetUserSessions operation middleware
+func (sh *strictHandler) GetUserSessions(ctx *gin.Context, userID string, params GetUserSessionsParams) {
+	var request GetUserSessionsRequestObject
+
+	request.UserID = userID
+	request.Params = params
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetUserSessions(ctx, request.(GetUserSessionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetUserSessions")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(GetUserSessionsResponseObject); ok {
+		if err := validResponse.VisitGetUserSessionsResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartUserSession operation middleware
+func (sh *strictHandler) StartUserSession(ctx *gin.Context, userID string, params StartUserSessionParams) {
+	var request StartUserSessionRequestObject
+
+	request.UserID = userID
+	request.Params = params
+
+	var body StartUserSessionJSONRequestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.Status(http.StatusBadRequest)
+		ctx.Error(err)
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx *gin.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.StartUserSession(ctx, request.(StartUserSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartUserSession")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		ctx.Error(err)
+		ctx.Status(http.StatusInternalServerError)
+	} else if validResponse, ok := response.(StartUserSessionResponseObject); ok {
+		if err := validResponse.VisitStartUserSessionResponse(ctx.Writer); err != nil {
+			ctx.Error(err)
+		}
+	} else if response != nil {
+		ctx.Error(fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"H4sIAAAAAAAC/+w9XXPcNpJ/BcW7qns4SnI2u1dbepMlx9Gd7WgtOc5V1g8YsmcGOyTAAKDkOdf89yt8",
+	"kSAJzpBDjpxU/OKyOGCj0Wj0d4NfooTlBaNApYguv0QF5jgHCVz/9cvZW8gXwMWaFGe3N+oRodFltAac",
+	"Ao/iiOIcosvOuDji8FtJOKTRpeQlxJFI1pBjBUBuC/WKkJzQVbTbxdEvZx8E8P3w3YgxkHfuR72Wq0SS",
+	"RyK3PxIhGd/qxXJWAJcE9ABsB3RBxdHnM4YLcpawFFZAz+Cz5PhM4pV+cUk4KJjqjQqImt398SMWazUw",
+	"BZFwUkjC1CLVU0RSxJZIrgGpKdX/3UuX6F5ysoEYXbO8AEkkeYQY/aMkyeYuw9sYgUzOURRHS8ZzLKPL",
+	"iFD5X3+NYoc9oRJWmoyj0dcY+0u4TRTO7SV8eP8GSabRJwmjaMl4cC0xun0Zo2teJmSRgcG8xvN4Kmus",
+	"FJoNtCZsnw9HwSU5XsEHnoWX7parR7l9TEFIQrEaVq0/uNYVO7PsbWZ5/2YMphVmGk0qJKYJ3KZdRG9T",
+	"tUUrkChnXKEnMckEwgtWSo1wgbkkSZlhjlYKnwO4uqluRmFbI6jxFXecPGIJ3mYtGMsA01FQKzAKaMYS",
+	"PJkBKiAKYs5S6BL0XR+RBk6hoSrwBXDC9I5VJzjFEs4kmTaBhaum4LAEDhVnDJEU9VbXL4/aa3/OnUHC",
+	"SexfGz+2BGSDjb3tbJ7u+qXIO54tQVXR9lO1RLb4FyTyKFloFYZailMiby1nAC1ztaykFtFRHP2mZHSR",
+	"YYUizrK7xzuFK2f0JaYUuIeVt7kK1Nkj5or4QsG8bsD8hwfzysG89WAq7FYrDit7rMLK7cYcf/Xo3zks",
 	"o8vo3y5qC+DC6suLtrL0NUEaPmA131Qjb46S6YZzEw5YQnol5z8fNWgtiw6uZ6SoS93h1ljTRO8GTlOi",
-	"+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",
-	"nv6JUU3+p/OE5dHu8+7/AwAA//+GP3iVtJ0AAA==",
+	"+Bdnd4192bcJt/Y43HmgdhMY2kdJG0cUF2LN5BtCN+JYJO89IJOwa2LTERzElxcN4eFYur2g5h74HNWR",
+	"CurslCmRPxDI0u7hORGLlAK4eX+CwqqAhClW/Rxes1y/B1EwKoIiIwEhHtgGApbflf4RSfUresRZCV2D",
+	"bhdH8LlQuN4GIDwoO5HkgNKSG2uJUPS0JslaWyXYn+CJZBlaADLg0vOu5uo5yEqJV55JyDqq/RZEUqCS",
+	"LIlRO3sWVXCSY759OxSwXGOJiEA5JjTbolJAGgLLYclBrF8dTTILYAzN7Cs9m/y+AVBZuzhR/EXoClF4",
+	"au4RXkrgiOiVduesl6kWICTOi4GCXb2iJnjQTzsksZ5Gm2UCU7eOh8/e/hQ+07YIFNijFn+FmSM2Z7Fe",
+	"eegwvsQCbiXkt3TJuodxUSYbkM6RnNHj8wBrRwork+qQ0L/RozSm6uAlE41u4ty4ph9zPLyWtyEhPwHl",
+	"KrBqjslyPCzDqfE1qqlaNrK3eVMs3YXPegqF6zXmOJHAu4yYZFiISSs1ELSNV3IOVD4QmU0jXgOQggz5",
+	"IoP8JU42K85KmirnesoEIXj1PNcsY/zQmTGDqnfmwcjhQSYeGHNQMrJay5lPiYGp+Ron03ZZA9CGq8Ty",
+	"aIP1WrHfvcSya60GLSizgDBL+ZvZZIYWc9vVx5b5pxzWpDqbjZPq7PDAiXVDeqJDVntWw9AClILnkDCe",
+	"BkyVpuVbQ785ahUhd6+l4p3a1BbI0xqoxtcZ++gJC7QkXEhkgfgh0RM4jOv+aC5bIpxlJiYoIRc68kYe",
+	"AZUCYVRS8lsJaAPbKcisncohe7fTkefA9h3luGQMp6yUh07aGzvMU4/dSFob39gYrgVnC7zItsqCXQEF",
+	"rjYALbYohSUuM6n+q1/bCgk5WpQSJZiq0cka05UZi5WtzQ9QwKrYsYr6hFIojsoinXIaMiwksjCQG4XR",
+	"2gRzEFDJt3pgjlPQcIg8n/3U1Itwzu5+AaRGKP9hARmjK3V2DuycBnkz1lkORSUdQ/tyKG7IqLh2p/Vf",
+	"a2ONWeaplzqLZK9kuZbwFad0PXQb7yOs8o6OV9Tt1MepUiprLG6bDsMRkX8HZDer+zGXEW9kwzWWsLKZ",
+	"xvm2RYcl2jba93+ZZKMZmH3ORzP67ihv6e4Qai057vDmpINRC0t1IJy13ToMWbHGbcJMS4ZqiGrKRYDm",
+	"07xuQ/A4WnEwkZfZQBuIZi/TWSEreIGEjhKHZlJLqNhSbtKWG29JbzddkhRoAm/gETI/60KZ/EGZ4koQ",
+	"s7dYJmudN3rSUZmUlLniV7JaD0y4vLPg2jPG0TsDvfvDG/bUffhWz919/iNZdUB8GkWT5rtN6tyzkieN",
+	"pJSxjazWGkiDe/1OB2ocfRDAO4+Pw96+rND3Akldv2WUV20CV7dTdYEHpg6HtZTrsVA1GAVVckxFgZV7",
+	"OBnhNqzOAfXmblCpi0ZsST7l3KZeZFDtry6G8KKh3W1OiSgyvH0X1L1Wvd9huR4U3N9nLnpjb5rvuv3d",
+	"m+fSTGuORydQ4K+hExFuzROK/ZoU1pVXgNRfmjQ2bevnhPe+Ww3sRsrt7EHUzdID+3rIfqx3pmlhnMiy",
+	"rKerTZiZ7U2vSmYk/AEm6GSPdYx1N0kEWI5QE/5AOEjAuREAIw//+DnfOfv7RBnbo8XNmPIgf45wUrcl",
+	"YPzFT9m4ZXOz1NSvcQ7tWhecZe6xaBW7NMtgJCdY5+VHl744+FeZspvcX1Xpo/esWSTjnj64md2DVqHM",
+	"65KGPeoTOr3rcD5X/YJub6owmMTNUMz0CPx67hyV54R216N/OuFq9vuqNizjfFIfvSknY2X5Rc0aqsrp",
+	"8JEGdWxs8IOOE6sJfzaLnYC5QUQXJGV4C/zeBS33IXDnDd3F0RPggtGjQ50f9euObG9BcpKISYtyCHW4",
+	"wF9jjfeUnSehGizNBRI4xdkrzo2T4qSjtXjvgT8Cv2FPSqu6wcZ6tA8/0A1lT9QAGCYWX3EeAv+K8+AM",
+	"rzhvTqLwlpDf9Ys8fYS5LQlChlw6QMzVtsEjoSuEKSI0JY8kLXGGHIFSnfE4R+8YdcdfAKrZAWGuIGfw",
+	"iKkBqeBIyE15TMpA0P+QaI0fQf3yT53zvq2S3f+MLm25NRMQ63LmLSs5ItTIFsIoWnKWa7FjiXRLH4Eq",
+	"O/gGloRqvj3XFRqNwgosKv9zHxc3yjN28YGs2rLKASEiEKMI1/m1GMk1ESbNwUGW3ETwax1QZ+Jc5dCa",
+	"ZakivQOqlkHLLMOLDFwfxPHZrVYqrgC+CXDGrUdpUUCiK6WybOtXkqs3kU18ql+U4wBq+RXi6Pqnt3c/",
+	"vXv17gE9/O/dq0ukGVLPaMocDgsn4H6hIeZcGwRjqiA3pvxAsGQD8sBS69XZ4W6XFLKXtvpK8XZ72TF6",
+	"UrtXMAlUEpxV729ZiRJWZqlj9rTSleICL0hGFG9eGGLqwZiiFSY1g/eQ8d6uZyAhzfAppHQEbGbDsuyn",
+	"ZXT564HJjXL5FA8ivQJQSkgNkZo7ULAndaZSWAIVtrfkvIdAVjEcX6NqsO6oHcu/wsKvZEpQ83g+SFMY",
+	"j6w98t7cWcneXwTQrB8Lp64NL5uRRkZpAWbzqmq9RaHkPJ3XomtXoA2rUG/R7kATzL0VWJW6QiSt23dM",
+	"lPT0XS9eHVonCVoK0I06S2LlQVopLZ/f5yV9sIStP0fvdQr10mxSTCKtSrkbZW5e+VtvLfObuibhqFp7",
+	"//S0s5/RVZbZcyGMTn7y5X2ixL8WVjH6H0JBkiRGryjw1TZGPwJ+3GohrxO5mukoezpHr3Cyrop0MdrA",
+	"FpFaUYrzKXLK5bMVfY+Ovf7+wi/SxmlnPAHSxORDURZpQ+b7oiu7ONL2yO8vkKB00oniCH5EvolHRuhG",
+	"CTEb/pyUkdcznL60dj21eLa2J++aHnZXhJgBSI8wxhxGOZa6fL9fqHRcFiwEEaONLR1LuMOEB6yud6WS",
+	"Ebp8zcBGqXLjrDzKbWb1+E46i7BR71iuT4O7AT0v6hZdhbl6/AA4N/bFTNjf3lRmiAu/IhPF0AVajJ4j",
+	"60wKpYixQJgyuQbuRklbAbZFT8ABSbYC9XO03/Ks1nIzNkBsKaAIspmTELqhRe3iRqnEC7eZc+3jxqGM",
+	"T4WzQP/pTs8JsDcxPD3PSc6OWcGsR8cga31DmiqhPR/mHwlFjKOMifkQrtDUtgbgfM5zXrsb+oxrFe2f",
+	"c+NwTV6DRntn26y0vpnzkD6QXJNbQMJoKtqrmGsjPNx3u0kdr34gW2loZpiwqU8Ly5rwGedFpt9j2sLY",
+	"30CmXwtahJwtSQZ7KvFNV+mQIE3didOO0+ziw6UT6RFFE7s4MoXqPWBDpnKz/sF7vZOr9EgQIt09YJ6s",
+	"Pwjg70GUWTCQQVcE3o5IxHbeuBlCuxrv4ZvVrXYJbJrC6tqmVPeTtknV6r04RIMmwmPqskSb5Du9D0JY",
+	"1yVccgy3acDIfUOE1FakGyWQcglMZEMLOGEBezHKbrtnOxzpXS1QTX8zKl7WQHvXDd8/R4cLU8LlVFca",
+	"eMAbk73cDhf/Xgv8blrtZj35CaMBGRbyHoBe7b2Y4okTCT/RbOvyJP68HRCj8Agg4OP1MLLROYjrSFTq",
+	"OWevZ+cnYt0atDfR12DbemqXzyiFn9ktwFiH9ekaWlNrZN5d9b59cO2BGZWCKEWrpeZ5umS0qq+3y+uG",
+	"aXbKNITtpB2xykJrJP+ekUM9js8izjtl6fvrlFu123G3IHowCFdA/Yy35NitCOVWfipMsN0GH7HT8Ygs",
+	"jc53W6dtAe0o4DR1HXpucLKGZHNG6Dn6aGPitMwy51IkWOiEqg5xrMFAIg6QuXpCx1Bwcqjj0a3k5ghO",
+	"tHvvmu2Cqf+bdkdj5fh56RPjmBzC1E1zc8w9OqET3DynSadDIenW/e+/NcfmkJ8t/D3jVRPiFcWLDAJb",
+	"+HGtQ2he0h8VWbnSF5uYd5BO4kgvR3PU7XUOA4PPz0SQRQaj8Hk078yEj8PAJSsftgXczJQiCsHz53kg",
+	"wCGde7Yu1HntIrUPPw6u7az37nxSJqaaNVAAZ3+JQ/Xdk3SxrRbRh95rhfANpAxvlXliy/gX7LO2FwDn",
+	"xm5ICdbRAV2SNqof6S7D2/sKsnn2i4Fv/ri3s7i/7Fzmzw9uRoX7lKZtVzYcDEmlJNHw+PZsA9ugYzu6",
+	"zsTiW4fk+jK4P4cLct+wBGfk/0AHH3MsJaToEbjwigp6rrkan/y1tar91cHv8VO3OpgISZJG6zkrF5ln",
+	"uFAdoj6yQnhaoY8XCd3F0YMNCB9xNZy+iFgDDjCFHxzvhkIA5yPicBUsN+GnOULJ7Xrk3vak27AypcrM",
+	"k1giDgUHoatB1f4vQMgY5Uz9mzG60n8usZAgpNJoguWAbLILuNA2pnnH3PYlS5xVV+wqOevsQyybL2ib",
+	"U/nFi4yINaTacnzERNdPVrF3u6ZtsGC9p9oyfHHqLBdgLrAgyYyx+5cKntmH9pk/6sYoksytS1dz5ubu",
+	"wFxnjPAjcLyCygqvpE6sHBRcFBlJcEPkHJFnWJn83BOQ1VrOmnL5aEF2RadGH5kp0Uqb6bpimKLvlOWB",
+	"FqBOnhBkRRtX8R1Tb2+X1bE3DB+EPIMPInh7WO2ANMPqY4LAngcvjnThxfPeMfuHbHMb2uJ2THvbbbuf",
+	"bniSZX92peduzn2r6L4yakGhGXcHkmhjgnE1mH3NgJ0UUN9NlHtSdT1334QzdeGunj779GDmzPWMtmud",
+	"xpUAt647P+iR6fpmr9DWtKLotxZgjBTTRDS0iW3my9MnXjI1ZyOZV/o+sW+r0wlm4otJyYnc3ivUbaYX",
+	"MAd+VZpCQ/PXD24P/vvjQ2Q/76HtEf1rvSdrKQsDmNjenlbMkgJ64CTZ6GtZ9fWTjWfWSYouo+/OX5y/",
+	"UJRjBVBckOgy+l4/iqPCVbJdYO36iQsbJjzTwUxi0qdMBG7xsu1kVfTTXCCFMrbS3pDaYO3tKj6u0gUK",
+	"qL5y1v9IS499UQ+5aH+cRdkYSoqAkC9ZujVXbVAJ1BRPG4NITX7xL2GibfUnVpqH01Ws7ePPjmJvEqIq",
+	"ejOyy14ClqIc614D83ERwlGyZgKo1xpF0igglRph6mFR4LZQrUHE9QK7ErD5mnIK9APTOadX/pcXL0bR",
+	"thW523Uu4Yre191iVlajOkWihl9YH8LSfmVCs01ueg3yqh41npncl3h28XjOi+33fX4rQV8S5Qw6Vuqr",
+	"ifo/7dORvTn+TPIyjy6/fxFHOaHmj++6d1z3zVngFYyc0s3yYvgszYD74E8X9Wes+ibKTWVIDXHINSFv",
+	"zZdIPk1k3IG1MY0rTjqmW5fbXTFJza1GP+uuuQIL2WX6iy+1E70bcAK2Xf4/vItH7lrXGLH3gbp754FX",
+	"PqpbxbnuhNHcKtc1Po3PIBzJVF6MYjIDfNXLamKtYl/jHF5RyV1YruVX1hqi7TC4dNnxN3l2b20MKCal",
+	"RYb7ODrWGEBWacfjrUHRqCLsufPY/2SVxtknkcMgrA5bDQ8KaXV+dWfbqqQCpSW3DeTeZ9LMEU5zQi8W",
+	"ONksSZadVWfnjJg4gbOimgf5pR1/lWVqceLad1pm5eklJln3Nr3QtYv17a2DRreo716N3YxDKH1f5srR",
+	"U7R2FATdUMiFo69vqfXJRHdXzzPbBM+ifVr3EA3QPsbWMj6g7cqpOjRsjQKhSVam4F1euzSdGJgDYjQj",
+	"FHT3Blsu1f+NZNenovo2R14YXfi3F99P4M4chLBfbWh9pE5hteQEaJptkfebc4BBXwwRB7MStvxp/xeK",
+	"/Fsw2szs0KqgDWJmfbMFIgKl7IlGvm+oedH3Cn/9tPuk2Vv5TbRfTrzRP8/l9SSDinf1qNCCp7oJ+0vh",
+	"vA/6hEwqtlopCUwqhyE3TvjFAoQ8s99LInR1ZjtI97oRL0HIu+qVN+6NI0yqExrGVY3akXPY8rk+8Ct3",
+	"QdZQ27u6UWt3yBuq4VXOzt+OdHbsO691Vj0I+bsXLw7BntdKNKs8HDjw9GrHqKpE/7hWioChVpuDU+Jt",
+	"rXuTDnxcQuNcXxphCDJERHphAMmKqs7M9JbbO+/t8XatLX1H+M5ERk4mkHTDTWAJhfnCRC2pNLLlIiOJ",
+	"C6LtFT13eui9GzlM5PxJogwzCk+rt32Yc1VDvze6uFMUbZ/XtdHPFJ9wHS8jAhMV+4X59+JLFUr0YxFN",
+	"WK9BIlzdp+S1x+xn+R6Ob4YJ/EjmUO3XHyX9dEIxcV9HMXuEHW5HOvcQ+6JuPxosQ67qV/54pO1p0Rqu",
+	"GhvhlK8SIWlHIfztqBEYFXfwYFiesV/v63cU3re/9vcn9xcsPfTVc5omlpCmZ7CfjqaNczYKFta5HRB7",
+	"KTgsyefD5LbjYgP7FHRvLmGNxdtmBWCV59HzlJkUI3RVu2Wzo7TaH2kwE8QVHiPsTIwyq/DMtiMLDS31",
+	"txdM+taEoHQC239JX3Ji2lUVAN0ZrrjJBqc0Kx229vrtvG/Zqj9ktuqbXTnUrox7Cgiudf4XYf0d3j6r",
+	"8V5iLnstxtNHdWfRnsd19o1tj9zfKWVBDRGad5w9EhsU9i5yZUg3TpriTVv0sdSh10NFBN89o5UdrCyI",
+	"o79OUn1edHq/TnYDh+kmzVyICEToI8505eLOVygzu1/fHC8jjcqQMLJC1RvcpuAHndj6OrIofq5N+rry",
+	"rnXBREdJ00F9JP78fw5558jWjjBMCC18Cyr8eYIKjZUElYxLJXuOVBWyt/3t9jO2JoBff+E5pIe8Yowp",
+	"QnQmz+Z0DszXc1qexS8YkI3qL0rA1BYS2A9Ot1NAzW+E78+f7/cwhHMx3GUGTYbFNLXfMPDZu8O3BtZ9",
+	"/UnqP5UrcioNK/EGmjdNsOWzKtgADw9zLbzhDRF68aW+vWI3QJ72cOUIMdrlxTF1mm7+njpN7yqOoyWT",
+	"dwnIST2BQXtZXaNf8+GwvQzbTX3bmrAsg8TVKVWvIlusYvfX+8J97/bus8B+xxsdLBfW3aw5S6GDlSOM",
+	"Q26+GpUmihWg51GRDQOyx5D7dFhp1jzQZhzLsjoYffHFBHn2lo3rEtohpvxcVUenPPHumtIAyXTdoP0d",
+	"uS8efatR7K1RDLDRoMSGWvuBIpbT8NW31Ma31MYfP7XhHZ/fRUhxVqn/LXnyLXnyvMkTHSpQms0coJJn",
+	"tpP68uIiYwnO1kzIy7+/+PsLfQDq38XlxQUuyHn6F0a1Jbo5T1ge7T7t/j8AAP//+Rm+el+iAAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
