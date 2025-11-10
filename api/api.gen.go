@@ -259,9 +259,10 @@ type Display struct {
 
 // FireteamMember defines model for FireteamMember.
 type FireteamMember struct {
-	DisplayName  string `firestore:"displayName" json:"displayName"`
-	ID           string `firestore:"id" json:"id"`
-	MembershipID string `firestore:"membershipId" json:"membershipId"`
+	Characters   []Character `firestore:"characters" json:"characters"`
+	DisplayName  string      `firestore:"displayName" json:"displayName"`
+	ID           string      `firestore:"id" json:"id"`
+	MembershipID string      `firestore:"membershipId" json:"membershipId"`
 }
 
 // GameMode defines model for GameMode.

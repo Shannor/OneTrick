@@ -170,6 +170,7 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 			DisplayName:  member.DisplayName,
 			ID:           member.ID,
 			MembershipID: member.PrimaryMembershipID,
+			Characters:   member.Characters,
 		})
 	}
 

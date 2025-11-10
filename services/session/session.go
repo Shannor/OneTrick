@@ -122,7 +122,7 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	}
 
 	if count > 0 {
-		query = query.Limit(count)
+		query = query.Limit(count).OrderBy("startedAt", firestore.Desc)
 	} else {
 		query = query.OrderBy("startedAt", firestore.Desc).Limit(10)
 	}

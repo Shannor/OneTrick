@@ -2342,7 +2342,8 @@
         "required": [
           "id",
           "membershipId",
-          "displayName"
+          "displayName",
+          "characters"
         ],
         "properties": {
           "id": {
@@ -2363,6 +2364,15 @@
             "type": "string",
             "x-oapi-codegen-extra-tags": {
               "firestore": "displayName"
+            }
+          },
+          "characters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Character"
+            },
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "characters"
             }
           }
         }
