@@ -86,3 +86,6 @@ Content-Type: application/json
 }
 ###
 POST http://localhost:8080/admin/backfill-character-ids
+
+###
+POST http://localhost:8080/admin/backfill-aggregate-data

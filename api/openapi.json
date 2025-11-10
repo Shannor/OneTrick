@@ -61,6 +61,37 @@
         }
       }
     },
+    "/admin/backfill-aggregate-data": {
+      "post": {
+        "operationId": "BackfillAggregateData",
+        "responses": {
+          "200": {
+            "description": "Summary of backfilled users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "updated",
+                    "failed"
+                  ],
+                  "properties": {
+                    "updated": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "failed": {
+                      "type": "integer",
+                      "format": "int32"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/search": {
       "summary": "return a list from bungie of matching users",
       "post": {
@@ -1749,6 +1780,9 @@
           "activityDetails",
           "snapshotLinks",
           "performance",
+          "sessionIds",
+          "snapshotIds",
+          "characterIds",
           "createdAt"
         ],
         "properties": {
@@ -1764,6 +1798,33 @@
             "x-go-name": "activityID",
             "x-oapi-codegen-extra-tags": {
               "firestore": "activityId"
+            }
+          },
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "sessionIds"
+            }
+          },
+          "characterIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "characterIds"
+            }
+          },
+          "snapshotIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "snapshotIds"
             }
           },
           "activityDetails": {

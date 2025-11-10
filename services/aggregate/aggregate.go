@@ -1,13 +1,15 @@
 package aggregate
 
 import (
-	"cloud.google.com/go/firestore"
 	"context"
 	"errors"
-	"google.golang.org/api/iterator"
 	"oneTrick/api"
 	"oneTrick/utils"
 	"time"
+
+	"cloud.google.com/go/firestore"
+	"github.com/rs/zerolog/log"
+	"google.golang.org/api/iterator"
 )
 
 var NotFound = errors.New("not found")
@@ -26,6 +28,8 @@ type Service interface {
 	// GetAggregates retrieves a list of aggregates for the given session IDs.
 	// Limited to max of 30 documents at once
 	GetAggregates(ctx context.Context, IDs []string) ([]api.Aggregate, error)
+
+	UpdateAllAggregates(ctx context.Context) (int, error)
 
 	// GetAggregatesByActivity retrieves a list of aggregates for the given activity IDs.
 	// Limited to max of 30 documents at once
@@ -163,4 +167,61 @@ func (s *service) GetAggregates(ctx context.Context, IDs []string) ([]api.Aggreg
 		return nil, err
 	}
 	return results, nil
+}
+
+func (s *service) GetAllAggregates(ctx context.Context) ([]api.Aggregate, error) {
+	docs, err := s.DB.
+		Collection(collection).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[api.Aggregate](docs)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *service) UpdateAllAggregates(ctx context.Context) (int, error) {
+	aggregates, err := s.GetAllAggregates(ctx)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, agg := range aggregates {
+		snapshotIDs := make([]string, 0)
+		sessionIDs := make([]string, 0)
+		characterIDs := make([]string, 0)
+		if len(agg.SnapshotLinks) > 0 {
+			for _, link := range agg.SnapshotLinks {
+				if link.SnapshotID != nil {
+					snapshotIDs = append(snapshotIDs, *link.SnapshotID)
+				}
+				if link.SessionID != nil {
+					sessionIDs = append(sessionIDs, *link.SessionID)
+				}
+				characterIDs = append(characterIDs, link.CharacterID)
+			}
+			_, err := s.DB.Collection(collection).Doc(agg.ID).Set(ctx, map[string]any{
+				"sessionIds":   firestore.ArrayUnion(toInterfaceSlice(sessionIDs)...),
+				"snapshotIds":  firestore.ArrayUnion(toInterfaceSlice(snapshotIDs)...),
+				"characterIds": firestore.ArrayUnion(toInterfaceSlice(characterIDs)...),
+			}, firestore.MergeAll)
+			if err != nil {
+				log.Warn().Str("id", agg.ID).Err(err).Msg("failed to update aggregate")
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
+// Helper function to convert any slice to []interface{}
+func toInterfaceSlice[T any](slice []T) []interface{} {
+	result := make([]interface{}, len(slice))
+	for i, v := range slice {
+		result[i] = v
+	}
+	return result
 }

@@ -133,6 +133,7 @@ func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBe
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
 	}
+
 	result, performanceStats, counts, err := s.StatsService.GetBestPerformingLoadouts(ctx, aggs, characterID, int8(count), minimumGames)
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
@@ -726,7 +727,7 @@ func (s Server) GetSnapshotAggregates(ctx context.Context, request api.GetSnapsh
 	if err != nil {
 		return nil, err
 	}
-	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, snap.CharacterID, gameModeFilter)
+	aggs, err := s.StatsService.GetAggregatesForSnapshot(ctx, snap.ID, gameModeFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -937,5 +938,17 @@ func (s Server) BackfillAllUsersCharacterIds(ctx context.Context, request api.Ba
 	return api.BackfillAllUsersCharacterIds200JSONResponse{
 		Updated: updated,
 		Failed:  failed,
+	}, nil
+}
+
+func (s Server) BackfillAggregateData(ctx context.Context, request api.BackfillAggregateDataRequestObject) (api.BackfillAggregateDataResponseObject, error) {
+	count, err := s.AggregateService.UpdateAllAggregates(ctx)
+	if err != nil {
+		return api.BackfillAggregateData200JSONResponse{}, err
+	}
+
+	return api.BackfillAggregateData200JSONResponse{
+		Updated: int32(count),
+		Failed:  0,
 	}, nil
 }
