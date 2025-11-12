@@ -95,19 +95,44 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 			}
 
 			characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
-			err = s.UserService.UpdateCharacters(ctx, u.ID, characters)
-			if err != nil {
-				log.Error().Err(err).Msg("failed to update characters")
+			if len(characters) > 0 {
+				err = s.UserService.UpdateCharacters(ctx, u.ID, characters)
+				if err != nil {
+					log.Error().Err(err).Msg("failed to update characters")
+				}
+			} else {
+				log.Warn().Str("userId", u.ID).Msg("no characters found for user")
 			}
 		}
 	}()
-	return api.GetUser200JSONResponse{
+
+	result := api.GetUser200JSONResponse{
 		DisplayName:  u.DisplayName,
 		UniqueName:   u.UniqueName,
 		Id:           u.ID,
 		MembershipId: u.PrimaryMembershipID,
 		Characters:   u.Characters,
-	}, nil
+	}
+
+	if len(result.Characters) == 0 {
+		t := int64(0)
+		for _, membership := range u.Memberships {
+			if membership.ID == u.PrimaryMembershipID {
+				t = membership.Type
+				break
+			}
+		}
+		pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to parse primary membership id")
+			return result, err
+		}
+		characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+		if len(characters) > 0 {
+			result.Characters = u.Characters
+		}
+	}
+	return result, nil
 }
 
 const (
