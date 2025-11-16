@@ -446,19 +446,25 @@ func SetAggregate(ctx context.Context, s Server, userID string, characterID stri
 }
 
 func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
-	result, err := s.SessionService.GetAll(ctx, &request.Params.XUserID, &request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status), 0, 0)
-	if err != nil {
-		return nil, err
+	offset := 0
+	if request.Params.Page > 1 {
+		offset = int((request.Params.Page - 1) * request.Params.Count)
 	}
-	return api.GetSessions200JSONResponse(result), nil
-}
 
-func (s Server) GetPublicSessions(ctx context.Context, request api.GetPublicSessionsRequestObject) (api.GetPublicSessionsResponseObject, error) {
-	result, err := s.SessionService.GetAll(ctx, nil, request.Params.CharacterID, (*api.SessionStatus)(request.Params.Status), 0, 0)
+	result, err := s.SessionService.GetAll(
+		ctx,
+		request.Params.UserID,
+		request.Params.CharacterID,
+		(*api.SessionStatus)(request.Params.Status),
+		int(request.Params.Count),
+		offset,
+	)
 	if err != nil {
+		// Return a 500 error
 		return nil, err
 	}
-	return api.GetPublicSessions200JSONResponse(result), nil
+
+	return api.GetSessions200JSONResponse(result), nil
 }
 
 func (s Server) GetPublicSession(ctx context.Context, request api.GetPublicSessionRequestObject) (api.GetPublicSessionResponseObject, error) {

@@ -862,12 +862,6 @@
       "get": {
         "parameters": [
           {
-            "$ref": "#/components/parameters/X-User-ID"
-          },
-          {
-            "$ref": "#/components/parameters/X-Membership-ID"
-          },
-          {
             "name": "count",
             "in": "query",
             "required": true,
@@ -892,7 +886,14 @@
             "name": "characterId",
             "x-go-name": "characterID",
             "in": "query",
-            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userId",
+            "x-go-name": "userID",
+            "in": "query",
             "schema": {
               "type": "string"
             }
@@ -1057,72 +1058,6 @@
                         "$ref": "#/components/schemas/CharacterSnapshot"
                       }
                     }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/public/sessions": {
-      "get": {
-        "parameters": [
-          {
-            "name": "count",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64",
-              "maximum": 30,
-              "minimum": 1
-            }
-          },
-          {
-            "name": "page",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
-            }
-          },
-          {
-            "name": "characterId",
-            "x-go-name": "characterID",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "pending",
-                "complete"
-              ],
-              "x-enum-varnames": [
-                "SessionRequestPending",
-                "SessionRequestComplete"
-              ]
-            }
-          }
-        ],
-        "operationId": "GetPublicSessions",
-        "responses": {
-          "200": {
-            "description": "List of Sessions",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Session"
                   }
                 }
               }
