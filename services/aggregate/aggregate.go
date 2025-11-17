@@ -5,6 +5,7 @@ import (
 	"errors"
 	"oneTrick/api"
 	"oneTrick/utils"
+	"sort"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -155,18 +156,40 @@ func (s *service) GetAggregatesByActivity(ctx context.Context, activityIDs []str
 }
 
 func (s *service) GetAggregates(ctx context.Context, IDs []string) ([]api.Aggregate, error) {
-	docs, err := s.DB.
-		Collection(collection).
-		Where("id", "in", IDs).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
+	if len(IDs) == 0 {
+		return []api.Aggregate{}, nil
 	}
-	results, err := utils.GetAllToStructs[api.Aggregate](docs)
-	if err != nil {
-		return nil, err
+
+	var allResults []api.Aggregate
+	batchSize := 30
+
+	// Process IDs in batches of 30
+	for i := 0; i < len(IDs); i += batchSize {
+		end := i + batchSize
+		if end > len(IDs) {
+			end = len(IDs)
+		}
+		batch := IDs[i:end]
+
+		docs, err := s.DB.
+			Collection(collection).
+			Where("id", "in", batch).
+			Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+
+		results, err := utils.GetAllToStructs[api.Aggregate](docs)
+		if err != nil {
+			return nil, err
+		}
+
+		allResults = append(allResults, results...)
 	}
-	return results, nil
+	sort.Slice(allResults, func(i, j int) bool {
+		return allResults[i].CreatedAt.Before(allResults[j].CreatedAt)
+	})
+	return allResults, nil
 }
 
 func (s *service) GetAllAggregates(ctx context.Context) ([]api.Aggregate, error) {
