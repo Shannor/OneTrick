@@ -63,15 +63,15 @@ func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID strin
 	return results, nil
 }
 
-func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID string, gameModeFilter []string) ([]api.Aggregate, error) {
+func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID string, activityFilter []string) ([]api.Aggregate, error) {
 	if characterID == "" {
 		return nil, fmt.Errorf("characterID is required")
 	}
 	q := s.DB.Collection(aggregatesCollection).
 		Where("characterIds", "array-contains", characterID)
 
-	if len(gameModeFilter) > 0 {
-		q = q.Where("activityHistory.mode", "in", gameModeFilter)
+	if len(activityFilter) > 0 {
+		q = q.Where("activityHistory.activity", "in", activityFilter)
 	}
 
 	aggDocs, err := q.Documents(ctx).GetAll()

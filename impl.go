@@ -158,7 +158,6 @@ func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBe
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
 	}
-
 	result, performanceStats, counts, err := s.StatsService.GetBestPerformingLoadouts(ctx, aggs, characterID, int8(count), minimumGames)
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
