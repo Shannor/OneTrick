@@ -33,6 +33,24 @@ type Server struct {
 	StatsService      stats.Service
 }
 
+func (s Server) MergeSnapshots(ctx context.Context, request api.MergeSnapshotsRequestObject) (api.MergeSnapshotsResponseObject, error) {
+	if request.Body == nil {
+		return nil, fmt.Errorf("request body cannot be nil")
+	}
+	if request.SnapshotID == "" {
+		return nil, fmt.Errorf("snapshotID cannot be empty")
+	}
+	if request.SnapshotID == request.Body.SourceSnapshotID {
+		return nil, fmt.Errorf("cannot merge a snapshot with itself")
+	}
+
+	_, err := s.SnapshotService.Merge(ctx, request.SnapshotID, request.Body.SourceSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	return api.MergeSnapshots200JSONResponse(true), nil
+}
+
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {
 	if request.Params.XUserID != request.UserID {
 		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
@@ -199,251 +217,6 @@ func (s Server) Search(ctx context.Context, request api.SearchRequestObject) (ap
 	}, nil
 }
 
-type ActionableMember struct {
-	CharacterID  string
-	UserID       string
-	MembershipID string
-	SessionID    string
-}
-
-func (s Server) SessionCheckIn(ctx context.Context, request api.SessionCheckInRequestObject) (api.SessionCheckInResponseObject, error) {
-	sessionID := request.Body.SessionID
-	membershipID := request.Params.XMembershipID
-	fireteam := request.Body.Fireteam
-
-	l := log.With().Str("sessionId", sessionID).Logger()
-
-	currentSession, err := s.SessionService.Get(ctx, sessionID)
-	if err != nil {
-		l.Error().Err(err).Msg("cannot get session")
-		return nil, err
-	}
-	characterID := currentSession.CharacterID
-	userID := currentSession.UserID
-
-	l = l.With().Str("userId", userID).Logger()
-
-	// Add self to fireteam
-	if len(fireteam) == 0 {
-		fireteam[membershipID] = characterID
-	}
-
-	members, err := s.UserService.GetFireteam(ctx, userID)
-	if err != nil {
-		l.Error().Err(err).Msg("failed to get fireteam")
-		return nil, err
-	}
-	// Add self to fireteam
-	if len(members) == 0 {
-		members = append(members, api.FireteamMember{
-			DisplayName:  "Self",
-			ID:           userID,
-			MembershipID: membershipID,
-		})
-	}
-
-	l = l.With().Int("fireteamSize", len(members)).Logger()
-	memberData := make([]ActionableMember, 0)
-	// Need to get current sessions for fireteam members
-	l.Info().Msg("Starting to build up membership information")
-	for _, member := range members {
-		ll := l.With().
-			Str("fireteamUserId", member.ID).
-			Str("fireteamDisplayName", member.DisplayName).
-			Logger()
-
-		charID, ok := fireteam[member.MembershipID]
-		if !ok {
-			ll.Warn().Msg("failed to find member passed in the fireteam request body")
-			continue
-		}
-		ll = ll.With().Str("characterId", charID).Logger()
-
-		active, err := s.SessionService.GetActive(ctx, member.ID, charID)
-		if err != nil {
-			ll.Warn().Err(err).Msg("no active session found for user and character")
-			continue
-		}
-
-		memberData = append(memberData, ActionableMember{
-			CharacterID:  charID,
-			UserID:       member.ID,
-			MembershipID: member.MembershipID,
-			SessionID:    active.ID,
-		})
-	}
-
-	l.Info().Msgf("Members count :%d\n", len(memberData))
-
-	l.Debug().Msg("Starting to save data for fireteam")
-	for _, member := range memberData {
-		_, err = s.SnapshotService.Save(ctx, member.UserID, member.MembershipID, member.SessionID)
-		if err != nil {
-			l.Warn().Err(err).Msg("failed to save")
-			continue
-		}
-	}
-	l.Info().Msg("Saved data for fireteam members")
-
-	membershipType, err := s.UserService.GetMembershipType(ctx, userID, membershipID)
-	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch membership type")
-		return nil, err
-	}
-
-	// Activity history should be shared
-	activityHistories, err := s.D2Service.GetAllPVPActivity(
-		ctx,
-		membershipID,
-		membershipType,
-		characterID,
-		2,
-		0,
-	)
-	if err != nil {
-		l.Error().Err(err).Msg("failed to get recent pvp activity")
-		return nil, err
-	}
-
-	IDs := make([]string, 0)
-	histories := make([]api.ActivityHistory, 0)
-	// Only choose activities that happened after starting the session
-	for _, activity := range activityHistories {
-		if activity.Period.Compare(currentSession.StartedAt) == 1 {
-			IDs = append(IDs, activity.InstanceID)
-			histories = append(histories, activity)
-		}
-	}
-	l.Info().Msgf("Activities Found: %+v", IDs)
-
-	if len(IDs) == 0 {
-		return api.SessionCheckIn200JSONResponse(false), nil
-	}
-
-	if len(IDs) > 0 {
-		last := IDs[0]
-		for _, data := range memberData {
-			err := s.SessionService.SetLastActivity(ctx, data.SessionID, last)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	existingAggs, err := s.AggregateService.GetAggregatesByActivity(ctx, IDs)
-	if err != nil {
-		l.Error().
-			Err(err).
-			Strs("activityIDs", IDs).Msg("failed to fetch aggregates by the provided IDs")
-		return nil, err
-	}
-
-	l.Info().Msgf("Length of existing Aggs: %d", len(existingAggs))
-
-	existingAggMap := make(map[string]*api.Aggregate)
-	aggIDs := make([]string, 0)
-	for _, agg := range existingAggs {
-		existingAggMap[agg.ActivityID] = &agg
-		aggIDs = append(aggIDs, agg.ID)
-	}
-
-	updatedAgg := false
-
-	for _, history := range histories {
-		agg := existingAggMap[history.InstanceID]
-
-		updateNeeded := make([]ActionableMember, 0)
-		for _, member := range memberData {
-			link := s.SnapshotService.LookupLink(agg, member.CharacterID)
-			// Already attempted to link this character to this activity so we can skip it
-			if link != nil && link.SessionID != nil {
-				l.Debug().Str("activityId", history.InstanceID).Msg("Already linked to this activity")
-				continue
-			} else if link != nil {
-				updateNeeded = append(updateNeeded, member)
-				// TODO: Figure out if we want to add this Session ID to this link
-				// Probably need to check the times to see if they're close
-			}
-
-		}
-
-		updatedAgg = len(updateNeeded) > 0
-
-		charIDs := make([]string, 0)
-		for _, data := range updateNeeded {
-			charIDs = append(charIDs, data.CharacterID)
-		}
-
-		performances, err := s.D2Service.GetPerformances(ctx, history.InstanceID, charIDs)
-		if err != nil {
-			l.Error().Err(err).Msg("failed to fetch performances")
-			return nil, err
-		}
-		for i, member := range updateNeeded {
-			performance, ok := performances[member.CharacterID]
-			if !ok {
-				l.Warn().Str("memberUserId", member.UserID).Msg("no performance found for member")
-				continue
-			}
-			a, err := SetAggregate(
-				ctx,
-				s,
-				member.UserID,
-				member.CharacterID,
-				&history,
-				history.Period,
-				performance,
-				&member.SessionID,
-			)
-			if err != nil {
-				l.Error().Err(err).Msg("failed to add data to aggregate")
-				continue
-			}
-			if i == 0 {
-				aggIDs = append(aggIDs, a.ID)
-			}
-		}
-	}
-	l.Info().Strs("aggregateIds", aggIDs).Msgf("Aggregates to add")
-
-	// TODO: This needs to change to be per members agg. A member won't be in every game since we choose two
-	for _, member := range memberData {
-		l.Info().Strs("aggIDs", aggIDs).Msg("Adding aggregate IDs to session for member")
-		err = s.SessionService.AddAggregateIDs(ctx, member.SessionID, aggIDs)
-		if err != nil {
-			l.Error().Err(err).Msg("Failed to add aggregate IDs to session")
-			return nil, err
-		}
-	}
-
-	l.Info().Msg("session check in complete")
-	return api.SessionCheckIn200JSONResponse(updatedAgg), nil
-}
-
-// SetAggregate will find the best fitting snapshot and link for a character.
-// Will enrich their data if a snapshot is found. And will upsert an aggregate with the character data.
-func SetAggregate(ctx context.Context, s Server, userID string, characterID string, activity *api.ActivityHistory, period time.Time, performance api.InstancePerformance, sessionID *string) (*api.Aggregate, error) {
-	snap, link, err := s.SnapshotService.FindBestFit(ctx, userID, characterID, period, performance.Weapons)
-	if err != nil {
-		return nil, err
-	}
-
-	enrichedPerformance, err := s.SnapshotService.EnrichInstancePerformance(snap, performance)
-	if err != nil {
-		return nil, fmt.Errorf("failed to enrich performance instance: %w", err)
-	}
-
-	if sessionID != nil {
-		link.SessionID = sessionID
-	}
-
-	agg, err := s.AggregateService.AddAggregate(ctx, characterID, *activity, *link, *enrichedPerformance)
-	if err != nil {
-		return nil, err
-	}
-	return agg, nil
-}
-
 func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestObject) (api.GetSessionsResponseObject, error) {
 	offset := 0
 	if request.Params.Page > 1 {
@@ -464,55 +237,6 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 	}
 
 	return api.GetSessions200JSONResponse(result), nil
-}
-
-func (s Server) GetPublicSession(ctx context.Context, request api.GetPublicSessionRequestObject) (api.GetPublicSessionResponseObject, error) {
-	sessionID := request.SessionId
-	l := log.With().Str("sessionID", sessionID).Logger()
-	ses, err := s.SessionService.Get(ctx, sessionID)
-	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch session")
-		return nil, err
-	}
-	return api.GetPublicSession200JSONResponse(*ses), nil
-}
-
-func (s Server) GetPublicSessionAggregates(ctx context.Context, request api.GetPublicSessionAggregatesRequestObject) (api.GetPublicSessionAggregatesResponseObject, error) {
-	l := log.With().Str("sessionID", request.SessionId).Logger()
-	ses, err := s.SessionService.Get(ctx, request.SessionId)
-	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch session")
-		return nil, err
-	}
-	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
-	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch aggregates")
-		return nil, err
-	}
-	uniqueIDS := make([]string, 0)
-	for _, a := range aggregates {
-		link, ok := a.SnapshotLinks[ses.CharacterID]
-		if !ok {
-			continue
-		}
-		if link.SnapshotID == nil {
-			continue
-		}
-		uniqueIDS = append(uniqueIDS, *link.SnapshotID)
-	}
-	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
-	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch snapshots")
-		return nil, err
-	}
-	snapshotByID := make(map[string]api.CharacterSnapshot)
-	for _, snap := range snapshots {
-		snapshotByID[snap.ID] = snap
-	}
-	return api.GetPublicSessionAggregates200JSONResponse{
-		Aggregates: aggregates,
-		Snapshots:  snapshotByID,
-	}, nil
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {

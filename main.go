@@ -76,7 +76,7 @@ func main() {
 	userService := user.NewUserService(firestore, destinyService, searchClient)
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore)
-	snapshotService := snapshot.NewService(firestore, userService, destinyService)
+	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
 	statsService := stats.NewService(firestore, snapshotService)
 	server := NewServer(
 		destinyService,

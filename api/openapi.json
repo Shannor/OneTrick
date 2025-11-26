@@ -606,6 +606,57 @@
         }
       }
     },
+    "/snapshots/{snapshotId}/merge": {
+      "post": {
+        "operationId": "MergeSnapshots",
+        "description": "Merge two snapshots into a single snapshot",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/X-User-ID"
+          },
+          {
+            "name": "snapshotId",
+            "in": "path",
+            "x-go-name": "snapshotID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The unique identifier for the snapshot."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "required": [
+                  "sourceSnapshotId"
+                ],
+                "type": "object",
+                "properties": {
+                  "sourceSnapshotId": {
+                    "type": "string",
+                    "x-go-name": "sourceSnapshotID"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Merged snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/snapshots/{snapshotId}/aggregates": {
       "get": {
         "operationId": "GetSnapshotAggregates",
@@ -1059,132 +1110,6 @@
                       }
                     }
                   }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/public/sessions/{sessionId}": {
-      "get": {
-        "operationId": "GetPublicSession",
-        "parameters": [
-          {
-            "name": "sessionId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "x-go-name": "sessionID"
-            }
-          }
-        ],
-        "description": "Get a specific session",
-        "responses": {
-          "200": {
-            "description": "Return a session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Session"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/public/sessions/{sessionId}/aggregates": {
-      "get": {
-        "operationId": "GetPublicSessionAggregates",
-        "parameters": [
-          {
-            "name": "sessionId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "x-go-name": "sessionID"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Array of aggregates",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "aggregates",
-                    "snapshots"
-                  ],
-                  "properties": {
-                    "aggregates": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Aggregate"
-                      }
-                    },
-                    "snapshots": {
-                      "type": "object",
-                      "additionalProperties": {
-                        "$ref": "#/components/schemas/CharacterSnapshot"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/actions/session-checkin": {
-      "post": {
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/X-Membership-ID"
-          }
-        ],
-        "requestBody": {
-          "description": "",
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "required": [
-                  "sessionId",
-                  "fireteam"
-                ],
-                "type": "object",
-                "properties": {
-                  "sessionId": {
-                    "type": "string",
-                    "x-go-name": "sessionID"
-                  },
-                  "fireteam": {
-                    "type": "object",
-                    "description": "fireteam member user id mapped to their chosen character id",
-                    "additionalProperties": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "SessionCheckIn",
-        "description": "Perform session update logic",
-        "responses": {
-          "200": {
-            "description": "Return the created session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "boolean"
                 }
               }
             }
@@ -1678,9 +1603,17 @@
           },
           "snapshotId": {
             "x-go-name": "snapshotID",
-            "description": "ID of the snapshot for the particular player",
+            "description": "ID of the snapshot for the user. Can be updated by the user during a merge",
             "x-oapi-codegen-extra-tags": {
               "firestore": "snapshotId"
+            },
+            "type": "string"
+          },
+          "originalSnapshotId": {
+            "x-go-name": "originalSnapshotID",
+            "description": "ID of the snapshot that was used to create this link",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "originalSnapshotId"
             },
             "type": "string"
           },

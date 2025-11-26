@@ -1,12 +1,13 @@
 package snapshot
 
 import (
+	"oneTrick/services/aggregate"
+
 	"cloud.google.com/go/firestore"
 	"github.com/rs/zerolog/log"
 
 	"context"
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/generator"
 	"oneTrick/ptr"
@@ -35,10 +36,12 @@ type Service interface {
 	// Returns the requested CharacterSnapshot or an error if the snapshot is not found or cannot be retrieved.
 	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
 
-	/**/
+	// GetByIDs retrieves multiple snapshots for a given list of snapshot IDs.
 	GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error)
 
-	FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
+	// Merge merges two character snapshots identified by snapshotID and targetSnapshotID, storing the result in a new snapshot.
+	Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID string) (api.CharacterSnapshot, error)
+
 	LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink
 	EnrichInstancePerformance(snapshot *api.CharacterSnapshot, performance api.InstancePerformance) (*api.InstancePerformance, error)
 }
@@ -49,18 +52,20 @@ const (
 )
 
 type service struct {
-	DB          *firestore.Client
-	UserService user.Service
-	D2Service   destiny.Service
+	DB               *firestore.Client
+	UserService      user.Service
+	D2Service        destiny.Service
+	aggregateService aggregate.Service
 }
 
 var _ Service = (*service)(nil)
 
-func NewService(db *firestore.Client, userService user.Service, d2Service destiny.Service) Service {
+func NewService(db *firestore.Client, userService user.Service, d2Service destiny.Service, aggregateService aggregate.Service) Service {
 	return &service{
-		DB:          db,
-		UserService: userService,
-		D2Service:   d2Service,
+		DB:               db,
+		UserService:      userService,
+		D2Service:        d2Service,
+		aggregateService: aggregateService,
 	}
 }
 
@@ -266,111 +271,6 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 	}, nil
 }
 
-func (s *service) FindBestFit(ctx context.Context, userID string, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
-
-	minTime := activityPeriod.Add(time.Duration(-12) * time.Hour)
-	// A game can last about 8 minutes over the starting time
-	maxTime := activityPeriod.Add(time.Duration(10) * time.Minute)
-	l := slog.With(
-		"activityPeriod", activityPeriod,
-		"minTime", minTime,
-		"maxTime", maxTime,
-		"userId", userID,
-		"characterId", characterID,
-	)
-	docs, err := s.DB.CollectionGroup(historyCollection).
-		Where("userId", "==", userID).
-		Where("characterId", "==", characterID).
-		Where("timestamp", ">=", minTime).
-		Where("timestamp", "<=", maxTime).
-		OrderBy("timestamp", firestore.Desc).
-		Documents(ctx).GetAll()
-	if err != nil {
-		l.Error("failed to get histories", "error", err.Error())
-		return nil, nil, err
-	}
-
-	if docs == nil || len(docs) == 0 {
-		link := api.SnapshotLink{
-			CharacterID:      characterID,
-			ConfidenceLevel:  api.NotFoundConfidenceLevel,
-			ConfidenceSource: api.SystemConfidenceSource,
-			CreatedAt:        time.Now(),
-		}
-		return nil, &link, nil
-	}
-
-	var (
-		bestFit      *History
-		bestFitScore = 0
-	)
-	histories, err := utils.GetAllToStructs[History](docs)
-	if err != nil {
-		l.Error("failed to get all histories", "error", err.Error())
-		return nil, nil, err
-	}
-
-	weaponSet := make(map[string]bool)
-	for _, weapon := range weapons {
-		if weapon.ReferenceID != nil {
-			weaponSet[strconv.FormatInt(*weapon.ReferenceID, 10)] = true
-		}
-	}
-	for _, h := range histories {
-		matches := 0
-		if weaponSet[h.Meta.KineticID] {
-			matches += 2
-		}
-		if weaponSet[h.Meta.EnergyID] {
-			matches += 2
-		}
-		if weaponSet[h.Meta.PowerID] {
-			matches++
-		}
-
-		if bestFit == nil && matches >= 1 {
-			bestFit = &h
-			bestFitScore = matches
-			continue
-		}
-		if matches > bestFitScore {
-			bestFit = &h
-			bestFitScore = matches
-		}
-	}
-
-	if bestFit == nil {
-		link := api.SnapshotLink{
-			CharacterID:      characterID,
-			ConfidenceLevel:  api.NoMatchConfidenceLevel,
-			ConfidenceSource: api.SystemConfidenceSource,
-			CreatedAt:        time.Now(),
-		}
-		return nil, &link, nil
-	}
-	level := api.LowConfidenceLevel
-	if bestFitScore >= 4 {
-		level = api.HighConfidenceLevel
-	} else if bestFitScore >= 2 {
-		level = api.MediumConfidenceLevel
-	}
-
-	link := api.SnapshotLink{
-		CharacterID:      characterID,
-		ConfidenceLevel:  level,
-		ConfidenceSource: api.SystemConfidenceSource,
-		CreatedAt:        time.Now(),
-		SnapshotID:       &bestFit.ParentID,
-	}
-
-	snap, err := s.Get(ctx, bestFit.ParentID)
-	if err != nil {
-		l.Error("failed to get snapshot", "error", err.Error())
-		return nil, nil, err
-	}
-	return snap, &link, nil
-}
-
 func (s *service) Save(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error) {
 	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID)
 	if err != nil {
@@ -384,4 +284,76 @@ func (s *service) Save(ctx context.Context, userID, membershipID, characterID st
 		return nil, fmt.Errorf("failed to create snapshot: %w", err)
 	}
 	return data, nil
+}
+
+func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID string) (api.CharacterSnapshot, error) {
+	resultSnapshot, err := s.Get(ctx, targetSnapshotID)
+	if err != nil {
+		return api.CharacterSnapshot{}, err
+	}
+	sourceSnapshot, err := s.Get(ctx, sourceSnapshotID)
+	if err != nil {
+		return api.CharacterSnapshot{}, err
+	}
+
+	if resultSnapshot == nil || sourceSnapshot == nil {
+		return api.CharacterSnapshot{}, fmt.Errorf("snapshot not found")
+	}
+	if resultSnapshot.CharacterID != sourceSnapshot.CharacterID {
+		return api.CharacterSnapshot{}, fmt.Errorf("snapshots must belong to the same character")
+	}
+	if resultSnapshot.UserID != sourceSnapshot.UserID {
+		return api.CharacterSnapshot{}, fmt.Errorf("snapshots must belong to the same user")
+	}
+	if !snapshotCanMerge(resultSnapshot, sourceSnapshot) {
+		return api.CharacterSnapshot{}, fmt.Errorf("snapshots cannot be merged")
+	}
+
+	aggs, err := s.aggregateService.BySnapshotID(ctx, sourceSnapshotID, nil)
+	if err != nil {
+		return api.CharacterSnapshot{}, err
+	}
+	for _, agg := range aggs {
+		log.Info().Msgf("Agg ID: %s\n", agg.ID)
+		err := s.aggregateService.Update(ctx, agg.ID, func(data map[string]any) error {
+			// Atomically "replace" an element in an array by modifying the slice directly
+			// within the update transaction.
+			if snapshotIDs, ok := data["snapshotIds"].([]interface{}); ok {
+				newSnapshotIDs := make([]interface{}, 0, len(snapshotIDs))
+				for _, id := range snapshotIDs {
+					if id != sourceSnapshotID {
+						newSnapshotIDs = append(newSnapshotIDs, id)
+					}
+				}
+				newSnapshotIDs = append(newSnapshotIDs, targetSnapshotID)
+				data["snapshotIds"] = newSnapshotIDs
+			}
+			snapshotLink := agg.SnapshotLinks[resultSnapshot.CharacterID]
+			snapshotLink.SnapshotID = &targetSnapshotID
+			snapshotLink.ConfidenceSource = api.UserConfidenceSource
+			if snapshotLink.OriginalSnapshotID == nil {
+				snapshotLink.OriginalSnapshotID = &sourceSnapshotID
+			}
+			data["snapshotLinks"].(map[string]any)[resultSnapshot.CharacterID] = snapshotLink
+			return nil
+		}, true)
+		if err != nil {
+			return api.CharacterSnapshot{}, err
+		}
+	}
+
+	return api.CharacterSnapshot{}, nil
+}
+
+// snapshotCanMerge will grow to cover a more complex answer on if a snapshot can be merged.
+func snapshotCanMerge(a, b *api.CharacterSnapshot) bool {
+	kinetic := strconv.Itoa(destiny.Kinetic)
+	energy := strconv.Itoa(destiny.Energy)
+	if a.Loadout[kinetic].InstanceID != b.Loadout[kinetic].InstanceID {
+		return false
+	}
+	if a.Loadout[energy].InstanceID != b.Loadout[energy].InstanceID {
+		return false
+	}
+	return true
 }

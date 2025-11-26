@@ -3,10 +3,10 @@ package aggregate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"oneTrick/api"
 	"oneTrick/utils"
 	"sort"
-	"time"
 
 	"cloud.google.com/go/firestore"
 	"github.com/rs/zerolog/log"
@@ -20,21 +20,20 @@ type Service interface {
 	// GetAggregate retrieves an existing aggregate for a given activity ID.
 	GetAggregate(ctx context.Context, activityID string) (*api.Aggregate, error)
 
-	// AddAggregate creates or updates an aggregate for the specified parameters.
-	// If the aggregate already exists, it performs a partial update with the new data.
-	// Takes context, user ID, snapshot ID, activity ID, character ID, confidence level, and confidence source as input.
-	// Returns the updated or newly created Aggregate or an error if the operation fails.
-	AddAggregate(ctx context.Context, characterID string, history api.ActivityHistory, snapshotLink api.SnapshotLink, performance api.InstancePerformance) (*api.Aggregate, error)
-
 	// GetAggregates retrieves a list of aggregates for the given session IDs.
 	// Limited to max of 30 documents at once
 	GetAggregates(ctx context.Context, IDs []string) ([]api.Aggregate, error)
 
+	BySnapshotID(ctx context.Context, snapshotID string, gameModeFilter []string) ([]api.Aggregate, error)
+
 	UpdateAllAggregates(ctx context.Context) (int, error)
 
 	// GetAggregatesByActivity retrieves a list of aggregates for the given activity IDs.
-	// Limited to max of 30 documents at once
+	// Limited to a max of 30 documents at once
 	GetAggregatesByActivity(ctx context.Context, activityIDs []string) ([]api.Aggregate, error)
+
+	// Update allows for updating an aggregate document's data.
+	Update(ctx context.Context, aggregateID string, updateFn func(data map[string]interface{}) error, shouldMerge bool) error
 }
 
 const (
@@ -53,67 +52,56 @@ func NewService(db *firestore.Client) Service {
 	}
 }
 
-func (s *service) AddAggregate(ctx context.Context, characterID string, history api.ActivityHistory, snapshotLink api.SnapshotLink, performance api.InstancePerformance) (*api.Aggregate, error) {
-	now := time.Now()
-	aggregate := api.Aggregate{
-		ActivityID:      history.InstanceID,
-		ActivityDetails: history,
-		SnapshotLinks: map[string]api.SnapshotLink{
-			characterID: snapshotLink,
-		},
-		Performance: map[string]api.InstancePerformance{
-			characterID: performance,
-		},
-		CreatedAt: now,
+func (s *service) Update(ctx context.Context, aggregateID string, updateFn func(data map[string]any) error, shouldMerge bool) error {
+	docRef := s.DB.Collection(collection).Doc(aggregateID)
+	doc, err := docRef.Get(ctx)
+	if err != nil {
+		return err
 	}
 
-	iter := s.DB.Collection(collection).
-		Where("activityId", "==", history.InstanceID).
-		Limit(1).
-		Documents(ctx)
-	var (
-		existingAggregate *api.Aggregate
-	)
-	for {
-		doc, err := iter.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		err = doc.DataTo(&existingAggregate)
-		if err != nil {
-			return nil, err
-		}
+	data := doc.Data()
+	if err := updateFn(data); err != nil {
+		return err
 	}
-	if existingAggregate != nil {
-		// Partial update, adding the new data
-		_, err := s.DB.Collection(collection).Doc(existingAggregate.ID).Set(ctx, map[string]any{
-			"snapshotLinks": map[string]any{
-				characterID: snapshotLink,
-			},
-			"performance": map[string]any{
-				characterID: performance,
-			},
-		}, firestore.MergeAll)
-		if err != nil {
-			return nil, err
-		}
-		existingAggregate.SnapshotLinks[characterID] = snapshotLink
-		existingAggregate.Performance[characterID] = performance
-		return existingAggregate, nil
-	} else {
-		// Create new Doc and return object
-		ref := s.DB.Collection(collection).NewDoc()
-		aggregate.ID = ref.ID
-		_, err := ref.Set(ctx, aggregate)
-		if err != nil {
-			return nil, err
-		}
 
-		return &aggregate, nil
+	if shouldMerge {
+		_, err = docRef.Set(ctx, data, firestore.MergeAll)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to merge aggregate")
+			return err
+		}
+		return nil
 	}
+	_, err = docRef.Set(ctx, data)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to merge aggregate")
+		return err
+	}
+	return err
+}
+
+func (s *service) BySnapshotID(ctx context.Context, snapshotID string, gameModeFilter []string) ([]api.Aggregate, error) {
+	if snapshotID == "" {
+		return nil, fmt.Errorf("snapshotID is required")
+	}
+
+	q := s.DB.Collection(collection).
+		Where("snapshotIds", "array-contains", snapshotID)
+
+	if len(gameModeFilter) > 0 {
+		q = q.Where("activityHistory.mode", "in", gameModeFilter)
+	}
+
+	docs, err := q.Documents(ctx).GetAll()
+
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[api.Aggregate](docs)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 func (s *service) GetAggregate(ctx context.Context, activityID string) (*api.Aggregate, error) {
