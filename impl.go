@@ -35,18 +35,18 @@ type Server struct {
 
 func (s Server) MergeSnapshots(ctx context.Context, request api.MergeSnapshotsRequestObject) (api.MergeSnapshotsResponseObject, error) {
 	if request.Body == nil {
-		return nil, fmt.Errorf("request body cannot be nil")
+		return api.MergeSnapshots500JSONResponse{Message: "body cannot be empty"}, nil
 	}
 	if request.SnapshotID == "" {
-		return nil, fmt.Errorf("snapshotID cannot be empty")
+		return api.MergeSnapshots500JSONResponse{Message: "snapshotID cannot be empty"}, nil
 	}
 	if request.SnapshotID == request.Body.SourceSnapshotID {
-		return nil, fmt.Errorf("cannot merge a snapshot with itself")
+		return api.MergeSnapshots500JSONResponse{Message: "cannot merge snapshot with itself"}, nil
 	}
 
 	_, err := s.SnapshotService.Merge(ctx, request.SnapshotID, request.Body.SourceSnapshotID)
 	if err != nil {
-		return nil, err
+		return api.MergeSnapshots500JSONResponse{Message: err.Error()}, nil
 	}
 	return api.MergeSnapshots200JSONResponse(true), nil
 }

@@ -653,6 +653,24 @@
                 }
               }
             }
+          },
+          "500":{
+            "description": "Error merging snapshots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "message"
+                    ],
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
