@@ -61,6 +61,37 @@
         }
       }
     },
+    "/admin/backfill-snapshot-base-info": {
+      "post": {
+        "operationId": "BackfillSnapshotInfo",
+        "responses": {
+          "200": {
+            "description": "Summary of backfilled users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "updated",
+                    "failed"
+                  ],
+                  "properties": {
+                    "updated": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "failed": {
+                      "type": "integer",
+                      "format": "int32"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/backfill-aggregate-data": {
       "post": {
         "operationId": "BackfillAggregateData",
@@ -2164,7 +2195,11 @@
           "name",
           "itemHash",
           "instanceId",
-          "bucketHash"
+          "bucketHash",
+          "itemTypeAndTierDisplayName",
+          "itemTypeDisplayName",
+          "tierTypeName",
+          "tierType"
         ],
         "properties": {
           "name": {
@@ -2197,6 +2232,31 @@
             "format": "int64",
             "x-oapi-codegen-extra-tags": {
               "firestore": "bucketHash"
+            }
+          },
+          "itemTypeAndTierDisplayName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "itemTypeAndTierDisplayName"
+            }
+          },
+          "itemTypeDisplayName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "itemTypeDisplayName"
+            }
+          },
+          "tierTypeName": {
+            "type": "string",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "tierTypeName"
+            }
+          },
+          "tierType": {
+            "type": "integer",
+            "format": "int32",
+            "x-oapi-codegen-extra-tags": {
+              "firestore": "tierType"
             }
           },
           "damage": {

@@ -36,6 +36,8 @@ type Service interface {
 	// Returns the requested CharacterSnapshot or an error if the snapshot is not found or cannot be retrieved.
 	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
 
+	GetAll(ctx context.Context) ([]api.CharacterSnapshot, error)
+
 	// GetByIDs retrieves multiple snapshots for a given list of snapshot IDs.
 	GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error)
 
@@ -44,6 +46,9 @@ type Service interface {
 
 	LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink
 	EnrichInstancePerformance(snapshot *api.CharacterSnapshot, performance api.InstancePerformance) (*api.InstancePerformance, error)
+
+	// Update allows for updating a snapshot document's data.
+	Update(ctx context.Context, snapshotID string, updateFn func(data map[string]any) error) error
 }
 
 const (
@@ -177,6 +182,18 @@ func (s *service) Get(ctx context.Context, snapshotID string) (*api.CharacterSna
 	return result, nil
 }
 
+func (s *service) GetAll(ctx context.Context) ([]api.CharacterSnapshot, error) {
+	data, err := s.DB.Collection(collection).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[api.CharacterSnapshot](data)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error) {
 	data, err := s.DB.Collection(collection).Where("id", "in", snapshotIDs).Documents(ctx).GetAll()
 	if err != nil {
@@ -188,6 +205,23 @@ func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.Cha
 	}
 	return results, nil
 }
+
+func (s *service) Update(ctx context.Context, snapshotID string, updateFn func(data map[string]any) error) error {
+	docRef := s.DB.Collection(collection).Doc(snapshotID)
+	doc, err := docRef.Get(ctx)
+	if err != nil {
+		return err
+	}
+
+	data := doc.Data()
+	if err := updateFn(data); err != nil {
+		return err
+	}
+
+	_, err = docRef.Set(ctx, data)
+	return err
+}
+
 func (s *service) LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink {
 	if agg == nil {
 		return nil

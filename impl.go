@@ -33,6 +33,48 @@ type Server struct {
 	StatsService      stats.Service
 }
 
+func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSnapshotInfoRequestObject) (api.BackfillSnapshotInfoResponseObject, error) {
+	snapshots, err := s.SnapshotService.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	updated := 0
+	failed := 0
+	for _, snap := range snapshots {
+		if snap.Loadout == nil {
+			continue
+		}
+		for key, item := range snap.Loadout { // item is a copy of the struct in the map
+			d2Item, err := s.D2ManifestService.GetItem(ctx, item.ItemHash)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to get item from manifest")
+				failed++
+				continue
+			}
+			item.ItemProperties.BaseInfo.ItemTypeAndTierDisplayName = d2Item.ItemTypeAndTierDisplayName
+			item.ItemProperties.BaseInfo.ItemTypeDisplayName = d2Item.ItemTypeDisplayName
+			item.ItemProperties.BaseInfo.TierType = int32(d2Item.Inventory.TierType)
+			item.ItemProperties.BaseInfo.TierTypeName = d2Item.Inventory.TierTypeName
+			snap.Loadout[key] = item
+		}
+		err := s.SnapshotService.Update(ctx, snap.ID, func(data map[string]any) error {
+			data["loadout"] = snap.Loadout
+			return nil
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to update snapshot")
+			failed++
+		}
+		updated++
+	}
+
+	return api.BackfillSnapshotInfo200JSONResponse{
+		Updated: int32(updated),
+		Failed:  int32(failed),
+	}, nil
+}
+
 func (s Server) MergeSnapshots(ctx context.Context, request api.MergeSnapshotsRequestObject) (api.MergeSnapshotsResponseObject, error) {
 	if request.Body == nil {
 		return api.MergeSnapshots500JSONResponse{Message: "body cannot be empty"}, nil
