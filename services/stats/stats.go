@@ -156,6 +156,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		Kills   int
 		Deaths  int
 		Assists int
+		Wins    int
 	}
 	stats := make(map[string]stat)
 	counts := make(map[string]int)
@@ -173,11 +174,13 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		s.Kills += int(*performance.PlayerStats.Kills.Value)
 		s.Deaths += int(*performance.PlayerStats.Deaths.Value)
 		s.Assists += int(*performance.PlayerStats.Assists.Value)
+		// Zero is a win in D2
+		if *performance.PlayerStats.Standing.Value == 0 {
+			s.Wins++
+		}
 		stats[*link.SnapshotID] = s
 		counts[*link.SnapshotID]++
 	}
-
-	// TODO: In the future we would want to omit any loadouts that have not been used more than X times,
 
 	// 3) Sort snapshot IDs by K/D and KD/A
 	type pair struct {
@@ -221,6 +224,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 
 	for idx := 0; idx < l; idx++ {
 		ids = append(ids, pairs[idx].id)
+		count := pairs[idx].counts
 		finalCount[pairs[idx].id] = pairs[idx].counts
 		order[pairs[idx].id] = int(idx + 1)
 		s := pairs[idx].stats
@@ -244,6 +248,10 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 			Kda: ptr.Of(api.StatsValuePair{
 				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(s.Kills, s.Deaths, s.Assists))),
 				Value:        ptr.Of(getKDA(s.Kills, s.Deaths, s.Assists)),
+			}),
+			Standing: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(s.Wins, count))),
+				Value:        ptr.Of(getKD(s.Wins, count)),
 			}),
 		}
 	}
