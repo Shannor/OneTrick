@@ -95,6 +95,9 @@ func (s service) GetActive(ctx context.Context, userID string, characterID strin
 	if err != nil {
 		return nil, err
 	}
+	if result.AggregateIDs == nil {
+		result.AggregateIDs = make([]string, 0)
+	}
 	return result, nil
 }
 
@@ -107,6 +110,9 @@ func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
 	err = doc.DataTo(&result)
 	if err != nil {
 		return nil, err
+	}
+	if result.AggregateIDs == nil {
+		result.AggregateIDs = make([]string, 0)
 	}
 	return result, nil
 }
@@ -151,6 +157,11 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	slices.SortFunc(result, func(a, b api.Session) int {
 		return b.StartedAt.Compare(a.StartedAt)
 	})
+	for i, session := range result {
+		if session.AggregateIDs == nil {
+			result[i].AggregateIDs = make([]string, 0)
+		}
+	}
 	return result, nil
 }
 
