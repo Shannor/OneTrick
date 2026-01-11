@@ -634,13 +634,15 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 
 	l := log.With().
 		Str("activityID", activityID).Logger()
+	log.Debug().Msg("Fetching activity data")
 	activityDetails, teams, err := s.D2Service.GetActivity(ctx, activityID)
 	if err != nil {
 		l.Error().Err(err).Msg("Failed to fetch weapon data for activity")
-		return nil, fmt.Errorf("failed to fetch weapon data for activity: %w", err)
+		return api.GetActivity500JSONResponse{Message: "failed to fetch weapon data for activity"}, nil
 	}
 	if activityDetails == nil {
-		return nil, fmt.Errorf("no activity details found for activity ID: %s", activityID)
+		l.Error().Msg("no activity data")
+		return api.GetActivity500JSONResponse{Message: "no activity data"}, nil
 	}
 
 	// TODO: Come to fix this when no aggregate has been made for an activity
@@ -650,7 +652,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 			l.Debug().Msg("No aggregation found for activity")
 		} else {
 			l.Error().Err(err).Msg("unexpected error fetching aggregation")
-			return nil, err
+			return api.GetActivity500JSONResponse{Message: err.Error()}, nil
 		}
 	}
 
@@ -658,17 +660,30 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	for _, entry := range *activityDetails.Entries {
 		entries = append(entries, structs.Map(entry))
 	}
-	var IDs []string
+
+	var snapshotIDS []string
 	for _, link := range agg.SnapshotLinks {
 		if link.SnapshotID == nil {
 			continue
 		}
-		IDs = append(IDs, *link.SnapshotID)
+		snapshotIDS = append(snapshotIDS, *link.SnapshotID)
 	}
+
+	if len(snapshotIDS) == 0 {
+		// TODO: Technically, could still grab the users but not snapshots.
+		return api.GetActivity200JSONResponse{
+			Activity:        agg.ActivityDetails,
+			Teams:           teams,
+			Aggregate:       agg,
+			PostGameEntries: &entries,
+		}, nil
+	}
+
 	snapshots := make(map[string]api.CharacterSnapshot)
-	snaps, err := s.SnapshotService.GetByIDs(ctx, IDs)
+	snaps, err := s.SnapshotService.GetByIDs(ctx, snapshotIDS)
 	if err != nil {
-		return nil, err
+		l.Error().Err(err).Msg("failed to fetch snapshots")
+		return api.GetActivity500JSONResponse{Message: err.Error()}, nil
 	}
 	for _, snap := range snaps {
 		snapshots[snap.CharacterID] = snap
