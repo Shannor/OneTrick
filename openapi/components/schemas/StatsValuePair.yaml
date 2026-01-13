@@ -1,0 +1,15 @@
+type: object
+x-oapi-codegen-extra-tags:
+  firestore: statsValuePair
+properties:
+  value:
+    type: number
+    description: Raw value of the statistic
+    format: double
+    x-oapi-codegen-extra-tags:
+      firestore: value
+  displayValue:
+    type: string
+    description: Localized formatted version of the value.
+    x-oapi-codegen-extra-tags:
+      firestore: displayValue

@@ -1,0 +1,36 @@
+put:
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - $ref: ../components/parameters/X-Membership-ID.yaml
+    - name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        x-go-name: sessionID
+  requestBody:
+    description: Provide the character to complete the session for
+    required: true
+    content:
+      application/json:
+        schema:
+          required:
+            - characterId
+          type: object
+          properties:
+            characterId:
+              type: string
+              x-go-name: characterID
+            name:
+              type: string
+            completedAt:
+              type: string
+  operationId: CompleteSession
+  description: Complete a session
+  responses:
+    '200':
+      description: Return the completed session
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Session.yaml

@@ -1,0 +1,23 @@
+x-oapi-codegen-extra-tags:
+  firestore: damageInfo
+type: object
+required:
+  - damageType
+  - damageIcon
+  - transparentIcon
+  - color
+properties:
+  damageType:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: damageType
+  damageIcon:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: damageIcon
+  transparentIcon:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: transparentIcon
+  color:
+    $ref: ./Color.yaml

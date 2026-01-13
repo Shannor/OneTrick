@@ -1,0 +1,85 @@
+x-oapi-codegen-extra-tags:
+  firestore: session
+type: object
+required:
+  - id
+  - startedAt
+  - userId
+  - characterId
+  - aggregateIds
+properties:
+  id:
+    type: string
+    x-go-name: ID
+    x-oapi-codegen-extra-tags:
+      firestore: id
+  startedAt:
+    type: string
+    format: date-time
+    x-oapi-codegen-extra-tags:
+      firestore: startedAt
+  completedAt:
+    type: string
+    format: date-time
+    x-oapi-codegen-extra-tags:
+      firestore: completedAt
+  userId:
+    type: string
+    x-go-name: userID
+    x-oapi-codegen-extra-tags:
+      firestore: userId
+  characterId:
+    type: string
+    x-go-name: characterID
+    x-oapi-codegen-extra-tags:
+      firestore: characterId
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  description:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: description
+  startedBy:
+    type: object
+    allOf:
+      - $ref: ./AuditField.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: startedBy
+  completedBy:
+    type: object
+    allOf:
+      - $ref: ./AuditField.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: completedBy
+  status:
+    type: string
+    enum:
+      - pending
+      - complete
+    x-enum-varnames:
+      - SessionPending
+      - SessionComplete
+    x-oapi-codegen-extra-tags:
+      firestore: status
+  aggregateIds:
+    type: array
+    x-go-name: aggregateIDs
+    x-oapi-codegen-extra-tags:
+      firestore: aggregateIds
+    description: List of aggregates linked to this session
+    items:
+      type: string
+  lastSeenActivityId:
+    type: string
+    x-go-name: lastSeenActivityID
+    writeOnly: true
+    x-oapi-codegen-extra-tags:
+      firestore: lastSeenActivityId
+  lastSeenTimestamp:
+    type: string
+    format: date-time
+    writeOnly: true
+    x-oapi-codegen-extra-tags:
+      firestore: lastSeenTimestamp

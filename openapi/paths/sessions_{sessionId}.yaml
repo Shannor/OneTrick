@@ -1,0 +1,50 @@
+get:
+  parameters:
+    - name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        x-go-name: sessionID
+  operationId: GetSession
+  description: Get a specific session
+  responses:
+    '200':
+      description: Return a session
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Session.yaml
+put:
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - $ref: ../components/parameters/X-Membership-ID.yaml
+    - name: sessionId
+      in: path
+      required: true
+      x-go-name: sessionID
+      schema:
+        type: string
+  requestBody:
+    description: Provide the data to update for the session
+    required: true
+    content:
+      application/json:
+        schema:
+          required:
+            - name
+          type: object
+          properties:
+            name:
+              type: string
+            description:
+              type: string
+  operationId: UpdateSession
+  description: Update a session
+  responses:
+    '200':
+      description: Return the session
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Session.yaml

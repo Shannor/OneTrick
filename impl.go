@@ -300,10 +300,7 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 	return api.StartSession201JSONResponse(*result), nil
 }
 
-func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {
-	if request.Body.Name != nil {
-		// Migrate name
-	}
+func (s Server) CompleteSession(ctx context.Context, request api.CompleteSessionRequestObject) (api.CompleteSessionResponseObject, error) {
 	if request.Body.CompletedAt != nil {
 		err := s.SessionService.Complete(ctx, request.SessionId)
 		if err != nil {
@@ -315,7 +312,25 @@ func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequ
 	if err != nil {
 		return nil, err
 	}
-	return api.UpdateSession201JSONResponse(*ses), nil
+	return api.CompleteSession200JSONResponse(*ses), nil
+}
+
+func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {
+	description := ""
+	if request.Body.Description != nil {
+		description = *request.Body.Description
+	}
+
+	err := s.SessionService.Update(ctx, request.SessionID, request.Body.Name, description)
+	if err != nil {
+		return nil, err
+	}
+
+	ses, err := s.SessionService.Get(ctx, request.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return api.UpdateSession200JSONResponse(*ses), nil
 }
 
 func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSessionAggregatesRequestObject) (api.GetSessionAggregatesResponseObject, error) {

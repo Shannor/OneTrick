@@ -1,0 +1,5 @@
+name: X-Membership-ID
+schema:
+  type: string
+in: header
+required: true

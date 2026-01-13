@@ -1,0 +1,15 @@
+type: object
+required:
+  - displayName
+  - membershipId
+  - membershipType
+properties:
+  displayName:
+    type: string
+  membershipId:
+    x-go-name: membershipID
+    type: string
+  membershipType:
+    $ref: ./SourceSystem.yaml
+  iconPath:
+    type: string

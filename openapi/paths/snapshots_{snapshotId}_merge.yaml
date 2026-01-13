@@ -1,0 +1,41 @@
+post:
+  operationId: MergeSnapshots
+  description: Merge two snapshots into a single snapshot
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - name: snapshotId
+      in: path
+      x-go-name: snapshotID
+      required: true
+      schema:
+        type: string
+      description: The unique identifier for the snapshot.
+  requestBody:
+    content:
+      application/json:
+        schema:
+          required:
+            - sourceSnapshotId
+          type: object
+          properties:
+            sourceSnapshotId:
+              type: string
+              x-go-name: sourceSnapshotID
+  responses:
+    '200':
+      description: Merged snapshot
+      content:
+        application/json:
+          schema:
+            type: boolean
+    '500':
+      description: Error merging snapshots
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string

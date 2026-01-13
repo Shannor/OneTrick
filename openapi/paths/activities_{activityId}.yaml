@@ -1,0 +1,66 @@
+get:
+  operationId: GetActivity
+  parameters:
+    - name: characterId
+      in: query
+      x-go-name: characterID
+      schema:
+        type: string
+    - name: activityId
+      in: path
+      required: true
+      x-go-name: activityID
+      schema:
+        type: string
+      description: The unique identifier for the activity.
+  responses:
+    '200':
+      description: Array of used guns during an activity
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - activity
+              - teams
+              - snapshots
+              - users
+            properties:
+              activity:
+                $ref: ../components/schemas/ActivityHistory.yaml
+              teams:
+                type: array
+                items:
+                  $ref: ../components/schemas/Team.yaml
+              aggregate:
+                $ref: ../components/schemas/Aggregate.yaml
+              snapshots:
+                type: object
+                additionalProperties:
+                  $ref: ../components/schemas/CharacterSnapshot.yaml
+              postGameEntries:
+                type: array
+                items:
+                  type: object
+              users:
+                type: object
+                additionalProperties:
+                  $ref: ../components/schemas/User.yaml
+    '400':
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '404':
+      description: Activity not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '500':
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

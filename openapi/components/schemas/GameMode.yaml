@@ -1,0 +1,13 @@
+type: string
+enum:
+  - allGameModes
+  - quickplay
+  - competitive
+  - trials
+  - ironBanner
+x-enum-varnames:
+  - GameModeAll
+  - GameModeQuickPlay
+  - GameModeCompetitive
+  - GameModeTrials
+  - GameModeIronBanner

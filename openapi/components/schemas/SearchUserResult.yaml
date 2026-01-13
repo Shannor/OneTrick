@@ -1,0 +1,27 @@
+x-oapi-codegen-extra-tags:
+  firestore: searchUserResult
+required:
+  - displayName
+  - primaryMembershipId
+  - uniqueName
+  - objectId
+  - alternateNames
+properties:
+  displayName:
+    type: string
+  bungieId:
+    type: string
+    x-go-name: bungieID
+  primaryMembershipId:
+    type: string
+    x-go-name: primaryMembershipID
+  uniqueName:
+    type: string
+    x-go-name: uniqueName
+  objectId:
+    type: string
+    x-go-name: objectID
+  alternateNames:
+    type: array
+    items:
+      type: string

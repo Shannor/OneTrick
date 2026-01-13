@@ -1,0 +1,28 @@
+get:
+  operationId: GetSnapshotAggregates
+  description: Returns a collection of aggregate metrics for a snapshot
+  parameters:
+    - name: snapshotId
+      in: path
+      x-go-name: snapshotID
+      required: true
+      schema:
+        type: string
+      description: The unique identifier for the snapshot.
+    - name: gameMode
+      in: query
+      x-go-name: gameMode
+      schema:
+        $ref: ../components/schemas/GameMode.yaml
+      description: The game mode for the snapshot metrics
+  responses:
+    '200':
+      description: Aggregates for a snapshot
+      content:
+        application/json:
+          schema:
+            required:
+              - aggregates
+            type: array
+            items:
+              $ref: ../components/schemas/Aggregate.yaml

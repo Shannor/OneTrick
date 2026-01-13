@@ -1,0 +1,51 @@
+type: object
+x-go-name: ItemProperties
+x-oapi-codegen-extra-tags:
+  firestore: itemProperties
+required:
+  - perks
+  - stats
+  - baseInfo
+properties:
+  characterId:
+    type: string
+    description: >-
+      If the item is on a character, this will return the ID of the character
+      that is holding the item.
+    nullable: true
+    x-oapi-codegen-extra-tags:
+      firestore: characterId
+  baseInfo:
+    $ref: ./BaseItemInfo.yaml
+  perks:
+    type: array
+    items:
+      $ref: ./Perk.yaml
+    description: >-
+      Information specifically about the perks currently active on the item.
+      COMPONENT TYPE: ItemPerks
+    x-oapi-codegen-extra-tags:
+      firestore: perks
+  stats:
+    type: object
+    allOf:
+      - $ref: ./Stats.yaml
+    description: >-
+      Information about the computed stats of the item: power, defense, etc...
+      COMPONENT TYPE: ItemStats
+    x-oapi-codegen-extra-tags:
+      firestore: stats
+  sockets:
+    type: array
+    x-oapi-codegen-extra-tags:
+      firestore: sockets
+    items:
+      $ref: ./Socket.yaml
+    description: >-
+      Information about the sockets of the item: which are currently active,
+      what potential sockets you could have and the stats/abilities/perks you
+      can gain from them. COMPONENT TYPE: ItemSockets
+description: >-
+  The response object for retrieving an individual instanced item. None of these
+  components are relevant for an item that doesn't have an "itemInstanceId": for
+  those, get your information from the DestinyInventoryDefinition.

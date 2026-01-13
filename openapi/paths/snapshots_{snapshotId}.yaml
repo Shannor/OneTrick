@@ -1,0 +1,18 @@
+get:
+  operationId: GetSnapshot
+  description: Returns a snapshot in the system for a character
+  parameters:
+    - name: snapshotId
+      in: path
+      x-go-name: snapshotID
+      required: true
+      schema:
+        type: string
+      description: The unique identifier for the snapshot.
+  responses:
+    '200':
+      description: Specific character snapshot
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CharacterSnapshot.yaml

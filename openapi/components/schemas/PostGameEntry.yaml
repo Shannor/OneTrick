@@ -1,0 +1,14 @@
+type: object
+x-oapi-codegen-extra-tags:
+  firestore: postGameEntry
+properties:
+  characterId:
+    type: string
+    x-go-name: characterID
+    x-oapi-codegen-extra-tags:
+      firestore: characterId
+  standing:
+    type: integer
+    format: int32
+    x-oapi-codegen-extra-tags:
+      firestore: standing

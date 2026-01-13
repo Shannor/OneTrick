@@ -1,0 +1,8 @@
+type: object
+required:
+  - activity
+properties:
+  activity:
+    $ref: ./ActivityHistory.yaml
+  aggregate:
+    $ref: ./Aggregate.yaml

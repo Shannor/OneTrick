@@ -1,0 +1,20 @@
+type: object
+required:
+  - id
+  - displayName
+  - uniqueName
+  - membershipId
+  - characters
+properties:
+  id:
+    type: string
+  membershipId:
+    type: string
+  displayName:
+    type: string
+  uniqueName:
+    type: string
+  characters:
+    type: array
+    items:
+      $ref: ./Character.yaml

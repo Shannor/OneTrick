@@ -1,0 +1,26 @@
+x-oapi-codegen-extra-tags:
+  firestore: perks
+type: object
+required:
+  - name
+  - hash
+properties:
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  description:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: description
+  hash:
+    type: integer
+    description: The hash ID of the perk
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: hash
+  iconPath:
+    type: string
+    description: link to icon
+    x-oapi-codegen-extra-tags:
+      firestore: iconPath

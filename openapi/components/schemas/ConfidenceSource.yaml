@@ -1,0 +1,9 @@
+type: string
+enum:
+  - system
+  - user
+x-oapi-codegen-extra-tags:
+  firestore: confidenceSource
+x-enum-varnames:
+  - SystemConfidenceSource
+  - UserConfidenceSource

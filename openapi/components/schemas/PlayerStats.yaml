@@ -1,0 +1,71 @@
+x-oapi-codegen-extra-tags:
+  firestore: playerStats
+type: object
+description: All Player Stats from a match that we currently care about
+properties:
+  kills:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Number of kills done in the match
+    x-oapi-codegen-extra-tags:
+      firestore: kills
+  assists:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Number of assists done in the match
+    x-oapi-codegen-extra-tags:
+      firestore: assists
+  deaths:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Number of deaths done in the match
+    x-oapi-codegen-extra-tags:
+      firestore: deaths
+  kd:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: ratio of kill / deaths in the match
+    x-oapi-codegen-extra-tags:
+      firestore: kd
+  kda:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: ratio of kills + assists/ deaths in the match
+    x-oapi-codegen-extra-tags:
+      firestore: kda
+  standing:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Win or lose in the match
+    x-oapi-codegen-extra-tags:
+      firestore: standing
+  team:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Id for the team the player was on this match
+    x-oapi-codegen-extra-tags:
+      firestore: team
+  fireTeamId:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: >-
+      ID for the fireteam player was on. If the same as another player then they
+      were together
+    x-oapi-codegen-extra-tags:
+      firestore: fireTeamId
+    x-go-name: fireTeamID
+  timePlayed:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Time in seconds the player was in the match
+    x-oapi-codegen-extra-tags:
+      firestore: timePlayed

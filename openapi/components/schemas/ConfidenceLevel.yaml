@@ -1,0 +1,15 @@
+type: string
+enum:
+  - notFound
+  - noMatch
+  - low
+  - medium
+  - high
+x-enum-varnames:
+  - NotFoundConfidenceLevel
+  - NoMatchConfidenceLevel
+  - LowConfidenceLevel
+  - MediumConfidenceLevel
+  - HighConfidenceLevel
+x-oapi-codegen-extra-tags:
+  firestore: confidenceLevel

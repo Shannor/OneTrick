@@ -1,0 +1,14 @@
+type: object
+required:
+  - id
+  - username
+properties:
+  id:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: id
+    x-go-name: ID
+  username:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: username

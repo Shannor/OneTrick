@@ -1,0 +1,7 @@
+x-oapi-codegen-extra-tags:
+  firestore: stats
+type: object
+additionalProperties:
+  $ref: ./GunStat.yaml
+x-dictionary-key:
+  type: string

@@ -1,0 +1,43 @@
+x-oapi-codegen-extra-tags:
+  firestore: socket
+type: object
+required:
+  - plugHash
+  - name
+  - description
+properties:
+  plugHash:
+    type: integer
+    description: The hash ID of the socket plug.
+    x-oapi-codegen-extra-tags:
+      firestore: plugHash
+  isEnabled:
+    type: boolean
+    description: Whether the socket plug is enabled or not.
+    x-oapi-codegen-extra-tags:
+      firestore: isEnabled
+  isVisible:
+    type: boolean
+    description: Whether the socket plug is visible or not.
+    x-oapi-codegen-extra-tags:
+      firestore: isVisible
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  description:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: description
+  icon:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: icon
+  itemTypeDisplayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: itemTypeDisplayName
+  itemTypeTieredDisplayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: itemTypeTieredDisplayName

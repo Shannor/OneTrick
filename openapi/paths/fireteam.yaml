@@ -1,0 +1,33 @@
+get:
+  operationId: GetFireteam
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - $ref: ../components/parameters/X-Membership-ID.yaml
+  security:
+    - bearerAuth: []
+  responses:
+    '200':
+      description: >-
+        Returns the current fireteam. Will include the user if they are online.
+        If offline the array will be empty
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: ../components/schemas/FireteamMember.yaml
+    '503':
+      description: Server is down
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+              - status
+            properties:
+              message:
+                type: string
+                description: User friendly description of the error
+              status:
+                $ref: ../components/schemas/InternalError.yaml

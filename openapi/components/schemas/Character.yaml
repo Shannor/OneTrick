@@ -1,0 +1,48 @@
+x-oapi-codegen-extra-tags:
+  firestore: character
+type: object
+required:
+  - id
+  - light
+  - emblemBackgroundURL
+  - emblemURL
+  - emblemColor
+  - currentTitle
+  - race
+  - class
+properties:
+  id:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: id
+  light:
+    type: integer
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: light
+  emblemURL:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: emblemURL
+  emblemBackgroundURL:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: emblemBackgroundURL
+  currentTitle:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: currentTitle
+  emblemColor:
+    $ref: ./Color.yaml
+  race:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: race
+  class:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: class
+  stats:
+    type: object
+    additionalProperties:
+      $ref: ./ClassStat.yaml

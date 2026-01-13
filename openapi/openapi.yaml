@@ -1,0 +1,57 @@
+openapi: 3.0.0
+info:
+  title: One Trick
+  description: One Trick
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+  - url: https://api.d2onetrick.com
+paths:
+  /ping:
+    $ref: paths/ping.yaml
+  /admin/backfill-character-ids:
+    $ref: paths/admin_backfill-character-ids.yaml
+  /admin/backfill-snapshot-base-info:
+    $ref: paths/admin_backfill-snapshot-base-info.yaml
+  /admin/backfill-aggregate-data:
+    $ref: paths/admin_backfill-aggregate-data.yaml
+  /search:
+    $ref: paths/search.yaml
+  /fireteam:
+    $ref: paths/fireteam.yaml
+  /users/{userId}:
+    $ref: paths/users_{userId}.yaml
+  /login:
+    $ref: paths/login.yaml
+  /refresh:
+    $ref: paths/refresh.yaml
+  /users/{userId}/sessions:
+    $ref: paths/users_{userId}_sessions.yaml
+  /snapshots:
+    $ref: paths/snapshots.yaml
+  /snapshots/{snapshotId}:
+    $ref: paths/snapshots_{snapshotId}.yaml
+  /snapshots/{snapshotId}/merge:
+    $ref: paths/snapshots_{snapshotId}_merge.yaml
+  /snapshots/{snapshotId}/aggregates:
+    $ref: paths/snapshots_{snapshotId}_aggregates.yaml
+  /activities:
+    $ref: paths/activities.yaml
+  /activities/{activityId}:
+    $ref: paths/activities_{activityId}.yaml
+  /sessions:
+    $ref: paths/sessions.yaml
+  /sessions/{sessionId}:
+    $ref: paths/sessions_{sessionId}.yaml
+  /sessions/{sessionId}/complete:
+    $ref: paths/sessions_{sessionId}_complete.yaml
+  /sessions/{sessionId}/aggregates:
+    $ref: paths/sessions_{sessionId}_aggregates.yaml
+  /metrics/best-performing-loadouts:
+    $ref: paths/metrics_best-performing-loadouts.yaml
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

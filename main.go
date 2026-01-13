@@ -100,7 +100,7 @@ func main() {
 
 	r.GET("/openapi", func(c *gin.Context) {
 		c.Header("Content-Type", "application/json")
-		c.File("./api/openapi.json")
+		c.File("./openapi.yaml")
 	})
 
 	// Load OpenAPI spec file

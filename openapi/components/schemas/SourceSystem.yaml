@@ -1,0 +1,13 @@
+type: string
+enum:
+  - playstation
+  - xbox
+  - steam
+  - stadia
+  - unknown
+x-enum-varnames:
+  - SystemPlayStation
+  - SystemXbox
+  - SystemSteam
+  - SystemStadia
+  - SystemUnknown

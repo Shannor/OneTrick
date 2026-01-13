@@ -1,0 +1,9 @@
+type: string
+enum:
+  - DestinyServerDown
+  - InternalSystemDown
+  - UnknownError
+x-enum-varnames:
+  - ErrDestinyServerDown
+  - ErrInternalSystemDown
+  - ErrUnknownError

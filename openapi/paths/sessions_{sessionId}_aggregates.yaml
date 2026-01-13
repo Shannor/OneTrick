@@ -1,0 +1,28 @@
+get:
+  operationId: GetSessionAggregates
+  parameters:
+    - name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        x-go-name: sessionID
+  responses:
+    '200':
+      description: Array of aggregates
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - aggregates
+              - snapshots
+            properties:
+              aggregates:
+                type: array
+                items:
+                  $ref: ../components/schemas/Aggregate.yaml
+              snapshots:
+                type: object
+                additionalProperties:
+                  $ref: ../components/schemas/CharacterSnapshot.yaml

@@ -1,0 +1,17 @@
+x-oapi-codegen-extra-tags:
+  firestore: team
+type: object
+required:
+  - id
+  - standing
+  - score
+properties:
+  id:
+    type: string
+    x-go-name: ID
+  standing:
+    type: string
+  score:
+    type: string
+  teamName:
+    type: string

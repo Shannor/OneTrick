@@ -1,0 +1,34 @@
+summary: return a list from bungie of matching users
+post:
+  operationId: search
+  requestBody:
+    content:
+      application/json:
+        schema:
+          type: object
+          required:
+            - prefix
+            - page
+          properties:
+            prefix:
+              type: string
+            page:
+              type: integer
+              format: int32
+  responses:
+    '200':
+      description: Return a list of search results found
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - results
+              - hasMore
+            properties:
+              results:
+                type: array
+                items:
+                  $ref: ../components/schemas/SearchUserResult.yaml
+              hasMore:
+                type: boolean

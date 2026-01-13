@@ -1,0 +1,21 @@
+type: object
+x-oapi-codegen-extra-tags:
+  firestore: instancePerformance
+required:
+  - playerStats
+  - weapons
+properties:
+  playerStats:
+    $ref: ./PlayerStats.yaml
+  weapons:
+    type: object
+    additionalProperties:
+      $ref: ./WeaponInstanceMetrics.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: weapons
+  extra:
+    type: object
+    x-oapi-codegen-extra-tags:
+      firestore: extra
+    additionalProperties:
+      $ref: ./UniqueStatValue.yaml

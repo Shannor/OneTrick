@@ -1,0 +1,40 @@
+type: object
+required:
+  - basic
+properties:
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  basic:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Basic stat value.
+    x-oapi-codegen-extra-tags:
+      firestore: basic
+  pga:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Per game average for the statistic, if applicable
+    x-oapi-codegen-extra-tags:
+      firestore: pga
+  weighted:
+    type: object
+    allOf:
+      - $ref: ./StatsValuePair.yaml
+    description: Weighted value of the stat if a weight greater than 1 has been assigned.
+    x-oapi-codegen-extra-tags:
+      firestore: weighted
+  activityId:
+    type: integer
+    description: >-
+      When a stat represents the best, most, longest, fastest or some other
+      personal best, the actual activity ID where that personal best was
+      established is available on this property.
+    format: int64
+    nullable: true
+    x-go-name: activityID
+    x-oapi-codegen-extra-tags:
+      firestore: activityId

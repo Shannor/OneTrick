@@ -1,0 +1,39 @@
+get:
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - $ref: ../components/parameters/X-Membership-ID.yaml
+    - name: count
+      in: query
+      required: true
+      schema:
+        type: integer
+        format: int64
+        maximum: 30
+        minimum: 1
+    - name: page
+      in: query
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    - name: characterId
+      x-go-name: characterID
+      in: query
+      required: true
+      schema:
+        type: string
+    - name: mode
+      in: query
+      schema:
+        $ref: ../components/schemas/ActivityMode.yaml
+  operationId: GetActivities
+  responses:
+    '200':
+      description: List of Activities that have past
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: ../components/schemas/DetailActivity.yaml

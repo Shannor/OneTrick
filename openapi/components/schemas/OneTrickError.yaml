@@ -1,0 +1,11 @@
+description: Known errors for the one trick API
+type: object
+required:
+  - message
+  - status
+properties:
+  message:
+    type: string
+    description: User friendly description of the error
+  status:
+    $ref: ./InternalError.yaml

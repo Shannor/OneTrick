@@ -1,0 +1,19 @@
+post:
+  operationId: BackfillAggregateData
+  responses:
+    '200':
+      description: Summary of backfilled users
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - updated
+              - failed
+            properties:
+              updated:
+                type: integer
+                format: int32
+              failed:
+                type: integer
+                format: int32

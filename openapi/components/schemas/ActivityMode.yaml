@@ -1,0 +1,11 @@
+type: string
+enum:
+  - competitive
+  - quickplay
+  - allPvP
+  - ironBanner
+x-enum-varnames:
+  - Competitive
+  - Quickplay
+  - AllPvP
+  - IronBanner

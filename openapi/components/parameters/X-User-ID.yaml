@@ -1,0 +1,5 @@
+name: X-User-ID
+schema:
+  type: string
+in: header
+required: true

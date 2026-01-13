@@ -1,0 +1,60 @@
+x-oapi-codegen-extra-tags:
+  firestore: baseItemInfo
+type: object
+required:
+  - name
+  - itemHash
+  - instanceId
+  - bucketHash
+  - itemTypeAndTierDisplayName
+  - itemTypeDisplayName
+  - tierTypeName
+  - tierType
+properties:
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  icon:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: icon
+  itemHash:
+    type: integer
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: itemHash
+  instanceId:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: instanceId
+  bucketHash:
+    type: integer
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: bucketHash
+  itemTypeAndTierDisplayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: itemTypeAndTierDisplayName
+  itemTypeDisplayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: itemTypeDisplayName
+  tierTypeName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: tierTypeName
+  tierType:
+    type: integer
+    format: int32
+    x-oapi-codegen-extra-tags:
+      firestore: tierType
+  styleBasicInfo:
+    type: object
+    allOf:
+      - $ref: ./BaseItemInfo.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: styleBasicInfo
+  damage:
+    $ref: ./DamageInfo.yaml

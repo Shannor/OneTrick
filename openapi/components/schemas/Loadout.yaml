@@ -1,0 +1,8 @@
+description: >-
+  All buckets that we currently care about, Kinetic, Energy, Heavy and Class for
+  now. Each will be a key in the items.
+type: object
+additionalProperties:
+  $ref: ./ItemSnapshot.yaml
+x-oapi-codegen-extra-tags:
+  firestore: loadout

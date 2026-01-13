@@ -16,6 +16,7 @@ import (
 
 type Service interface {
 	Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField) (*api.Session, error)
+	Update(ctx context.Context, sessionID string, name, description string) error
 	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 	Get(ctx context.Context, ID string) (*api.Session, error)
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
@@ -165,6 +166,34 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	return result, nil
 }
 
+func (s service) Update(ctx context.Context, sessionID string, name, description string) error {
+	ref := s.db.Collection(collection).Doc(sessionID)
+
+	updates := make([]firestore.Update, 0)
+	if name != "" {
+		updates = append(updates, firestore.Update{
+			Path:  "name",
+			Value: name,
+		})
+	}
+	if description != "" {
+		updates = append(updates, firestore.Update{
+			Path:  "description",
+			Value: description,
+		})
+
+	}
+	if len(updates) == 0 {
+		slog.With("sessionID", sessionID).Warn("no updates to session")
+		return nil
+	}
+	_, err := ref.Update(ctx, updates)
+	if err != nil {
+		return fmt.Errorf("failed to update session: %w", err)
+	}
+
+	return nil
+}
 func (s service) Complete(ctx context.Context, ID string) error {
 	ref := s.db.Collection(collection).Doc(ID)
 

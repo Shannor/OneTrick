@@ -1,0 +1,60 @@
+post:
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - $ref: ../components/parameters/X-Membership-ID.yaml
+  requestBody:
+    description: Provide the character to take the snapshot of
+    required: true
+    content:
+      application/json:
+        schema:
+          required:
+            - characterId
+          type: object
+          properties:
+            characterId:
+              type: string
+              x-go-name: characterID
+  operationId: CreateSnapshot
+  description: 'Creates a new snapshot in the system and returns a list of '
+  responses:
+    '201':
+      description: Return the created snapshot
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CharacterSnapshot.yaml
+get:
+  operationId: GetSnapshots
+  security:
+    - bearerAuth: []
+  description: Returns a list of snapshots in the system for a character
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - name: count
+      in: query
+      required: true
+      schema:
+        type: integer
+        format: int64
+    - name: page
+      in: query
+      required: true
+      schema:
+        type: integer
+        format: int64
+    - name: characterId
+      in: query
+      x-go-name: characterID
+      required: true
+      schema:
+        type: string
+  responses:
+    '200':
+      description: Returns an array of all snapshots for a character
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: ../components/schemas/CharacterSnapshot.yaml

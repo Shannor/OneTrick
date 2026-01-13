@@ -1,0 +1,19 @@
+post:
+  operationId: Login
+  requestBody:
+    content:
+      application/json:
+        schema:
+          type: object
+          required:
+            - code
+          properties:
+            code:
+              type: string
+  responses:
+    '200':
+      description: Logging in
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/AuthResponse.yaml

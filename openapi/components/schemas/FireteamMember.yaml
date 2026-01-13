@@ -1,0 +1,29 @@
+x-oapi-codegen-extra-tags:
+  firestore: fireteamMember
+type: object
+required:
+  - id
+  - membershipId
+  - displayName
+  - characters
+properties:
+  id:
+    x-go-name: ID
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: id
+  membershipId:
+    type: string
+    x-go-name: membershipID
+    x-oapi-codegen-extra-tags:
+      firestore: membershipId
+  displayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: displayName
+  characters:
+    type: array
+    items:
+      $ref: ./Character.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: characters

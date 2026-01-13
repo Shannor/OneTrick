@@ -1,0 +1,20 @@
+type: object
+required:
+  - id
+  - type
+  - displayName
+properties:
+  id:
+    type: string
+    x-go-name: ID
+    x-oapi-codegen-extra-tags:
+      firestore: id
+  type:
+    type: integer
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: type
+  displayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: displayName

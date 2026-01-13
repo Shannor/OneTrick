@@ -1,0 +1,29 @@
+x-oapi-codegen-extra-tags:
+  firestore: color
+type: object
+required:
+  - red
+  - green
+  - blue
+  - alpha
+properties:
+  red:
+    type: integer
+    format: int
+    x-oapi-codegen-extra-tags:
+      firestore: red
+  green:
+    type: integer
+    format: int
+    x-oapi-codegen-extra-tags:
+      firestore: green
+  blue:
+    type: integer
+    format: int
+    x-oapi-codegen-extra-tags:
+      firestore: blue
+  alpha:
+    type: integer
+    format: int
+    x-oapi-codegen-extra-tags:
+      firestore: alpha

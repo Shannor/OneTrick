@@ -1,0 +1,41 @@
+type: object
+required:
+  - characterId
+  - confidenceLevel
+  - confidenceSource
+  - createdAt
+properties:
+  characterId:
+    x-go-name: characterID
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: characterId
+  snapshotId:
+    x-go-name: snapshotID
+    description: ID of the snapshot for the user. Can be updated by the user during a merge
+    x-oapi-codegen-extra-tags:
+      firestore: snapshotId
+    type: string
+  originalSnapshotId:
+    x-go-name: originalSnapshotID
+    description: ID of the snapshot that was used to create this link
+    x-oapi-codegen-extra-tags:
+      firestore: originalSnapshotId
+    type: string
+  sessionId:
+    x-go-name: sessionID
+    description: >-
+      Optional ID of a session if this Snapshot link was added by a session
+      check-in. Will be null in the case, where the link is added after the fact
+    x-oapi-codegen-extra-tags:
+      firestore: sessionId
+    type: string
+  confidenceLevel:
+    $ref: ./ConfidenceLevel.yaml
+  confidenceSource:
+    $ref: ./ConfidenceSource.yaml
+  createdAt:
+    type: string
+    format: date-time
+    x-oapi-codegen-extra-tags:
+      firestore: createdAt

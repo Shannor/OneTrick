@@ -1,0 +1,29 @@
+x-oapi-codegen-extra-tags:
+  firestore: gunStat
+type: object
+required:
+  - name
+  - hash
+  - value
+  - description
+properties:
+  hash:
+    type: integer
+    description: The hash ID of the stat.
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: hash
+  value:
+    type: integer
+    description: The value of the stat.
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: value
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  description:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: description

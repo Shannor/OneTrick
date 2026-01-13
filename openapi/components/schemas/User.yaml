@@ -1,0 +1,50 @@
+type: object
+required:
+  - id
+  - memberId
+  - memberships
+  - primaryMembershipId
+  - displayName
+  - uniqueName
+  - createdAt
+  - characterIds
+properties:
+  id:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: id
+    x-go-name: ID
+  memberId:
+    type: string
+    x-go-name: memberID
+    x-oapi-codegen-extra-tags:
+      firestore: memberId
+  primaryMembershipId:
+    type: string
+    x-go-name: primaryMembershipID
+    x-oapi-codegen-extra-tags:
+      firestore: primaryMembershipId
+  uniqueName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: uniqueName
+  displayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: displayName
+  memberships:
+    type: array
+    items:
+      $ref: ./Membership.yaml
+  createdAt:
+    type: string
+    format: date-time
+    x-oapi-codegen-extra-tags:
+      firestore: createdAt
+  characterIds:
+    type: array
+    items:
+      type: string
+    x-oapi-codegen-extra-tags:
+      firestore: characterIds
+    x-go-name: characterIDs

@@ -1,0 +1,59 @@
+type: object
+required:
+  - id
+  - activityId
+  - activityDetails
+  - snapshotLinks
+  - performance
+  - sessionIds
+  - snapshotIds
+  - characterIds
+  - createdAt
+properties:
+  id:
+    type: string
+    x-go-name: ID
+    x-oapi-codegen-extra-tags:
+      firestore: id
+  activityId:
+    type: string
+    x-go-name: activityID
+    x-oapi-codegen-extra-tags:
+      firestore: activityId
+  sessionIds:
+    type: array
+    items:
+      type: string
+    x-oapi-codegen-extra-tags:
+      firestore: sessionIds
+  characterIds:
+    type: array
+    items:
+      type: string
+    x-oapi-codegen-extra-tags:
+      firestore: characterIds
+  snapshotIds:
+    type: array
+    items:
+      type: string
+    x-oapi-codegen-extra-tags:
+      firestore: snapshotIds
+  activityDetails:
+    $ref: ./ActivityHistory.yaml
+  snapshotLinks:
+    type: object
+    x-oapi-codegen-extra-tags:
+      firestore: snapshotLinks
+    additionalProperties:
+      $ref: ./SnapshotLink.yaml
+  performance:
+    type: object
+    x-oapi-codegen-extra-tags:
+      firestore: performance
+    additionalProperties:
+      $ref: ./InstancePerformance.yaml
+  createdAt:
+    type: string
+    format: date-time
+    x-oapi-codegen-extra-tags:
+      firestore: createdAt

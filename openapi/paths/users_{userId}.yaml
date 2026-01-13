@@ -1,0 +1,31 @@
+get:
+  operationId: GetUser
+  parameters:
+    - in: path
+      name: userId
+      x-go-name: userID
+      required: true
+      schema:
+        type: string
+  responses:
+    '200':
+      description: User Profile Info
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Profile.yaml
+    '503':
+      description: Server is down
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+              - status
+            properties:
+              message:
+                type: string
+                description: User friendly description of the error
+              status:
+                $ref: ../components/schemas/InternalError.yaml

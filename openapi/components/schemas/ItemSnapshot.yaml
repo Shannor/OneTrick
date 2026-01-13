@@ -1,0 +1,32 @@
+type: object
+required:
+  - details
+  - instanceId
+  - itemHash
+  - name
+properties:
+  instanceId:
+    x-go-name: instanceID
+    type: string
+    description: Specific instance id for the item
+    x-oapi-codegen-extra-tags:
+      firestore: instanceId
+  name:
+    type: string
+    description: Name of the particular item
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  itemHash:
+    type: integer
+    description: Id used to find the definition of the item
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: itemHash
+  bucketHash:
+    type: integer
+    description: Hash of which bucket this item can be equipped in
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: bucketHash
+  details:
+    $ref: ./ItemProperties.yaml

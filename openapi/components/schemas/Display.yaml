@@ -1,0 +1,28 @@
+x-oapi-codegen-extra-tags:
+  firestore: display
+type: object
+required:
+  - name
+  - description
+  - hasIcon
+properties:
+  name:
+    type: string
+    x-go-name: name
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  hasIcon:
+    type: boolean
+    x-go-name: hasIcon
+    x-oapi-codegen-extra-tags:
+      firestore: hasIcon
+  description:
+    type: string
+    x-go-name: description
+    x-oapi-codegen-extra-tags:
+      firestore: description
+  icon:
+    type: string
+    x-go-name: icon
+    x-oapi-codegen-extra-tags:
+      firestore: icon

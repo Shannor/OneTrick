@@ -1,0 +1,21 @@
+type: object
+x-oapi-codegen-extra-tags:
+  firestore: weaponInstanceMetrics
+properties:
+  referenceId:
+    type: integer
+    description: The hash ID of the item definition that describes the weapon.
+    format: int64
+    x-go-name: referenceID
+    x-oapi-codegen-extra-tags:
+      firestore: referenceId
+  display:
+    $ref: ./Display.yaml
+  properties:
+    $ref: ./ItemProperties.yaml
+  stats:
+    x-oapi-codegen-extra-tags:
+      firestore: stats
+    type: object
+    additionalProperties:
+      $ref: ./UniqueStatValue.yaml
