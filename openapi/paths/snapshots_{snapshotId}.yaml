@@ -16,3 +16,62 @@ get:
         application/json:
           schema:
             $ref: ../components/schemas/CharacterSnapshot.yaml
+put:
+  operationId: UpdateSnapshot
+  description: Updates a snapshot in the system
+  parameters:
+    - $ref: "../components/parameters/X-User-ID.yaml"
+    - name: snapshotId
+      in: path
+      x-go-name: snapshotID
+      required: true
+      schema:
+        type: string
+      description: The unique identifier for the snapshot.
+  requestBody:
+    description: Provide the character to take the snapshot of
+    required: true
+    content:
+      application/json:
+        schema:
+          required:
+            - name
+          type: object
+          properties:
+            name:
+              type: string
+              description: Name of the snapshot
+            description:
+              type: string
+              description: Description of the snapshot
+  responses:
+    '200':
+      description: Updated snapshot
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CharacterSnapshot.yaml
+    '400':
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '401':
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '404':
+      description: Snapshot not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '500':
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

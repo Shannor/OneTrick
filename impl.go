@@ -33,6 +33,28 @@ type Server struct {
 	StatsService      stats.Service
 }
 
+func NewServer(
+	service destiny.Service,
+	authService destiny.AuthService,
+	userService user.Service,
+	snapshotService snapshot.Service,
+	aggregateService aggregate.Service,
+	sessionService session.Service,
+	manifestService destiny.ManifestService,
+	statsService stats.Service,
+) Server {
+	return Server{
+		D2Service:         service,
+		D2AuthService:     authService,
+		UserService:       userService,
+		SnapshotService:   snapshotService,
+		AggregateService:  aggregateService,
+		SessionService:    sessionService,
+		D2ManifestService: manifestService,
+		StatsService:      statsService,
+	}
+}
+
 func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSnapshotInfoRequestObject) (api.BackfillSnapshotInfoResponseObject, error) {
 	snapshots, err := s.SnapshotService.GetAll(ctx)
 	if err != nil {
@@ -507,27 +529,40 @@ func (s Server) GetPing(context.Context, api.GetPingRequestObject) (api.GetPingR
 	}, nil
 }
 
-func NewServer(
-	service destiny.Service,
-	authService destiny.AuthService,
-	userService user.Service,
-	snapshotService snapshot.Service,
-	aggregateService aggregate.Service,
-	sessionService session.Service,
-	manifestService destiny.ManifestService,
-	statsService stats.Service,
-) Server {
-	return Server{
-		D2Service:         service,
-		D2AuthService:     authService,
-		UserService:       userService,
-		SnapshotService:   snapshotService,
-		AggregateService:  aggregateService,
-		SessionService:    sessionService,
-		D2ManifestService: manifestService,
-		StatsService:      statsService,
+func (s Server) UpdateSnapshot(ctx context.Context, request api.UpdateSnapshotRequestObject) (api.UpdateSnapshotResponseObject, error) {
+	snapshotID := request.SnapshotID
+	snap, err := s.SnapshotService.Get(ctx, snapshotID)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to fetch snapshot")
+		return api.UpdateSnapshot404JSONResponse{Message: "snapshot not found"}, nil
 	}
+	if snap.UserID != request.Params.XUserID {
+		log.Error().Msg("unauthorized to update snapshot")
+		return api.UpdateSnapshot401JSONResponse{Message: "unauthorized"}, nil
+	}
+
+	err = s.SnapshotService.Update(ctx, snapshotID, func(data map[string]any) error {
+		if request.Body.Name != "" {
+			data["name"] = request.Body.Name
+		}
+		if request.Body.Description != nil && *request.Body.Description != "" {
+			data["description"] = request.Body.Description
+		}
+		return nil
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to update snapshot")
+		return nil, err
+	}
+
+	snap, err = s.SnapshotService.Get(ctx, snapshotID)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to fetch snapshot")
+		return nil, err
+	}
+	return api.UpdateSnapshot200JSONResponse(*snap), nil
 }
+
 func (s Server) GetSnapshotAggregates(ctx context.Context, request api.GetSnapshotAggregatesRequestObject) (api.GetSnapshotAggregatesResponseObject, error) {
 	snap, err := s.SnapshotService.Get(ctx, request.SnapshotID)
 	if err != nil {
@@ -644,6 +679,7 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 	}
 	return api.GetActivities200JSONResponse(result), nil
 }
+
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
 	activityID := request.ActivityID
 
