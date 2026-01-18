@@ -46,7 +46,7 @@ get:
       required: true
       schema:
         type: integer
-        format: int64
+        format: int
         maximum: 30
         minimum: 1
     - name: page
@@ -54,7 +54,6 @@ get:
       required: true
       schema:
         type: integer
-        format: int64
         minimum: 0
     - name: characterId
       x-go-name: characterID

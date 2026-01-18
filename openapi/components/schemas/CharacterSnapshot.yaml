@@ -25,6 +25,12 @@ properties:
       but can be changed by a user
     x-oapi-codegen-extra-tags:
       firestore: name
+  description:
+    type: string
+    description: >-
+      Description of the snapshot. Will be empty by default and added by the user later.
+    x-oapi-codegen-extra-tags:
+      firestore: description
   userId:
     type: string
     x-go-name: userID
@@ -44,6 +50,8 @@ properties:
       firestore: characterId
   stats:
     type: object
+    x-oapi-codegen-extra-tags:
+      firestore: stats
     additionalProperties:
       $ref: ./ClassStat.yaml
   createdAt:
