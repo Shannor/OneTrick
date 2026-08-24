@@ -8,6 +8,7 @@ import (
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
 	"oneTrick/envvars"
+	"oneTrick/logger"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
@@ -40,6 +41,7 @@ func main() {
 		consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
 		log.Logger = log.Output(consoleWriter)
 	} else {
+		slog.SetDefault(slog.New(logger.NewGCPHandler(slog.LevelInfo)))
 		writer, err := zlg.NewCloudLoggingWriter(ctx, projectID, logID, zlg.CloudLoggingOptions{})
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to create GCP writer")

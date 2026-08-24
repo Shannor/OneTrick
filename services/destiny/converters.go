@@ -164,12 +164,12 @@ func generateStats(item *bungie.DestinyItem, statDefinitions map[string]StatDefi
 	stats := make(api.Stats)
 	for key, s := range *item.Stats.Data.Stats {
 		if s.StatHash == nil || s.Value == nil {
-			slog.Warn("Missing stat hash or value for stat: ", key)
+			slog.Warn("Missing stat hash or value for stat", "statKey", key)
 			continue
 		}
 		stat, ok := statDefinitions[strconv.Itoa(int(*s.StatHash))]
 		if !ok {
-			slog.Warn("Stat not found in manifest: ", strconv.Itoa(int(*s.StatHash)))
+			slog.Warn("Stat not found in manifest", "statHash", strconv.Itoa(int(*s.StatHash)))
 			continue
 		}
 		value := int64(*s.Value)
