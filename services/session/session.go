@@ -127,42 +127,51 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	if characterID != nil {
 		query = query.Where("characterId", "==", *characterID)
 	}
-
-	if count > 0 {
-		query = query.Limit(count).OrderBy("startedAt", firestore.Desc)
-	} else {
-		query = query.OrderBy("startedAt", firestore.Desc).Limit(10)
-	}
-
-	if offset > 0 {
-		query = query.Offset(offset)
-	}
-
 	if status != nil {
 		query = query.Where("status", "==", *status)
-		switch *status {
-		case api.SessionPending:
-			query = query.Limit(1)
-		}
 	}
 
 	docs, err := query.Documents(ctx).GetAll()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query sessions: %w", err)
 	}
 
 	result, err := utils.GetAllToStructs[api.Session](docs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse sessions: %w", err)
 	}
+
+	// Sort by StartedAt descending (newest first)
 	slices.SortFunc(result, func(a, b api.Session) int {
 		return b.StartedAt.Compare(a.StartedAt)
 	})
-	for i, session := range result {
-		if session.AggregateIDs == nil {
+
+	for i := range result {
+		if result[i].AggregateIDs == nil {
 			result[i].AggregateIDs = make([]string, 0)
 		}
 	}
+
+	// Apply offset
+	if offset > 0 {
+		if offset >= len(result) {
+			return []api.Session{}, nil
+		}
+		result = result[offset:]
+	}
+
+	// Apply limit
+	limit := 10
+	if count > 0 {
+		limit = count
+	}
+	if status != nil && *status == api.SessionPending {
+		limit = 1
+	}
+	if limit < len(result) {
+		result = result[:limit]
+	}
+
 	return result, nil
 }
 
@@ -202,7 +211,7 @@ func (s service) Complete(ctx context.Context, ID string) error {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 	session := api.Session{}
-	err = data.DataTo(&s)
+	err = data.DataTo(&session)
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
