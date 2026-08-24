@@ -77,7 +77,8 @@ func main() {
 
 	defer firestore.Close()
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(logger.SlogRecovery())
 	r.Use(cors.Default())
 
 	if envvars.IsProd(env) {

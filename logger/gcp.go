@@ -1,9 +1,14 @@
 package logger
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
+	"runtime/debug"
+
+	"github.com/gin-gonic/gin"
 )
 
 // NewGCPHandler creates an slog.Handler configured for GCP Cloud Logging stdout ingestion.
@@ -53,4 +58,27 @@ func NewGCPHandlerWithWriter(w io.Writer, level slog.Level) slog.Handler {
 			"logger": "onetrick-service",
 		}),
 	})
+}
+
+// SlogRecovery returns a Gin middleware that catches panics and logs them as structured GCP JSON error logs.
+func SlogRecovery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if r := recover(); r != nil {
+				errStr := fmt.Sprintf("%v", r)
+				stack := debug.Stack()
+
+				slog.Error("HTTP request panic recovered",
+					"error", errStr,
+					"path", c.Request.URL.Path,
+					"method", c.Request.Method,
+					"clientIP", c.ClientIP(),
+					"stackTrace", string(stack),
+				)
+
+				c.AbortWithStatus(http.StatusInternalServerError)
+			}
+		}()
+		c.Next()
+	}
 }
