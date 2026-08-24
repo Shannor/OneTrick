@@ -7,6 +7,7 @@ import (
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
 	"strconv"
+	"time"
 )
 
 func setBaseBungieURL(value *string) string {
@@ -111,10 +112,20 @@ func TransformCharacter(item *bungie.CharacterComponent, classes map[string]Clas
 	return c
 }
 func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition, damages map[string]DamageType) api.BaseItemInfo {
+	if item == nil || item.Item == nil || item.Item.ItemComponent == nil {
+		return api.BaseItemInfo{}
+	}
 	c := *item.Item.ItemComponent
+	if c.ItemHash == nil || c.BucketHash == nil || c.ItemInstanceId == nil {
+		return api.BaseItemInfo{}
+	}
 	hash := strconv.Itoa(int(*c.ItemHash))
-	name := items[hash].DisplayProperties.Name
-	icon := items[hash].DisplayProperties.Icon
+	name := ""
+	icon := ""
+	if def, ok := items[hash]; ok {
+		name = def.DisplayProperties.Name
+		icon = def.DisplayProperties.Icon
+	}
 
 	base := api.BaseItemInfo{
 		BucketHash: int64(*c.BucketHash),
@@ -124,23 +135,24 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 		Icon:       ptr.Of(setBaseBungieURL(&icon)),
 	}
 
-	if item.Instance != nil {
+	if item.Instance != nil && item.Instance.ItemInstanceComponent != nil {
 		instance := *item.Instance.ItemInstanceComponent
 		if instance.DamageTypeHash != nil {
 			hash := strconv.Itoa(int(*instance.DamageTypeHash))
-			def := damages[hash]
-			dc := def.Color
+			if def, ok := damages[hash]; ok {
+				dc := def.Color
 
-			base.Damage = &api.DamageInfo{
-				Color: api.Color{
-					Alpha: dc.Alpha,
-					Blue:  dc.Blue,
-					Green: dc.Green,
-					Red:   dc.Red,
-				},
-				DamageIcon:      def.DisplayProperties.Icon,
-				DamageType:      def.DisplayProperties.Name,
-				TransparentIcon: def.TransparentIconPath,
+				base.Damage = &api.DamageInfo{
+					Color: api.Color{
+						Alpha: dc.Alpha,
+						Blue:  dc.Blue,
+						Green: dc.Green,
+						Red:   dc.Red,
+					},
+					DamageIcon:      def.DisplayProperties.Icon,
+					DamageType:      def.DisplayProperties.Name,
+					TransparentIcon: def.TransparentIconPath,
+				}
 			}
 		}
 	}
@@ -149,7 +161,13 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 
 func generatePerks(item *bungie.DestinyItem, perks map[string]PerkDefinition) []api.Perk {
 	var results []api.Perk
+	if item == nil || item.Perks == nil || item.Perks.Data == nil || item.Perks.Data.Perks == nil {
+		return results
+	}
 	for _, p := range *item.Perks.Data.Perks {
+		if p.PerkHash == nil {
+			continue
+		}
 		perk, ok := perks[strconv.Itoa(int(*p.PerkHash))]
 		if !ok {
 			slog.Warn("Perk not found in manifest", "perkHash", strconv.Itoa(int(*p.PerkHash)))
@@ -170,6 +188,9 @@ func generatePerks(item *bungie.DestinyItem, perks map[string]PerkDefinition) []
 
 func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) *[]api.Socket {
 	var sockets []api.Socket
+	if item == nil || item.Sockets == nil || item.Sockets.Data == nil || item.Sockets.Data.Sockets == nil {
+		return &sockets
+	}
 	for _, s := range *item.Sockets.Data.Sockets {
 		if s.PlugHash == nil {
 			slog.Warn("Socket has no plug hash")
@@ -198,6 +219,9 @@ func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) 
 
 func generateStats(item *bungie.DestinyItem, statDefinitions map[string]StatDefinition) api.Stats {
 	stats := make(api.Stats)
+	if item == nil || item.Stats == nil || item.Stats.Data == nil || item.Stats.Data.Stats == nil {
+		return stats
+	}
 	for key, s := range *item.Stats.Data.Stats {
 		if s.StatHash == nil || s.Value == nil {
 			slog.Warn("Missing stat hash or value for stat", "statKey", key)
@@ -279,13 +303,24 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activity
 	if history == nil {
 		return nil
 	}
+	var actHash, refID int64
+	if history.DirectorActivityHash != nil {
+		actHash = int64(*history.DirectorActivityHash)
+	}
+	if history.ReferenceId != nil {
+		refID = int64(*history.ReferenceId)
+	}
+	instID := ""
+	if history.InstanceId != nil {
+		instID = *history.InstanceId
+	}
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(history.Mode))
 	return &api.ActivityHistory{
-		ActivityHash: *uintToInt64(history.DirectorActivityHash),
-		InstanceID:   *history.InstanceId,
+		ActivityHash: actHash,
+		InstanceID:   instID,
 		IsPrivate:    history.IsPrivate,
 		Mode:         &mode,
-		ReferenceID:  *uintToInt64(history.ReferenceId),
+		ReferenceID:  refID,
 		Location:     activityDefinition.DisplayProperties.Name,
 		Description:  activityDefinition.DisplayProperties.Description,
 		Activity:     directorDef.DisplayProperties.Name,
@@ -295,10 +330,7 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activity
 }
 
 func TransformTeams(teams *[]bungie.TeamEntry) []api.Team {
-	if teams == nil {
-		return nil
-	}
-	if *teams == nil {
+	if teams == nil || *teams == nil {
 		return nil
 	}
 	var result []api.Team
@@ -311,10 +343,10 @@ func TransformTeams(teams *[]bungie.TeamEntry) []api.Team {
 			ID:       strconv.Itoa(int(*team.TeamID)),
 			TeamName: team.TeamName,
 		}
-		if team.Score != nil {
+		if team.Score != nil && team.Score.Basic != nil && team.Score.Basic.DisplayValue != nil {
 			t.Score = *team.Score.Basic.DisplayValue
 		}
-		if team.Standing != nil {
+		if team.Standing != nil && team.Standing.Basic != nil && team.Standing.Basic.DisplayValue != nil {
 			t.Standing = *team.Standing.Basic.DisplayValue
 		}
 		result = append(result, t)
@@ -339,34 +371,43 @@ func TransformPeriodGroups(period []bungie.StatsPeriodGroup, activities map[stri
 }
 
 func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string]ActivityDefinition, modes map[string]ActivityModeDefinition) *api.ActivityHistory {
-	if period == nil {
+	if period == nil || period.ActivityDetails == nil {
+		return nil
+	}
+	if period.ActivityDetails.ReferenceId == nil || period.ActivityDetails.DirectorActivityHash == nil || period.ActivityDetails.InstanceId == nil {
 		return nil
 	}
 
 	definition, ok := activities[strconv.Itoa(int(*period.ActivityDetails.ReferenceId))]
 	if !ok {
-		slog.Warn("Activity locale not found in manifest", "referenceId", period.ActivityDetails.ReferenceId)
+		slog.Warn("Activity locale not found in manifest", "referenceId", *period.ActivityDetails.ReferenceId)
 		return nil
 	}
 	activity, ok := activities[strconv.Itoa(int(*period.ActivityDetails.DirectorActivityHash))]
 	if !ok {
-		slog.Warn("Activity Directory not found in manifest", "directorActivityHash", period.ActivityDetails.DirectorActivityHash)
+		slog.Warn("Activity Directory not found in manifest", "directorActivityHash", *period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
 	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
+
+	var pTime time.Time
+	if period.Period != nil {
+		pTime = *period.Period
+	}
+
 	return &api.ActivityHistory{
-		ActivityHash: *uintToInt64(period.ActivityDetails.DirectorActivityHash),
+		ActivityHash: int64(*period.ActivityDetails.DirectorActivityHash),
 		InstanceID:   *period.ActivityDetails.InstanceId,
 		IsPrivate:    period.ActivityDetails.IsPrivate,
 		Mode:         &mode,
-		ReferenceID:  *uintToInt64(period.ActivityDetails.ReferenceId),
+		ReferenceID:  int64(*period.ActivityDetails.ReferenceId),
 		Location:     definition.DisplayProperties.Name,
 		Description:  definition.DisplayProperties.Description,
 		Activity:     activity.DisplayProperties.Name,
 		ImageURL:     setBaseBungieURL(&definition.PgcrImage),
 		ActivityIcon: setBaseBungieURL(&activityMode.DisplayProperties.Icon),
-		Period:       *period.Period,
+		Period:       pTime,
 	}
 }
 
@@ -404,9 +445,13 @@ func CarnageEntryToInstancePerformance(entry *bungie.PostGameCarnageReportEntry,
 	}
 	result := &api.InstancePerformance{}
 
-	result.Extra = BungieStatValueToUniqueStatValue(entry.Extended.Values)
-	result.PlayerStats = *ToPlayerStats(entry.Values)
-	result.Weapons = WeaponsToInstanceWeapons(entry.Extended.Weapons, items)
+	if entry.Extended != nil {
+		result.Extra = BungieStatValueToUniqueStatValue(entry.Extended.Values)
+		result.Weapons = WeaponsToInstanceWeapons(entry.Extended.Weapons, items)
+	}
+	if entry.Values != nil {
+		result.PlayerStats = *ToPlayerStats(entry.Values)
+	}
 	return result
 }
 
@@ -416,14 +461,17 @@ func BungieStatValueToUniqueStatValue(values *map[string]bungie.HistoricalStatsV
 	}
 	result := make(map[string]api.UniqueStatValue)
 	for key, value := range *values {
-		result[key] = api.UniqueStatValue{
+		uv := api.UniqueStatValue{
 			ActivityID: value.ActivityId,
-			Basic: api.StatsValuePair{
+			Name:       value.StatId,
+		}
+		if value.Basic != nil {
+			uv.Basic = api.StatsValuePair{
 				DisplayValue: value.Basic.DisplayValue,
 				Value:        value.Basic.Value,
-			},
-			Name: value.StatId,
+			}
 		}
+		result[key] = uv
 	}
 	return &result
 }

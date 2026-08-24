@@ -152,11 +152,11 @@ func (a *service) GetPerformances(ctx context.Context, activityID string, charac
 		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, err
 	}
-	data := resp.JSON200.PostGameCarnageReportData
-	if data.Entries == nil || data.ActivityDetails == nil {
+	if resp.JSON200 == nil || resp.JSON200.PostGameCarnageReportData == nil {
 		l.Error("No data found for activity")
 		return nil, fmt.Errorf("nil data response")
 	}
+	data := resp.JSON200.PostGameCarnageReportData
 
 	performances := make(map[string]api.InstancePerformance)
 	characterSet := set.FromSlice(characterIDs)
@@ -190,60 +190,76 @@ func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, ch
 		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, err
 	}
-	data := resp.JSON200.PostGameCarnageReportData
-	if data.Entries == nil || data.ActivityDetails == nil {
+	if resp.JSON200 == nil || resp.JSON200.PostGameCarnageReportData == nil {
 		l.Error("No data found for activity")
 		return nil, fmt.Errorf("nil data response")
 	}
+	data := resp.JSON200.PostGameCarnageReportData
 
 	performances := make(map[string]api.InstancePerformance)
 	characterSet := set.FromSlice(characterIDs)
 	items := buildItemsSet(ctx, data, characterSet, a)
-	for _, entry := range *data.Entries {
-		if entry.CharacterId == nil {
-			continue
-		}
-		if characterSet.Contains(*entry.CharacterId) {
-			p := CarnageEntryToInstancePerformance(&entry, items)
-			if p == nil {
+	if data.Entries != nil {
+		for _, entry := range *data.Entries {
+			if entry.CharacterId == nil {
 				continue
 			}
-			performances[*entry.CharacterId] = *p
+			if characterSet.Contains(*entry.CharacterId) {
+				p := CarnageEntryToInstancePerformance(&entry, items)
+				if p == nil {
+					continue
+				}
+				performances[*entry.CharacterId] = *p
+			}
 		}
 	}
+
+	if data.ActivityDetails == nil || data.ActivityDetails.ReferenceId == nil || data.ActivityDetails.DirectorActivityHash == nil {
+		return nil, fmt.Errorf("activity details missing")
+	}
+
 	activityDef, err := a.ManifestService.GetActivity(ctx, int64(*data.ActivityDetails.ReferenceId))
-	if err != nil {
-		return nil, err
+	if err != nil || activityDef == nil {
+		return nil, fmt.Errorf("failed to load activity manifest: %v", err)
 	}
 	directoryDef, err := a.ManifestService.GetActivity(ctx, int64(*data.ActivityDetails.DirectorActivityHash))
-	if err != nil {
-		return nil, err
+	if err != nil || directoryDef == nil {
+		return nil, fmt.Errorf("failed to load directory activity manifest: %v", err)
 	}
 	mode, err := a.ManifestService.GetActivityMode(ctx, int64(activityDef.DirectActivityModeHash))
-	if err != nil {
-		return nil, err
+	if err != nil || mode == nil {
+		return nil, fmt.Errorf("failed to load activity mode manifest: %v", err)
 	}
 
 	details := TransformHistoricActivity(data.ActivityDetails, *activityDef, *directoryDef, *mode)
-	details.Period = *data.Period
+	if details != nil && data.Period != nil {
+		details.Period = *data.Period
+	}
+	entries := make([]bungie.PostGameCarnageReportEntry, 0)
+	if data.Entries != nil {
+		entries = *data.Entries
+	}
 	result := EnrichedActivity{
 		Period:          data.Period,
 		Activity:        details,
 		Performances:    performances,
 		Teams:           TransformTeams(data.Teams),
-		PostGameEntries: *data.Entries,
+		PostGameEntries: entries,
 	}
 	return &result, nil
 }
 
 func buildItemsSet(ctx context.Context, data *bungie.PostGameCarnageReportData, characterSet *set.Set[string], a *service) map[string]ItemDefinition {
 	items := make(map[string]ItemDefinition)
+	if data == nil || data.Entries == nil {
+		return items
+	}
 	for _, entry := range *data.Entries {
 		if entry.CharacterId == nil {
 			continue
 		}
 		if characterSet.Contains(*entry.CharacterId) {
-			if entry.Extended.Weapons != nil {
+			if entry.Extended != nil && entry.Extended.Weapons != nil {
 				for _, stats := range *entry.Extended.Weapons {
 					if stats.ReferenceId != nil {
 						id := *stats.ReferenceId
@@ -285,7 +301,7 @@ func (a *service) GetItemDetails(ctx context.Context, membershipID int64, member
 		).Error("Failed to get item details")
 		return nil, err
 	}
-	if response.JSON200.DestinyItem == nil {
+	if response.JSON200 == nil || response.JSON200.DestinyItem == nil {
 		return nil, nil
 	}
 
@@ -305,14 +321,14 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 
 	// TODO: Migrate snapshot to include the guns information as it is now, since mods and perks could change on the same gun.
 
-	if test.JSON200 == nil {
+	if test.JSON200 == nil || test.JSON200.Response == nil {
 		return nil, nil, nil, fmt.Errorf("no response found")
 	}
 
 	timeStamp := test.JSON200.Response.ResponseMintedTimestamp
 
 	results := make([]bungie.ItemComponent, 0)
-	if test.JSON200.Response.CharacterEquipment.Data != nil {
+	if test.JSON200.Response.CharacterEquipment != nil && test.JSON200.Response.CharacterEquipment.Data != nil {
 		equipment := *test.JSON200.Response.CharacterEquipment.Data
 		for ID, equ := range equipment {
 			if characterID == ID {
@@ -350,7 +366,7 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 		slog.Warn("failed to get statDefinitions but still will generate stats", "error", err)
 	}
 	stats := make(map[string]api.ClassStat)
-	if test.JSON200.Response.Characters.Data != nil {
+	if test.JSON200.Response.Characters != nil && test.JSON200.Response.Characters.Data != nil {
 		characters := *test.JSON200.Response.Characters.Data
 		for ID, character := range characters {
 			if characterID == ID && character.Stats != nil {
@@ -435,7 +451,7 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 		return nil, fmt.Errorf("failed to get characters")
 	}
 
-	if resp.JSON200 == nil || resp.JSON200.Response.Characters == nil {
+	if resp.JSON200 == nil || resp.JSON200.Response == nil || resp.JSON200.Response.Characters == nil || resp.JSON200.Response.Characters.Data == nil {
 		slog.Error("Bungie profile response missing character data",
 			"statusCode", resp.StatusCode(),
 			"primaryMembershipId", primaryMembershipId,
@@ -501,14 +517,11 @@ func (a *service) GetPartyMembers(ctx context.Context, primaryMembershipId int64
 		return nil, fmt.Errorf("failed to get characters")
 	}
 
-	if resp.JSON200 == nil {
+	if resp.JSON200 == nil || resp.JSON200.Response == nil {
 		return nil, fmt.Errorf("no response found")
 	}
 
-	if resp.JSON200.Response.ProfileTransitoryData.Data == nil {
-		return nil, nil
-	}
-	if resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers == nil {
+	if resp.JSON200.Response.ProfileTransitoryData == nil || resp.JSON200.Response.ProfileTransitoryData.Data == nil || resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers == nil {
 		return nil, nil
 	}
 	return *resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers, nil
@@ -520,22 +533,15 @@ func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.
 	if err != nil {
 		return nil, false, err
 	}
-	if resp.JSON200 == nil {
+	if resp.JSON200 == nil || resp.JSON200.SearchResponse == nil {
 		return nil, false, fmt.Errorf("no response")
 	}
-	if resp.JSON200.SearchResponse == nil {
-		return nil, false, fmt.Errorf("empty response")
+	hasMore := false
+	if resp.JSON200.SearchResponse.HasMore != nil {
+		hasMore = *resp.JSON200.SearchResponse.HasMore
 	}
 	results := make([]api.SearchUserResult, 0)
-	//for _, data := range *resp.JSON200.SearchResponse.SearchResults {
-	//	d := TransformUserSearchDetail(data)
-	//	if d == nil {
-	//		continue
-	//	}
-	//	results = append(results, *d)
-	//}
-
-	return results, *resp.JSON200.SearchResponse.HasMore, nil
+	return results, hasMore, nil
 }
 
 func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.PostGameCarnageReportData, []api.Team, error) {
@@ -551,11 +557,11 @@ func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.P
 		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, nil, err
 	}
-	data := resp.JSON200.PostGameCarnageReportData
-	if data.Entries == nil || data.ActivityDetails == nil {
+	if resp.JSON200 == nil || resp.JSON200.PostGameCarnageReportData == nil {
 		l.Error("No data found for activity")
 		return nil, nil, fmt.Errorf("nil data response")
 	}
+	data := resp.JSON200.PostGameCarnageReportData
 
 	return data, TransformTeams(data.Teams), nil
 }
