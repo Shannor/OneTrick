@@ -78,6 +78,7 @@ func main() {
 	defer firestore.Close()
 
 	r := gin.New()
+	r.Use(logger.SlogLogger())
 	r.Use(logger.SlogRecovery())
 	r.Use(cors.Default())
 

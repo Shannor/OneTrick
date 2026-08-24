@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -79,5 +80,42 @@ func SlogRecovery() gin.HandlerFunc {
 			}
 		}()
 		c.Next()
+	}
+}
+
+// SlogLogger returns a Gin middleware that logs HTTP request details using slog in GCP JSON format.
+func SlogLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		rawQuery := c.Request.URL.RawQuery
+
+		c.Next()
+
+		latency := time.Since(start)
+		status := c.Writer.Status()
+		clientIP := c.ClientIP()
+		method := c.Request.Method
+		userAgent := c.Request.UserAgent()
+
+		if rawQuery != "" {
+			path = path + "?" + rawQuery
+		}
+
+		level := slog.LevelInfo
+		if status >= 500 {
+			level = slog.LevelError
+		} else if status >= 400 {
+			level = slog.LevelWarn
+		}
+
+		slog.Log(c.Request.Context(), level, "HTTP request handled",
+			"status", status,
+			"method", method,
+			"path", path,
+			"latencyMs", latency.Milliseconds(),
+			"clientIP", clientIP,
+			"userAgent", userAgent,
+		)
 	}
 }

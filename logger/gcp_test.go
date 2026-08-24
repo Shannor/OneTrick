@@ -97,3 +97,47 @@ func TestSlogRecovery(t *testing.T) {
 		t.Errorf("Expected stackTrace to be present")
 	}
 }
+
+func TestSlogLogger(t *testing.T) {
+	var buf bytes.Buffer
+	handler := NewGCPHandlerWithWriter(&buf, slog.LevelInfo)
+	slog.SetDefault(slog.New(handler))
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(SlogLogger())
+
+	r.GET("/ping", func(c *gin.Context) {
+		c.String(http.StatusOK, "pong")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/ping", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status code 200, got %d", w.Code)
+	}
+
+	var parsed map[string]any
+	err := json.Unmarshal(buf.Bytes(), &parsed)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal log output: %v, raw: %s", err, buf.String())
+	}
+
+	if parsed["severity"] != "INFO" {
+		t.Errorf("Expected severity 'INFO', got %v", parsed["severity"])
+	}
+
+	if parsed["message"] != "HTTP request handled" {
+		t.Errorf("Expected message 'HTTP request handled', got %v", parsed["message"])
+	}
+
+	if parsed["path"] != "/ping" {
+		t.Errorf("Expected path '/ping', got %v", parsed["path"])
+	}
+
+	if parsed["method"] != "GET" {
+		t.Errorf("Expected method 'GET', got %v", parsed["method"])
+	}
+}
