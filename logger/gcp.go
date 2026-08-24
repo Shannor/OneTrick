@@ -48,6 +48,6 @@ func NewGCPHandlerWithWriter(w io.Writer, level slog.Level) slog.Handler {
 			return a
 		},
 	}).WithAttrs([]slog.Attr{
-		slog.String("logger", "go"),
+		slog.String("logger", "onetrick-service"),
 	})
 }
