@@ -169,6 +169,9 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 					break
 				}
 			}
+			if t == 0 && len(u.Memberships) > 0 {
+				t = u.Memberships[0].Type
+			}
 			pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 			if err != nil {
 				slog.Error("failed to parse primary membership id", "error", err)
@@ -202,6 +205,9 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 				t = membership.Type
 				break
 			}
+		}
+		if t == 0 && len(u.Memberships) > 0 {
+			t = u.Memberships[0].Type
 		}
 		pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 		if err != nil {
@@ -445,38 +451,109 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		slog.Error("Failed to fetch current user profile from Bungie during login", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
-	if bUser.BungieNetUser == nil && bUser.DestinyMemberships == nil {
+	if bUser == nil || (bUser.BungieNetUser == nil && bUser.DestinyMemberships == nil) {
 		slog.Error("Bungie user membership data was empty during login", "membershipID", resp.MembershipID)
 		return nil, fmt.Errorf("failed to fetch user data")
 	}
+
 	m := make([]user.Membership, 0)
-	u := user.User{
-		MemberID:    *bUser.BungieNetUser.MembershipId,
-		DisplayName: *bUser.BungieNetUser.DisplayName,
-		UniqueName:  *bUser.BungieNetUser.UniqueName,
+	u := user.User{}
+
+	if bUser.BungieNetUser != nil {
+		if bUser.BungieNetUser.MembershipId != nil {
+			u.MemberID = *bUser.BungieNetUser.MembershipId
+		}
+		if bUser.BungieNetUser.DisplayName != nil {
+			u.DisplayName = *bUser.BungieNetUser.DisplayName
+		}
+		if bUser.BungieNetUser.UniqueName != nil {
+			u.UniqueName = *bUser.BungieNetUser.UniqueName
+		}
 	}
+	if u.MemberID == "" {
+		u.MemberID = resp.MembershipID
+	}
+
 	if bUser.PrimaryMembershipId != nil {
 		u.PrimaryMembershipID = *bUser.PrimaryMembershipId
 	}
+
 	membershipType := int64(0)
-	for i, mem := range *bUser.DestinyMemberships {
-		if i == 0 && bUser.PrimaryMembershipId == nil {
-			u.PrimaryMembershipID = *mem.MembershipId
-			membershipType = int64(int(*mem.MembershipType))
+	if bUser.DestinyMemberships != nil {
+		for _, mem := range *bUser.DestinyMemberships {
+			if mem.MembershipId == nil || mem.MembershipType == nil {
+				continue
+			}
+			memID := *mem.MembershipId
+			memType := int64(*mem.MembershipType)
+			displayName := ""
+			if mem.DisplayName != nil {
+				displayName = *mem.DisplayName
+			}
+
+			m = append(m, user.Membership{
+				ID:          memID,
+				Type:        memType,
+				DisplayName: displayName,
+			})
+
+			// Match primary membership ID to determine membershipType
+			if u.PrimaryMembershipID != "" && memID == u.PrimaryMembershipID {
+				membershipType = memType
+			}
+
+			// If PrimaryMembershipID was not set by Bungie, fallback to first membership
+			if u.PrimaryMembershipID == "" {
+				u.PrimaryMembershipID = memID
+				membershipType = memType
+			}
 		}
-		m = append(m, user.Membership{
-			ID:          *mem.MembershipId,
-			Type:        int64(*mem.MembershipType),
-			DisplayName: *mem.DisplayName,
-		})
 	}
-	id, _ := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+
+	// Fallback if membershipType is still 0 but memberships exist
+	if membershipType == 0 && len(m) > 0 {
+		membershipType = m[0].Type
+		if u.PrimaryMembershipID == "" {
+			u.PrimaryMembershipID = m[0].ID
+		}
+	}
+
+	if u.DisplayName == "" && len(m) > 0 {
+		u.DisplayName = m[0].DisplayName
+	}
+
+	slog.Info("Resolved user memberships during login",
+		"membershipID", resp.MembershipID,
+		"primaryMembershipID", u.PrimaryMembershipID,
+		"membershipType", membershipType,
+		"numMemberships", len(m),
+		"displayName", u.DisplayName,
+	)
+
+	if u.PrimaryMembershipID == "" {
+		slog.Error("User has no primary membership ID or destiny memberships", "membershipID", resp.MembershipID)
+		return nil, fmt.Errorf("user has no destiny memberships linked")
+	}
+
+	id, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	if err != nil {
+		slog.Error("Failed to parse primary membership ID", "error", err, "primaryMembershipID", u.PrimaryMembershipID, "membershipID", resp.MembershipID)
+		return nil, fmt.Errorf("invalid primary membership ID: %w", err)
+	}
+
 	chars, err := s.D2Service.GetCharacters(ctx, id, membershipType)
 	if err != nil {
-		slog.Error("Failed to fetch characters for new user during login", "error", err, "primaryMembershipID", u.PrimaryMembershipID, "membershipType", membershipType)
+		slog.Error("Failed to fetch characters for new user during login",
+			"error", err,
+			"primaryMembershipID", u.PrimaryMembershipID,
+			"membershipType", membershipType,
+			"membershipID", resp.MembershipID,
+		)
 		return nil, err
 	}
-	charIDs := make([]string, 0)
+	slog.Info("Successfully fetched characters for new user", "primaryMembershipID", u.PrimaryMembershipID, "membershipType", membershipType, "numCharacters", len(chars))
+
+	charIDs := make([]string, 0, len(chars))
 	for _, char := range chars {
 		charIDs = append(charIDs, char.Id)
 	}
@@ -491,7 +568,7 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return nil, err
 	}
 
-	slog.Info("Successfully registered and logged in new user", "userID", newUser.ID, "membershipID", resp.MembershipID)
+	slog.Info("Successfully registered and logged in new user", "userID", newUser.ID, "membershipID", resp.MembershipID, "primaryMembershipID", newUser.PrimaryMembershipID)
 	now := time.Now()
 	result := api.AuthResponse{
 		AccessToken:         resp.AccessToken,

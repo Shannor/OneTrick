@@ -143,6 +143,9 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 			break
 		}
 	}
+	if t == 0 && len(u.Memberships) > 0 {
+		t = u.Memberships[0].Type
+	}
 	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse primary membership id")
@@ -195,6 +198,9 @@ func (s *userService) BackfillCharacters(ctx context.Context, userID string) err
 			membershipType = m.Type
 			break
 		}
+	}
+	if membershipType == 0 && len(u.Memberships) > 0 {
+		membershipType = u.Memberships[0].Type
 	}
 	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 	if err != nil {

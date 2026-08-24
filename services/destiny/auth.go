@@ -148,8 +148,24 @@ func (a *AuthServiceImpl) GetCurrentUser(ctx context.Context, token string) (*bu
 		slog.Error("Bungie returned nil membership data", "statusCode", resp.StatusCode(), "rawBody", string(resp.Body))
 		return nil, fmt.Errorf("no membership data")
 	}
-	slog.Info("Successfully fetched current user membership data from Bungie")
-	return resp.JSON200.MembershipData, nil
+
+	data := resp.JSON200.MembershipData
+	numMemberships := 0
+	if data.DestinyMemberships != nil {
+		numMemberships = len(*data.DestinyMemberships)
+	}
+	primaryID := "<none>"
+	if data.PrimaryMembershipId != nil {
+		primaryID = *data.PrimaryMembershipId
+	}
+	hasBungieNetUser := data.BungieNetUser != nil
+
+	slog.Info("Successfully fetched current user membership data from Bungie",
+		"hasBungieNetUser", hasBungieNetUser,
+		"primaryMembershipId", primaryID,
+		"numDestinyMemberships", numMemberships,
+	)
+	return data, nil
 }
 
 func (a *AuthServiceImpl) HasAccess(ctx context.Context, membershipID, token string) (bool, error) {

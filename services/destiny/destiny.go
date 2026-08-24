@@ -418,22 +418,30 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 	}
 	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), primaryMembershipId, params)
 	if err != nil {
-		slog.With("error", err.Error()).Error("failed to get profile")
+		slog.Error("Failed to request profile from Bungie", "error", err, "primaryMembershipId", primaryMembershipId, "membershipType", membershipType)
 		return nil, err
 	}
 	if resp.StatusCode() != http.StatusOK {
 		if resp.StatusCode() == http.StatusServiceUnavailable {
 			return nil, ErrDestinyServerDown
 		}
-		slog.With("status", resp.Status(), "status code", resp.StatusCode()).Error("failed to get profile")
+		slog.Error("Bungie returned non-200 status fetching profile",
+			"status", resp.Status(),
+			"statusCode", resp.StatusCode(),
+			"primaryMembershipId", primaryMembershipId,
+			"membershipType", membershipType,
+			"rawBody", string(resp.Body),
+		)
 		return nil, fmt.Errorf("failed to get characters")
 	}
 
-	if resp.JSON200 == nil {
-		return nil, fmt.Errorf("no response found")
-	}
-
-	if resp.JSON200.Response.Characters == nil {
+	if resp.JSON200 == nil || resp.JSON200.Response.Characters == nil {
+		slog.Error("Bungie profile response missing character data",
+			"statusCode", resp.StatusCode(),
+			"primaryMembershipId", primaryMembershipId,
+			"membershipType", membershipType,
+			"rawBody", string(resp.Body),
+		)
 		return nil, fmt.Errorf("no response found")
 	}
 	classes, err := a.ManifestService.GetClasses(ctx)
