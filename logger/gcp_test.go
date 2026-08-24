@@ -35,4 +35,8 @@ func TestGCPHandler(t *testing.T) {
 	if parsed["userId"] != "user-456" {
 		t.Errorf("Expected userId 'user-456', got %v", parsed["userId"])
 	}
+
+	if parsed["logger"] != "go" {
+		t.Errorf("Expected logger 'go', got %v", parsed["logger"])
+	}
 }
