@@ -28,8 +28,8 @@ func TestGCPHandler(t *testing.T) {
 		t.Errorf("Expected timestamp field to be present, got nil")
 	}
 
-	if parsed["message"] != "Session warning test" {
-		t.Errorf("Expected message 'Session warning test', got %v", parsed["message"])
+	if parsed["message"] != "[onetrick-service] Session warning test" {
+		t.Errorf("Expected message '[onetrick-service] Session warning test', got %v", parsed["message"])
 	}
 
 	if parsed["sessionID"] != "test-session-123" {
@@ -40,7 +40,8 @@ func TestGCPHandler(t *testing.T) {
 		t.Errorf("Expected userId 'user-456', got %v", parsed["userId"])
 	}
 
-	if parsed["logger"] != "onetrick-service" {
-		t.Errorf("Expected logger 'onetrick-service', got %v", parsed["logger"])
+	labels, ok := parsed["logging.googleapis.com/labels"].(map[string]any)
+	if !ok || labels["logger"] != "onetrick-service" {
+		t.Errorf("Expected logging.googleapis.com/labels with logger 'onetrick-service', got %v", parsed["logging.googleapis.com/labels"])
 	}
 }

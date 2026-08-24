@@ -27,6 +27,7 @@ func NewGCPHandlerWithWriter(w io.Writer, level slog.Level) slog.Handler {
 				a.Key = "timestamp"
 			case slog.MessageKey:
 				a.Key = "message"
+				a.Value = slog.StringValue("[onetrick-service] " + a.Value.String())
 			case slog.LevelKey:
 				a.Key = "severity"
 				if l, ok := a.Value.Any().(slog.Level); ok {
@@ -48,6 +49,8 @@ func NewGCPHandlerWithWriter(w io.Writer, level slog.Level) slog.Handler {
 			return a
 		},
 	}).WithAttrs([]slog.Attr{
-		slog.String("logger", "onetrick-service"),
+		slog.Any("logging.googleapis.com/labels", map[string]string{
+			"logger": "onetrick-service",
+		}),
 	})
 }
