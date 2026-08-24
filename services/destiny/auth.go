@@ -45,7 +45,18 @@ func (a AuthError) Error() string {
 	return fmt.Sprintf("%s: %s", a.ErrorType, a.ErrorMessage)
 }
 
+func CodeSnippet(code string) string {
+	if len(code) == 0 {
+		return "<empty>"
+	}
+	if len(code) <= 8 {
+		return "***"
+	}
+	return code[:4] + "..." + code[len(code)-4:]
+}
+
 func (a *AuthServiceImpl) GetAccessToken(context context.Context, code string) (*AuthResponse, error) {
+	slog.Info("Requesting access token from Bungie OAuth", "codeLen", len(code), "codeSnippet", CodeSnippet(code))
 	encodedCredentials := base64.StdEncoding.EncodeToString([]byte(a.clientID + ":" + a.clientSecret))
 	response := &AuthResponse{}
 	responseError := &AuthError{}
@@ -56,7 +67,7 @@ func (a *AuthServiceImpl) GetAccessToken(context context.Context, code string) (
 	}
 	resp, err := a.http.R().
 		SetHeader("Authorization", fmt.Sprintf("Basic %s", encodedCredentials)).
-		SetHeader("Context-Type", "application/x-www-form-urlencoded").
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
 		SetResult(&response).
 		SetError(&responseError).
 		SetHeader("Response-Type", "application/json").
@@ -64,16 +75,27 @@ func (a *AuthServiceImpl) GetAccessToken(context context.Context, code string) (
 		Post("https://www.bungie.net/Platform/App/OAuth/Token")
 
 	if err != nil {
-		slog.With("error", err.Error()).Error("Error getting access token")
+		slog.Error("Network error getting access token from Bungie", "error", err, "codeLen", len(code), "codeSnippet", CodeSnippet(code))
 		return nil, err
 	}
 	if resp.IsError() {
-		return nil, fmt.Errorf("error getting access token: %s ", responseError.Error())
+		slog.Error("Bungie OAuth token exchange failed",
+			"statusCode", resp.StatusCode(),
+			"status", resp.Status(),
+			"errorType", responseError.ErrorType,
+			"errorDescription", responseError.ErrorMessage,
+			"rawBody", resp.String(),
+			"codeLen", len(code),
+			"codeSnippet", CodeSnippet(code),
+		)
+		return nil, fmt.Errorf("error getting access token: %s", responseError.Error())
 	}
+	slog.Info("Successfully obtained access token from Bungie", "membershipID", response.MembershipID, "expiresIn", response.ExpiresIn)
 	return response, nil
 }
 
 func (a *AuthServiceImpl) RefreshAccessToken(refreshToken string) (*AuthResponse, error) {
+	slog.Info("Requesting access token refresh from Bungie OAuth", "refreshTokenLen", len(refreshToken))
 	encodedCredentials := base64.StdEncoding.EncodeToString([]byte(a.clientID + ":" + a.clientSecret))
 	response := &AuthResponse{}
 	responseError := &AuthError{}
@@ -82,7 +104,7 @@ func (a *AuthServiceImpl) RefreshAccessToken(refreshToken string) (*AuthResponse
 		"refresh_token": []string{refreshToken},
 	}
 	resp, err := a.http.R().
-		SetHeader("Context-Type", "application/x-www-form-urlencoded").
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
 		SetHeader("Authorization", fmt.Sprintf("Basic %s", encodedCredentials)).
 		SetHeader("Response-Type", "application/json").
 		SetFormDataFromValues(values).
@@ -90,28 +112,44 @@ func (a *AuthServiceImpl) RefreshAccessToken(refreshToken string) (*AuthResponse
 		SetError(&responseError).
 		Post("https://www.bungie.net/Platform/App/OAuth/Token")
 	if err != nil {
+		slog.Error("Network error refreshing access token from Bungie", "error", err)
 		return nil, err
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("error getting access token: %s ", responseError.Error())
+		slog.Error("Bungie OAuth token refresh failed",
+			"statusCode", resp.StatusCode(),
+			"status", resp.Status(),
+			"errorType", responseError.ErrorType,
+			"errorDescription", responseError.ErrorMessage,
+			"rawBody", resp.String(),
+		)
+		return nil, fmt.Errorf("error refreshing access token: %s", responseError.Error())
 	}
+	slog.Info("Successfully refreshed access token from Bungie", "membershipID", response.MembershipID, "expiresIn", response.ExpiresIn)
 	return response, nil
 }
 
 func (a *AuthServiceImpl) GetCurrentUser(ctx context.Context, token string) (*bungie.MembershipData, error) {
+	slog.Info("Fetching current user membership data from Bungie")
 	resp, err := a.bungieClient.UserGetMembershipDataForCurrentUserWithResponse(ctx, func(ctx context.Context, req *http.Request) error {
 		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", token))
 		return nil
 	})
 	if err != nil {
+		slog.Error("Failed to request current user membership data from Bungie", "error", err)
 		return nil, err
 	}
-	data := resp.JSON200.MembershipData
-	if data == nil {
+	if resp.StatusCode() != http.StatusOK {
+		slog.Error("Bungie returned non-200 status fetching current user membership data", "statusCode", resp.StatusCode(), "status", resp.Status(), "rawBody", string(resp.Body))
+		return nil, fmt.Errorf("bungie API error: status %d", resp.StatusCode())
+	}
+	if resp.JSON200 == nil || resp.JSON200.MembershipData == nil {
+		slog.Error("Bungie returned nil membership data", "statusCode", resp.StatusCode(), "rawBody", string(resp.Body))
 		return nil, fmt.Errorf("no membership data")
 	}
-	return data, nil
+	slog.Info("Successfully fetched current user membership data from Bungie")
+	return resp.JSON200.MembershipData, nil
 }
 
 func (a *AuthServiceImpl) HasAccess(ctx context.Context, membershipID, token string) (bool, error) {
@@ -120,16 +158,14 @@ func (a *AuthServiceImpl) HasAccess(ctx context.Context, membershipID, token str
 		return nil
 	})
 	if err != nil {
+		slog.Error("Failed to check access with Bungie", "error", err, "targetMembershipID", membershipID)
 		return false, err
 	}
-	if resp.JSON200 == nil {
+	if resp.JSON200 == nil || resp.JSON200.MembershipData == nil || resp.JSON200.MembershipData.BungieNetUser == nil {
+		slog.Warn("Bungie user data incomplete while checking access", "statusCode", resp.StatusCode(), "targetMembershipID", membershipID)
 		return false, nil
 	}
-	if resp.JSON200.MembershipData == nil {
-		return false, nil
-	}
-	if resp.JSON200.MembershipData.BungieNetUser == nil {
-		return false, nil
-	}
-	return *resp.JSON200.MembershipData.BungieNetUser.MembershipId == membershipID, nil
+	hasAccess := *resp.JSON200.MembershipData.BungieNetUser.MembershipId == membershipID
+	slog.Info("Completed access check", "targetMembershipID", membershipID, "hasAccess", hasAccess)
+	return hasAccess, nil
 }

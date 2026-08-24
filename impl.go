@@ -408,17 +408,21 @@ func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestO
 
 func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.LoginResponseObject, error) {
 	code := request.Body.Code
+	slog.Info("Login request received", "codeLen", len(code), "codeSnippet", destiny.CodeSnippet(code))
+
 	resp, err := s.D2AuthService.GetAccessToken(ctx, code)
 	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to fetch access token")
+		slog.Error("Failed to fetch access token during login", "error", err, "codeLen", len(code), "codeSnippet", destiny.CodeSnippet(code))
 		return nil, err
 	}
 
 	existingUser, err := s.UserService.GetUser(ctx, resp.MembershipID)
 	if err != nil && !errors.Is(err, user.NotFound) {
+		slog.Error("Failed to fetch existing user from database during login", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
 	if existingUser != nil {
+		slog.Info("Login successful for existing user", "userID", existingUser.ID, "membershipID", resp.MembershipID)
 		now := time.Now()
 		result := api.AuthResponse{
 			AccessToken:         resp.AccessToken,
@@ -434,12 +438,15 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return api.Login200JSONResponse(result), nil
 	}
 
+	slog.Info("Creating new user account after Bungie OAuth login", "membershipID", resp.MembershipID)
 	// TODO: Split into it's own function, when no account exists
 	bUser, err := s.D2AuthService.GetCurrentUser(ctx, resp.AccessToken)
 	if err != nil {
+		slog.Error("Failed to fetch current user profile from Bungie during login", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
 	if bUser.BungieNetUser == nil && bUser.DestinyMemberships == nil {
+		slog.Error("Bungie user membership data was empty during login", "membershipID", resp.MembershipID)
 		return nil, fmt.Errorf("failed to fetch user data")
 	}
 	m := make([]user.Membership, 0)
@@ -466,6 +473,7 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 	id, _ := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 	chars, err := s.D2Service.GetCharacters(ctx, id, membershipType)
 	if err != nil {
+		slog.Error("Failed to fetch characters for new user during login", "error", err, "primaryMembershipID", u.PrimaryMembershipID, "membershipType", membershipType)
 		return nil, err
 	}
 	charIDs := make([]string, 0)
@@ -479,9 +487,11 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 
 	newUser, err := s.UserService.CreateUser(ctx, &u)
 	if err != nil {
+		slog.Error("Failed to create new user in database during login", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
 
+	slog.Info("Successfully registered and logged in new user", "userID", newUser.ID, "membershipID", resp.MembershipID)
 	now := time.Now()
 	result := api.AuthResponse{
 		AccessToken:         resp.AccessToken,
@@ -498,14 +508,18 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 }
 
 func (s Server) RefreshToken(ctx context.Context, request api.RefreshTokenRequestObject) (api.RefreshTokenResponseObject, error) {
+	slog.Info("Refresh token request received")
 	resp, err := s.D2AuthService.RefreshAccessToken(request.Body.Code)
 	if err != nil {
+		slog.Error("Failed to refresh access token", "error", err)
 		return nil, err
 	}
 	existingUser, err := s.UserService.GetUser(ctx, resp.MembershipID)
 	if err != nil {
+		slog.Error("Failed to fetch user from database during token refresh", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
+	slog.Info("Token refreshed successfully for user", "userID", existingUser.ID, "membershipID", resp.MembershipID)
 	now := time.Now()
 	result := api.AuthResponse{
 		AccessToken:         resp.AccessToken,

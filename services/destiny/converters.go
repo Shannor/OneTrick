@@ -7,8 +7,6 @@ import (
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
 	"strconv"
-
-
 )
 
 func setBaseBungieURL(value *string) string {
