@@ -52,25 +52,63 @@ func TransformItemToDetails(
 }
 
 func TransformCharacter(item *bungie.CharacterComponent, classes map[string]ClassDefinition, races map[string]RaceDefinition, records map[string]RecordDefinition) api.Character {
-	class := classes[strconv.Itoa(int(*item.ClassHash))]
-	race := races[strconv.Itoa(int(*item.RaceHash))]
-	title := records[strconv.Itoa(int(*item.TitleRecordHash))]
-	return api.Character{
-		Class:               class.DisplayProperties.Name,
-		EmblemBackgroundURL: setBaseBungieURL(item.EmblemBackgroundPath),
-		EmblemURL:           setBaseBungieURL(item.EmblemPath),
-		Id:                  *item.CharacterId,
-		Light:               int64(*item.Light),
-		Race:                race.DisplayProperties.Name,
-		CurrentTitle:        title.TitleInfo.TitlesByGender.Male,
-		EmblemColor: api.Color{
-			Alpha: *item.EmblemColor.Alpha,
-			Blue:  *item.EmblemColor.Blue,
-			Green: *item.EmblemColor.Green,
-			Red:   *item.EmblemColor.Red,
-		},
+	if item == nil {
+		return api.Character{}
 	}
 
+	c := api.Character{}
+
+	if item.CharacterId != nil {
+		c.Id = *item.CharacterId
+	}
+	if item.Light != nil {
+		c.Light = int64(*item.Light)
+	}
+
+	if item.ClassHash != nil {
+		if class, ok := classes[strconv.Itoa(int(*item.ClassHash))]; ok {
+			c.Class = class.DisplayProperties.Name
+		}
+	}
+
+	if item.RaceHash != nil {
+		if race, ok := races[strconv.Itoa(int(*item.RaceHash))]; ok {
+			c.Race = race.DisplayProperties.Name
+		}
+	}
+
+	if item.TitleRecordHash != nil {
+		if title, ok := records[strconv.Itoa(int(*item.TitleRecordHash))]; ok {
+			if title.TitleInfo.TitlesByGender.Male != "" {
+				c.CurrentTitle = title.TitleInfo.TitlesByGender.Male
+			} else if title.TitleInfo.TitlesByGender.Female != "" {
+				c.CurrentTitle = title.TitleInfo.TitlesByGender.Female
+			} else {
+				c.CurrentTitle = title.DisplayProperties.Name
+			}
+		}
+	}
+
+	c.EmblemBackgroundURL = setBaseBungieURL(item.EmblemBackgroundPath)
+	c.EmblemURL = setBaseBungieURL(item.EmblemPath)
+
+	if item.EmblemColor != nil {
+		ec := item.EmblemColor
+		if ec.Alpha != nil {
+			c.EmblemColor.Alpha = *ec.Alpha
+		}
+		if ec.Blue != nil {
+			c.EmblemColor.Blue = *ec.Blue
+		}
+		if ec.Green != nil {
+			c.EmblemColor.Green = *ec.Green
+		}
+		if ec.Red != nil {
+			c.EmblemColor.Red = *ec.Red
+		}
+	}
+
+	return c
 }
 func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition, damages map[string]DamageType) api.BaseItemInfo {
 	c := *item.Item.ItemComponent
