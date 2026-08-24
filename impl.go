@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/fatih/structs"
-	"github.com/rs/zerolog/log"
 )
 
 // ensure that we've conformed to the `ServerInterface` with a compile-time check
@@ -70,7 +69,7 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 		for key, item := range snap.Loadout { // item is a copy of the struct in the map
 			d2Item, err := s.D2ManifestService.GetItem(ctx, item.ItemHash)
 			if err != nil {
-				log.Warn().Err(err).Msg("failed to get item from manifest")
+				slog.Warn("failed to get item from manifest", "error", err)
 				failed++
 				continue
 			}
@@ -85,7 +84,7 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 			return nil
 		})
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to update snapshot")
+			slog.Warn("failed to update snapshot", "error", err)
 			failed++
 		}
 		updated++
@@ -162,7 +161,7 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 	go func() {
 		// Perform update for characters if needed
 		if u.LastUpdatedCharacters.Add(time.Hour).Before(time.Now()) {
-			log.Info().Str("userId", u.ID).Msg("Updating characters for user")
+			slog.Info("Updating characters for user", "userId", u.ID)
 			t := int64(0)
 			for _, membership := range u.Memberships {
 				if membership.ID == u.PrimaryMembershipID {
@@ -172,7 +171,7 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 			}
 			pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 			if err != nil {
-				log.Error().Err(err).Msg("failed to parse primary membership id")
+				slog.Error("failed to parse primary membership id", "error", err)
 				return
 			}
 
@@ -180,10 +179,10 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 			if len(characters) > 0 {
 				err = s.UserService.UpdateCharacters(ctx, u.ID, characters)
 				if err != nil {
-					log.Error().Err(err).Msg("failed to update characters")
+					slog.Error("failed to update characters", "error", err)
 				}
 			} else {
-				log.Warn().Str("userId", u.ID).Msg("no characters found for user")
+				slog.Warn("no characters found for user", "userId", u.ID)
 			}
 		}
 	}()
@@ -206,7 +205,7 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 		}
 		pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to parse primary membership id")
+			slog.Error("failed to parse primary membership id", "error", err)
 			return result, err
 		}
 		characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
@@ -261,10 +260,10 @@ func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestO
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	sessionID := request.SessionId
-	l := log.With().Str("sessionID", sessionID).Logger()
+	l := slog.With("sessionID", sessionID)
 	ses, err := s.SessionService.Get(ctx, sessionID)
 	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch session")
+		l.Error("failed to fetch session", "error", err)
 		return nil, err
 	}
 	return api.GetSession200JSONResponse(*ses), nil
@@ -299,7 +298,6 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 		// Return a 500 error
 		return nil, err
 	}
-
 	return api.GetSessions200JSONResponse(result), nil
 }
 
@@ -533,11 +531,11 @@ func (s Server) UpdateSnapshot(ctx context.Context, request api.UpdateSnapshotRe
 	snapshotID := request.SnapshotID
 	snap, err := s.SnapshotService.Get(ctx, snapshotID)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to fetch snapshot")
+		slog.Error("failed to fetch snapshot", "error", err)
 		return api.UpdateSnapshot404JSONResponse{Message: "snapshot not found"}, nil
 	}
 	if snap.UserID != request.Params.XUserID {
-		log.Error().Msg("unauthorized to update snapshot")
+		slog.Error("unauthorized to update snapshot")
 		return api.UpdateSnapshot401JSONResponse{Message: "unauthorized"}, nil
 	}
 
@@ -551,13 +549,13 @@ func (s Server) UpdateSnapshot(ctx context.Context, request api.UpdateSnapshotRe
 		return nil
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("failed to update snapshot")
+		slog.Error("failed to update snapshot", "error", err)
 		return nil, err
 	}
 
 	snap, err = s.SnapshotService.Get(ctx, snapshotID)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to fetch snapshot")
+		slog.Error("failed to fetch snapshot", "error", err)
 		return nil, err
 	}
 	return api.UpdateSnapshot200JSONResponse(*snap), nil
@@ -594,13 +592,13 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 	membershipID := request.Params.XMembershipID
 	characterID := request.Body.CharacterID
 
-	l := log.With().Str("userID", userID).
-		Str("membershipID", membershipID).
-		Str("characterID", characterID).Logger()
+	l := slog.With("userID", userID,
+		"membershipID", membershipID,
+		"characterID", characterID)
 
 	data, err := s.SnapshotService.Save(ctx, userID, membershipID, characterID)
 	if err != nil {
-		l.Error().Err(err).Msg("couldn't save the users snapshot data")
+		l.Error("couldn't save the users snapshot data", "error", err)
 		return nil, fmt.Errorf("failed to save snapshot: %w", err)
 	}
 	return api.CreateSnapshot201JSONResponse(*data), nil
@@ -683,16 +681,15 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
 	activityID := request.ActivityID
 
-	l := log.With().
-		Str("activityID", activityID).Logger()
-	log.Debug().Msg("Fetching activity data")
+	l := slog.With("activityID", activityID)
+	l.Debug("Fetching activity data")
 	activityDetails, teams, err := s.D2Service.GetActivity(ctx, activityID)
 	if err != nil {
-		l.Error().Err(err).Msg("Failed to fetch weapon data for activity")
+		l.Error("Failed to fetch weapon data for activity", "error", err)
 		return api.GetActivity500JSONResponse{Message: "failed to fetch weapon data for activity"}, nil
 	}
 	if activityDetails == nil {
-		l.Error().Msg("no activity data")
+		l.Error("no activity data")
 		return api.GetActivity500JSONResponse{Message: "no activity data"}, nil
 	}
 
@@ -700,9 +697,9 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	agg, err := s.AggregateService.GetAggregate(ctx, activityID)
 	if err != nil {
 		if errors.Is(err, aggregate.NotFound) {
-			l.Debug().Msg("No aggregation found for activity")
+			l.Debug("No aggregation found for activity")
 		} else {
-			l.Error().Err(err).Msg("unexpected error fetching aggregation")
+			l.Error("unexpected error fetching aggregation", "error", err)
 			return api.GetActivity500JSONResponse{Message: err.Error()}, nil
 		}
 	}
@@ -733,7 +730,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	snapshots := make(map[string]api.CharacterSnapshot)
 	snaps, err := s.SnapshotService.GetByIDs(ctx, snapshotIDS)
 	if err != nil {
-		l.Error().Err(err).Msg("failed to fetch snapshots")
+		l.Error("failed to fetch snapshots", "error", err)
 		return api.GetActivity500JSONResponse{Message: err.Error()}, nil
 	}
 	for _, snap := range snaps {
@@ -744,7 +741,7 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	for characterID, snap := range snapshots {
 		u, err := s.UserService.GetUser(ctx, snap.UserID)
 		if err != nil {
-			l.Error().Err(err).Str("characterId", characterID).Msg("failed to fetch user by character id")
+			l.Error("failed to fetch user by character id", "characterId", characterID, "error", err)
 			continue
 		}
 		if u == nil {

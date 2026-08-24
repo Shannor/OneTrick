@@ -23,34 +23,18 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-resty/resty/v2"
-	"github.com/mark-ignacio/zerolog-gcp"
 	"github.com/oapi-codegen/gin-middleware"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 func main() {
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	projectID := "gruntt-destiny"
-	logID := "application-log"
-	ctx := context.Background()
-
 	env := envvars.GetEvn()
 	if envvars.IsDev(env) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
-		log.Logger = log.Output(consoleWriter)
 	} else {
 		slog.SetDefault(slog.New(logger.NewGCPHandler(slog.LevelInfo)))
-		writer, err := zlg.NewCloudLoggingWriter(ctx, projectID, logID, zlg.CloudLoggingOptions{})
-		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to create GCP writer")
-		}
-		log.Logger = log.Output(writer)
 	}
 
-	log.Info().Str("Env", string(env.Environment)).Msg("Starting Up")
-	defer zlg.Flush()
+	slog.Info("Starting Up", "env", string(env.Environment))
 
 	hc := http.Client{}
 	cli, err := bungie.NewClientWithResponses(
@@ -108,7 +92,7 @@ func main() {
 	// Load OpenAPI spec file
 	swagger, err := api.GetSwagger()
 	if err != nil {
-		log.Error().Err(err).Msg("failed to load swagger spec file")
+		slog.Error("failed to load swagger spec file", "error", err)
 		return
 	}
 	// Clear out the servers array in the swagger spec, that skips validating
@@ -127,9 +111,10 @@ func main() {
 		Addr:    "0.0.0.0:8080",
 	}
 
-	log.Info().Msg("Starting HTTP server on port 8080")
+	slog.Info("Starting HTTP server on port 8080")
 	err = s.ListenAndServe()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Server crashed")
+		slog.Error("Server crashed", "error", err)
+		os.Exit(1)
 	}
 }

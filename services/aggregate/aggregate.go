@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"oneTrick/api"
 	"oneTrick/utils"
 	"sort"
 
 	"cloud.google.com/go/firestore"
-	"github.com/rs/zerolog/log"
 	"google.golang.org/api/iterator"
 )
 
@@ -67,14 +67,14 @@ func (s *service) Update(ctx context.Context, aggregateID string, updateFn func(
 	if shouldMerge {
 		_, err = docRef.Set(ctx, data, firestore.MergeAll)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to merge aggregate")
+			slog.Error("failed to merge aggregate", "error", err)
 			return err
 		}
 		return nil
 	}
 	_, err = docRef.Set(ctx, data)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to merge aggregate")
+		slog.Error("failed to save aggregate", "error", err)
 		return err
 	}
 	return err
@@ -220,7 +220,7 @@ func (s *service) UpdateAllAggregates(ctx context.Context) (int, error) {
 				"characterIds": firestore.ArrayUnion(toInterfaceSlice(characterIDs)...),
 			}, firestore.MergeAll)
 			if err != nil {
-				log.Warn().Str("id", agg.ID).Err(err).Msg("failed to update aggregate")
+				slog.Warn("failed to update aggregate", "id", agg.ID, "error", err)
 			}
 			count++
 		}

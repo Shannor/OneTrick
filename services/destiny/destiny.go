@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"github.com/rs/zerolog/log"
 )
 
 type Service interface {
@@ -54,7 +53,7 @@ func NewService(apiKey string, firestore *firestore.Client, manifestService Mani
 		}),
 	)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to start destiny client")
+		slog.Error("failed to start destiny client", "error", err)
 	}
 	return &service{
 		Client:          cli,
@@ -146,16 +145,16 @@ func (a *service) GetPerformances(ctx context.Context, activityID string, charac
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
 
-	l := log.With().Str("activityId", activityID).Logger()
+	l := slog.With("activityId", activityID)
 
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
-		l.Error().Err(err).Msg("Failed to get post game carnage report")
+		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, err
 	}
 	data := resp.JSON200.PostGameCarnageReportData
 	if data.Entries == nil || data.ActivityDetails == nil {
-		l.Error().Msg("No data found for activity")
+		l.Error("No data found for activity")
 		return nil, fmt.Errorf("nil data response")
 	}
 
@@ -184,16 +183,16 @@ func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, ch
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
 
-	l := log.With().Str("activityId", activityID).Logger()
+	l := slog.With("activityId", activityID)
 
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
-		l.Error().Err(err).Msg("Failed to get post game carnage report")
+		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, err
 	}
 	data := resp.JSON200.PostGameCarnageReportData
 	if data.Entries == nil || data.ActivityDetails == nil {
-		l.Error().Msg("No data found for activity")
+		l.Error("No data found for activity")
 		return nil, fmt.Errorf("nil data response")
 	}
 
@@ -348,7 +347,7 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 
 	statDefinitions, err := a.ManifestService.GetStats(ctx)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get statDefinitions but still will generate stats")
+		slog.Warn("failed to get statDefinitions but still will generate stats", "error", err)
 	}
 	stats := make(map[string]api.ClassStat)
 	if test.JSON200.Response.Characters.Data != nil {
@@ -362,7 +361,7 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 	}
 	loadout, err := a.buildLoadout(ctx, membershipID, membershipType, results, statDefinitions)
 	if err != nil {
-		log.Error().Err(err).Msg("couldn't build the loadout")
+		slog.Error("couldn't build the loadout", "error", err)
 		return nil, nil, nil, err
 	}
 	return loadout, stats, timeStamp, nil
@@ -451,11 +450,11 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 		if d.TitleRecordHash != nil {
 			record, err := a.ManifestService.GetRecord(ctx, int64(*d.TitleRecordHash))
 			if err != nil {
-				log.Warn().Msg("missing id for title record")
+				slog.Warn("missing id for title record")
 				continue
 			}
 			if record == nil {
-				log.Warn().Uint32("Hash", *d.TitleRecordHash).Msg("record was nil")
+				slog.Warn("record was nil", "Hash", *d.TitleRecordHash)
 				continue
 			}
 			records[strconv.Itoa(record.Hash)] = *record
@@ -537,16 +536,16 @@ func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.P
 		return nil, nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
 
-	l := log.With().Str("activityId", activityID).Logger()
+	l := slog.With("activityId", activityID)
 
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
-		l.Error().Err(err).Msg("Failed to get post game carnage report")
+		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, nil, err
 	}
 	data := resp.JSON200.PostGameCarnageReportData
 	if data.Entries == nil || data.ActivityDetails == nil {
-		l.Error().Msg("No data found for activity")
+		l.Error("No data found for activity")
 		return nil, nil, fmt.Errorf("nil data response")
 	}
 

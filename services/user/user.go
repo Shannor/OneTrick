@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"oneTrick/utils"
@@ -13,7 +14,6 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/algolia/algoliasearch-client-go/v4/algolia/search"
-	"github.com/rs/zerolog/log"
 	"google.golang.org/api/iterator"
 )
 
@@ -158,7 +158,7 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 	fireteam := make([]api.FireteamMember, 0)
 	for _, member := range partyMembers {
 		if member.MembershipId == nil {
-			log.Warn().Msg("missing membership id for party member")
+			slog.Warn("missing membership id for party member")
 			continue
 		}
 		member, err := s.GetUser(ctx, *member.MembershipId)

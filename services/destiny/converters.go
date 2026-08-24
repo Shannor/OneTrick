@@ -8,7 +8,7 @@ import (
 	"oneTrick/ptr"
 	"strconv"
 
-	"github.com/rs/zerolog/log"
+
 )
 
 func setBaseBungieURL(value *string) string {
@@ -136,12 +136,12 @@ func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) 
 	var sockets []api.Socket
 	for _, s := range *item.Sockets.Data.Sockets {
 		if s.PlugHash == nil {
-			log.Warn().Msg("Socket has no plug hash")
+			slog.Warn("Socket has no plug hash")
 			continue
 		}
 		socket, ok := items[strconv.Itoa(int(*s.PlugHash))]
 		if !ok {
-			log.Warn().Uint32("socketHash", *s.PlugHash).Msg("Socket not found in manifest")
+			slog.Warn("Socket not found in manifest", "socketHash", *s.PlugHash)
 			continue
 		}
 
@@ -294,7 +294,7 @@ func TransformPeriodGroups(period []bungie.StatsPeriodGroup, activities map[stri
 	for _, group := range period {
 		r := TransformPeriodGroup(&group, activities, modes)
 		if r == nil {
-			log.Warn().Msg("period group returned nil")
+			slog.Warn("period group returned nil")
 			continue
 		}
 		result = append(result, *r)
@@ -309,12 +309,12 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 
 	definition, ok := activities[strconv.Itoa(int(*period.ActivityDetails.ReferenceId))]
 	if !ok {
-		log.Warn().Msgf("Activity locale not found in manifest: %d ", period.ActivityDetails.ReferenceId)
+		slog.Warn("Activity locale not found in manifest", "referenceId", period.ActivityDetails.ReferenceId)
 		return nil
 	}
 	activity, ok := activities[strconv.Itoa(int(*period.ActivityDetails.DirectorActivityHash))]
 	if !ok {
-		log.Warn().Msgf("Activity Directory not found in manifest: %d", period.ActivityDetails.DirectorActivityHash)
+		slog.Warn("Activity Directory not found in manifest", "directorActivityHash", period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
 	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]

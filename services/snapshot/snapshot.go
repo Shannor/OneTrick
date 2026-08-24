@@ -4,7 +4,7 @@ import (
 	"oneTrick/services/aggregate"
 
 	"cloud.google.com/go/firestore"
-	"github.com/rs/zerolog/log"
+	"log/slog"
 
 	"context"
 	"fmt"
@@ -240,16 +240,16 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 		Weapons:     performance.Weapons,
 	}
 	if snapshot == nil {
-		log.Debug().Msg("No provided snapshot to perform enrichment on")
+		slog.Debug("No provided snapshot to perform enrichment on")
 		return result, nil
 	}
 
 	if len(performance.Weapons) == 0 {
-		log.Debug().Msg("No metrics provided to enrich")
+		slog.Debug("No metrics provided to enrich")
 		return result, nil
 	}
 	if snapshot.Loadout == nil {
-		log.Debug().Msg("No loadout provided to enrich")
+		slog.Debug("No loadout provided to enrich")
 		return result, nil
 	}
 
@@ -348,7 +348,7 @@ func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID 
 		return api.CharacterSnapshot{}, err
 	}
 	for _, agg := range aggs {
-		log.Info().Msgf("Agg ID: %s\n", agg.ID)
+		slog.Info("Agg ID", "aggID", agg.ID)
 		err := s.aggregateService.Update(ctx, agg.ID, func(data map[string]any) error {
 			// Atomically "replace" an element in an array by modifying the slice directly
 			// within the update transaction.

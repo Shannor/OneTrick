@@ -3,6 +3,7 @@ package stats
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"oneTrick/api"
 	"oneTrick/ptr"
 	"oneTrick/services/snapshot"
@@ -10,7 +11,6 @@ import (
 	"slices"
 
 	"cloud.google.com/go/firestore"
-	"github.com/rs/zerolog/log"
 )
 
 // Service defines operations for retrieving stats-related data.
@@ -167,7 +167,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		}
 		performance, ok := agg.Performance[characterID]
 		if !ok {
-			log.Warn().Str("characterID", characterID).Msg("no performance found for character")
+			slog.Warn("no performance found for character", "characterID", characterID)
 			continue
 		}
 		s := stats[*link.SnapshotID]
@@ -189,7 +189,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		counts int
 	}
 	pairs := make([]pair, 0, len(stats))
-	log.Debug().Str("characterID", characterID).Int("Required Games Count", minimumGames).Msg("skipping loadout")
+	slog.Debug("skipping loadout check", "characterID", characterID, "minimumGames", minimumGames)
 	skipped := 0
 	for id, obj := range stats {
 		if counts[id] < minimumGames {
@@ -198,7 +198,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		}
 		pairs = append(pairs, pair{id: id, stats: obj, counts: counts[id]})
 	}
-	log.Debug().Int("skipped", skipped).Msg("loadouts skipped")
+	slog.Debug("loadouts skipped", "skipped", skipped)
 
 	slices.SortFunc(pairs, func(a, b pair) int {
 		kda := getKD(a.stats.Kills, a.stats.Deaths)
@@ -261,7 +261,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 	}
 	loadouts, err := s.snapshotService.GetByIDs(ctx, ids)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to get loadouts")
+		slog.Error("failed to get loadouts", "error", err)
 		return nil, nil, nil, err
 	}
 	slices.SortFunc(loadouts, func(a, b api.CharacterSnapshot) int {
