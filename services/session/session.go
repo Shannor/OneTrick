@@ -121,13 +121,13 @@ func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
 func (s service) GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error) {
 	query := s.db.Collection(collection).Query
 
-	if userID != nil {
+	if userID != nil && *userID != "" {
 		query = query.Where("userId", "==", *userID)
 	}
-	if characterID != nil {
+	if characterID != nil && *characterID != "" {
 		query = query.Where("characterId", "==", *characterID)
 	}
-	if status != nil {
+	if status != nil && *status != "" {
 		query = query.Where("status", "==", *status)
 	}
 
@@ -164,9 +164,6 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	limit := 10
 	if count > 0 {
 		limit = count
-	}
-	if status != nil && *status == api.SessionPending {
-		limit = 1
 	}
 	if limit < len(result) {
 		result = result[:limit]

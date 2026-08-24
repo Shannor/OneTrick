@@ -5,6 +5,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/services/destiny"
+	"oneTrick/services/session"
 	"oneTrick/services/user"
 	"testing"
 )
@@ -188,5 +189,44 @@ func TestLoginNewUserNoCrossSave(t *testing.T) {
 
 	if d2Mock.capturedMembershipType != 1 {
 		t.Errorf("expected membershipType 1 (Xbox), got %d", d2Mock.capturedMembershipType)
+	}
+}
+
+type mockSessionService struct {
+	session.Service
+	capturedCharID *string
+}
+
+func (m *mockSessionService) GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error) {
+	m.capturedCharID = characterID
+	return []api.Session{
+		{ID: "session1", UserID: *userID},
+	}, nil
+}
+
+func TestGetUserSessionsEmptyCharacterID(t *testing.T) {
+	sessionMock := &mockSessionService{}
+	server := Server{
+		SessionService: sessionMock,
+	}
+
+	req := api.GetUserSessionsRequestObject{
+		UserID: "test-user-id",
+		Params: api.GetUserSessionsParams{
+			CharacterID: "", // Omitted / empty string in query params
+		},
+	}
+
+	resp, err := server.GetUserSessions(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected GetUserSessions to succeed, got: %v", err)
+	}
+
+	if _, ok := resp.(api.GetUserSessions200JSONResponse); !ok {
+		t.Fatalf("expected GetUserSessions200JSONResponse, got: %T", resp)
+	}
+
+	if sessionMock.capturedCharID != nil {
+		t.Errorf("expected capturedCharID to be nil when CharacterID parameter is empty, got %v", *sessionMock.capturedCharID)
 	}
 }

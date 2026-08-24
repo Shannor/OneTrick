@@ -139,10 +139,14 @@ func (s Server) GetUserSessions(ctx context.Context, request api.GetUserSessions
 	if request.Params.Page > 1 {
 		offset = int(request.Params.Count) * int(request.Params.Page-1)
 	}
+	var charID *string
+	if request.Params.CharacterID != "" {
+		charID = &request.Params.CharacterID
+	}
 	result, err := s.SessionService.GetAll(
 		ctx,
 		&request.UserID,
-		&request.Params.CharacterID,
+		charID,
 		(*api.SessionStatus)(request.Params.Status),
 		int(request.Params.Count),
 		offset,
