@@ -32,7 +32,6 @@ func NewGCPHandlerWithWriter(w io.Writer, level slog.Level) slog.Handler {
 				a.Key = "timestamp"
 			case slog.MessageKey:
 				a.Key = "message"
-				a.Value = slog.StringValue("[onetrick-service] " + a.Value.String())
 			case slog.LevelKey:
 				a.Key = "severity"
 				if l, ok := a.Value.Any().(slog.Level); ok {

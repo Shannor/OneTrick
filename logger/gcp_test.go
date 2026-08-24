@@ -32,8 +32,8 @@ func TestGCPHandler(t *testing.T) {
 		t.Errorf("Expected timestamp field to be present, got nil")
 	}
 
-	if parsed["message"] != "[onetrick-service] Session warning test" {
-		t.Errorf("Expected message '[onetrick-service] Session warning test', got %v", parsed["message"])
+	if parsed["message"] != "Session warning test" {
+		t.Errorf("Expected message 'Session warning test', got %v", parsed["message"])
 	}
 
 	if parsed["sessionID"] != "test-session-123" {
@@ -81,8 +81,8 @@ func TestSlogRecovery(t *testing.T) {
 		t.Errorf("Expected severity 'ERROR', got %v", parsed["severity"])
 	}
 
-	if parsed["message"] != "[onetrick-service] HTTP request panic recovered" {
-		t.Errorf("Expected message '[onetrick-service] HTTP request panic recovered', got %v", parsed["message"])
+	if parsed["message"] != "HTTP request panic recovered" {
+		t.Errorf("Expected message 'HTTP request panic recovered', got %v", parsed["message"])
 	}
 
 	if parsed["error"] != "test panic message" {
