@@ -23,6 +23,8 @@ func NewGCPHandlerWithWriter(w io.Writer, level slog.Level) slog.Handler {
 			}
 
 			switch a.Key {
+			case slog.TimeKey:
+				a.Key = "timestamp"
 			case slog.MessageKey:
 				a.Key = "message"
 			case slog.LevelKey:

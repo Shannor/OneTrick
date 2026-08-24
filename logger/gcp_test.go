@@ -24,6 +24,10 @@ func TestGCPHandler(t *testing.T) {
 		t.Errorf("Expected severity 'WARNING', got %v", parsed["severity"])
 	}
 
+	if parsed["timestamp"] == nil {
+		t.Errorf("Expected timestamp field to be present, got nil")
+	}
+
 	if parsed["message"] != "Session warning test" {
 		t.Errorf("Expected message 'Session warning test', got %v", parsed["message"])
 	}
