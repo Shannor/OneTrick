@@ -1,0 +1,15 @@
+description: Featured loadout of the day with associated snapshot, user info, and performance metrics
+type: object
+required:
+  - snapshot
+properties:
+  snapshot:
+    $ref: ./CharacterSnapshot.yaml
+  user:
+    $ref: ./User.yaml
+  stats:
+    $ref: ./PlayerStats.yaml
+  usageCount:
+    type: integer
+  featuredReason:
+    type: string

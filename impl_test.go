@@ -4,8 +4,10 @@ import (
 	"context"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/ptr"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
+	"oneTrick/services/stats"
 	"oneTrick/services/user"
 	"testing"
 )
@@ -228,5 +230,53 @@ func TestGetUserSessionsEmptyCharacterID(t *testing.T) {
 
 	if sessionMock.capturedCharID != nil {
 		t.Errorf("expected capturedCharID to be nil when CharacterID parameter is empty, got %v", *sessionMock.capturedCharID)
+	}
+}
+
+type mockStatsService struct {
+	stats.Service
+}
+
+func (m *mockStatsService) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error) {
+	return []api.FeaturedLoadout{
+		{
+			FeaturedReason: ptr.Of("Top Hunter PvP Loadout of the Day"),
+			UsageCount:     ptr.Of(5),
+			Snapshot: api.CharacterSnapshot{
+				ID:   "snap-1",
+				Name: "Featured Hunter Loadout",
+			},
+		},
+	}, nil
+}
+
+func TestGetFeaturedLoadouts(t *testing.T) {
+	statsMock := &mockStatsService{}
+	server := Server{
+		StatsService: statsMock,
+	}
+
+	req := api.GetFeaturedLoadoutsRequestObject{
+		Params: api.GetFeaturedLoadoutsParams{
+			Count: ptr.Of(5),
+		},
+	}
+
+	resp, err := server.GetFeaturedLoadouts(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected GetFeaturedLoadouts to succeed, got: %v", err)
+	}
+
+	jsonResp, ok := resp.(api.GetFeaturedLoadouts200JSONResponse)
+	if !ok {
+		t.Fatalf("expected GetFeaturedLoadouts200JSONResponse, got: %T", resp)
+	}
+
+	if len(jsonResp.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(jsonResp.Items))
+	}
+
+	if jsonResp.Items[0].Snapshot.ID != "snap-1" {
+		t.Errorf("expected snapshot ID snap-1, got %s", jsonResp.Items[0].Snapshot.ID)
 	}
 }

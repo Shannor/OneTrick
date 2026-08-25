@@ -260,6 +260,25 @@ func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBe
 	}, nil
 }
 
+func (s Server) GetFeaturedLoadouts(ctx context.Context, request api.GetFeaturedLoadoutsRequestObject) (api.GetFeaturedLoadoutsResponseObject, error) {
+	count := 5
+	if request.Params.Count != nil && *request.Params.Count > 0 {
+		count = *request.Params.Count
+	}
+
+	featured, err := s.StatsService.GetFeaturedLoadouts(ctx, count, request.Params.GameMode)
+	if err != nil {
+		slog.Error("failed fetching featured loadouts", "error", err)
+		return api.GetFeaturedLoadouts500JSONResponse(api.OneTrickError{
+			Message: err.Error(),
+		}), nil
+	}
+
+	return api.GetFeaturedLoadouts200JSONResponse{
+		Items: featured,
+	}, nil
+}
+
 func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestObject) (api.GetFireteamResponseObject, error) {
 	members, err := s.UserService.GetFireteam(ctx, request.Params.XUserID)
 	if err != nil {

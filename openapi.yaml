@@ -686,7 +686,6 @@ paths:
           required: true
           schema:
             type: integer
-            format: int
             minimum: 0
         - name: characterId
           x-go-name: characterID
@@ -891,6 +890,60 @@ paths:
                     type: object
                     additionalProperties:
                       type: integer
+  /metrics/featured-loadouts:
+    get:
+      operationId: GetFeaturedLoadouts
+      description: Returns featured PvP loadouts of the day for display on the home page
+      parameters:
+        - in: query
+          name: count
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 5
+        - in: query
+          name: gameMode
+          schema:
+            $ref: '#/components/schemas/GameMode'
+      responses:
+        '200':
+          description: Returns featured loadouts of the day
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FeaturedLoadout'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
 components:
   securitySchemes:
     bearerAuth:
@@ -2128,6 +2181,22 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: characterIds
           x-go-name: characterIDs
+    FeaturedLoadout:
+      description: Featured loadout of the day with associated snapshot, user info, and performance metrics
+      type: object
+      required:
+        - snapshot
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/CharacterSnapshot'
+        user:
+          $ref: '#/components/schemas/User'
+        stats:
+          $ref: '#/components/schemas/PlayerStats'
+        usageCount:
+          type: integer
+        featuredReason:
+          type: string
   parameters:
     X-User-ID:
       name: X-User-ID

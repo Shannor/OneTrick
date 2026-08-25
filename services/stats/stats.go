@@ -6,9 +6,13 @@ import (
 	"log/slog"
 	"oneTrick/api"
 	"oneTrick/ptr"
+	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
+	"oneTrick/services/user"
 	"oneTrick/utils"
 	"slices"
+	"strconv"
+	"time"
 
 	"cloud.google.com/go/firestore"
 )
@@ -22,16 +26,19 @@ type Service interface {
 
 	GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string) ([]api.CharacterSnapshot, map[string]int, error)
 	GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
+
+	GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error)
 }
 
 type service struct {
 	DB              *firestore.Client
 	snapshotService snapshot.Service
+	userService     user.Service
 }
 
 // NewService creates a new Stats service instance.
-func NewService(db *firestore.Client, snapshotService snapshot.Service) Service {
-	return &service{DB: db, snapshotService: snapshotService}
+func NewService(db *firestore.Client, snapshotService snapshot.Service, userService user.Service) Service {
+	return &service{DB: db, snapshotService: snapshotService, userService: userService}
 }
 
 const (
@@ -285,4 +292,246 @@ func getKDA(kills int, deaths int, assists int) float64 {
 		return float64(kills) + float64(assists)
 	}
 	return (float64(kills) + float64(assists)) / float64(deaths)
+}
+
+type snapStats struct {
+	Kills      int
+	Deaths     int
+	Assists    int
+	Wins       int
+	GamesCount int
+}
+
+func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error) {
+	if count <= 0 {
+		count = 5
+	}
+
+	q := s.DB.Collection(aggregatesCollection).Query
+	if gameMode != nil {
+		q = q.Where("activityHistory.mode", "==", string(*gameMode))
+	}
+	aggDocs, err := q.Limit(500).Documents(ctx).GetAll()
+	if err != nil {
+		slog.Error("failed fetching aggregates for featured loadouts", "error", err)
+	}
+
+	statsMap := make(map[string]*snapStats)
+	if err == nil && len(aggDocs) > 0 {
+		aggs, err := utils.GetAllToStructs[api.Aggregate](aggDocs)
+		if err == nil {
+			for _, agg := range aggs {
+				for charID, link := range agg.SnapshotLinks {
+					if link.SnapshotID == nil || *link.SnapshotID == "" {
+						continue
+					}
+					snapID := *link.SnapshotID
+					st, exists := statsMap[snapID]
+					if !exists {
+						st = &snapStats{}
+						statsMap[snapID] = st
+					}
+					st.GamesCount++
+					if perf, ok := agg.Performance[charID]; ok && perf.PlayerStats.Kills != nil {
+						if perf.PlayerStats.Kills.Value != nil {
+							st.Kills += int(*perf.PlayerStats.Kills.Value)
+						}
+						if perf.PlayerStats.Deaths.Value != nil {
+							st.Deaths += int(*perf.PlayerStats.Deaths.Value)
+						}
+						if perf.PlayerStats.Assists.Value != nil {
+							st.Assists += int(*perf.PlayerStats.Assists.Value)
+						}
+						if perf.PlayerStats.Standing.Value != nil && *perf.PlayerStats.Standing.Value == 0 {
+							st.Wins++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	type snapRank struct {
+		snapID string
+		stats  *snapStats
+	}
+	ranks := make([]snapRank, 0, len(statsMap))
+	for id, st := range statsMap {
+		ranks = append(ranks, snapRank{snapID: id, stats: st})
+	}
+
+	slices.SortFunc(ranks, func(a, b snapRank) int {
+		if a.stats.GamesCount != b.stats.GamesCount {
+			return b.stats.GamesCount - a.stats.GamesCount
+		}
+		kda := getKD(a.stats.Kills, a.stats.Deaths)
+		kdb := getKD(b.stats.Kills, b.stats.Deaths)
+		if kda < kdb {
+			return 1
+		}
+		if kda > kdb {
+			return -1
+		}
+		return 0
+	})
+
+	var featured []api.FeaturedLoadout
+	seenSnapIDs := make(map[string]bool)
+	seenUserIDs := make(map[string]bool)
+
+	daySeed := time.Now().YearDay() + time.Now().Year()*365
+
+	// Deterministically rotate candidate ranks based on the day of the year so featured loadouts rotate daily
+	if len(ranks) > count {
+		offset := daySeed % len(ranks)
+		rotated := make([]snapRank, len(ranks))
+		for i := 0; i < len(ranks); i++ {
+			rotated[i] = ranks[(i+offset)%len(ranks)]
+		}
+		ranks = rotated
+	}
+
+	for _, r := range ranks {
+		if len(featured) >= count {
+			break
+		}
+		snap, err := s.snapshotService.Get(ctx, r.snapID)
+		if err != nil || snap == nil {
+			continue
+		}
+		if seenSnapIDs[snap.ID] {
+			continue
+		}
+		// Enforce unique creators: max 1 loadout per user ID
+		if snap.UserID != "" && seenUserIDs[snap.UserID] {
+			continue
+		}
+
+		seenSnapIDs[snap.ID] = true
+		if snap.UserID != "" {
+			seenUserIDs[snap.UserID] = true
+		}
+
+		featItem := s.buildFeaturedLoadout(ctx, snap, r.stats)
+		featured = append(featured, featItem)
+	}
+
+	if len(featured) < count {
+		recentDocs, err := s.DB.Collection(snapshotsCollection).
+			OrderBy("createdAt", firestore.Desc).
+			Limit(count * 5).
+			Documents(ctx).GetAll()
+		if err == nil {
+			recentSnaps, err := utils.GetAllToStructs[api.CharacterSnapshot](recentDocs)
+			if err == nil {
+				// Also rotate recent fallback snapshots deterministically by daySeed
+				if len(recentSnaps) > count {
+					offset := daySeed % len(recentSnaps)
+					rotated := make([]api.CharacterSnapshot, len(recentSnaps))
+					for i := 0; i < len(recentSnaps); i++ {
+						rotated[i] = recentSnaps[(i+offset)%len(recentSnaps)]
+					}
+					recentSnaps = rotated
+				}
+
+				for _, snap := range recentSnaps {
+					if len(featured) >= count {
+						break
+					}
+					if seenSnapIDs[snap.ID] {
+						continue
+					}
+					// Enforce unique creators in fallback as well
+					if snap.UserID != "" && seenUserIDs[snap.UserID] {
+						continue
+					}
+
+					seenSnapIDs[snap.ID] = true
+					if snap.UserID != "" {
+						seenUserIDs[snap.UserID] = true
+					}
+
+					featItem := s.buildFeaturedLoadout(ctx, &snap, nil)
+					featured = append(featured, featItem)
+				}
+			}
+		}
+	}
+
+	for i := range featured {
+		classType := "PvP"
+		if featured[i].Snapshot.Loadout != nil {
+			subClassKey := strconv.FormatInt(destiny.SubClass, 10)
+			if item, ok := featured[i].Snapshot.Loadout[subClassKey]; ok {
+				if item.ItemProperties.BaseInfo.Name != "" {
+					classType = item.ItemProperties.BaseInfo.Name
+				}
+			}
+		}
+
+		reason := fmt.Sprintf("Featured %s Choice", classType)
+		if i == 0 {
+			reason = fmt.Sprintf("Top %s PvP Loadout of the Day", classType)
+		} else if featured[i].UsageCount != nil && *featured[i].UsageCount > 1 {
+			reason = fmt.Sprintf("Most Active %s Community Loadout", classType)
+		}
+		featured[i].FeaturedReason = ptr.Of(reason)
+	}
+
+	return featured, nil
+}
+
+func (s *service) buildFeaturedLoadout(ctx context.Context, snap *api.CharacterSnapshot, st *snapStats) api.FeaturedLoadout {
+	feat := api.FeaturedLoadout{
+		Snapshot: *snap,
+	}
+
+	if snap.UserID != "" && s.userService != nil {
+		u, err := s.userService.GetUser(ctx, snap.UserID)
+		if err == nil && u != nil {
+			feat.User = &api.User{
+				ID:                  u.ID,
+				DisplayName:         u.DisplayName,
+				UniqueName:          u.UniqueName,
+				MemberID:            u.MemberID,
+				PrimaryMembershipID: u.PrimaryMembershipID,
+				CreatedAt:           u.CreatedAt,
+				CharacterIDs:        u.CharacterIDs,
+			}
+		}
+	}
+
+	if st != nil {
+		feat.UsageCount = ptr.Of(st.GamesCount)
+		feat.Stats = &api.PlayerStats{
+			Assists: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Assists)),
+				Value:        ptr.Of(float64(st.Assists)),
+			}),
+			Deaths: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Deaths)),
+				Value:        ptr.Of(float64(st.Deaths)),
+			}),
+			Kills: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Kills)),
+				Value:        ptr.Of(float64(st.Kills)),
+			}),
+			Kd: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
+				Value:        ptr.Of(getKD(st.Kills, st.Deaths)),
+			}),
+			Kda: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
+				Value:        ptr.Of(getKDA(st.Kills, st.Deaths, st.Assists)),
+			}),
+			Standing: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Wins, st.GamesCount))),
+				Value:        ptr.Of(getKD(st.Wins, st.GamesCount)),
+			}),
+		}
+	} else {
+		feat.UsageCount = ptr.Of(1)
+	}
+
+	return feat
 }

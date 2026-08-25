@@ -49,6 +49,8 @@ paths:
     $ref: paths/sessions_{sessionId}_aggregates.yaml
   /metrics/best-performing-loadouts:
     $ref: paths/metrics_best-performing-loadouts.yaml
+  /metrics/featured-loadouts:
+    $ref: paths/metrics_featured-loadouts.yaml
 components:
   securitySchemes:
     bearerAuth:
