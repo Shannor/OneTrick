@@ -12,6 +12,7 @@ import (
 	"oneTrick/utils"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -351,16 +352,121 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		}
 	}
 
-	type snapRank struct {
+	type snapCandidate struct {
 		snapID string
 		stats  *snapStats
-	}
-	ranks := make([]snapRank, 0, len(statsMap))
-	for id, st := range statsMap {
-		ranks = append(ranks, snapRank{snapID: id, stats: st})
+		snap   *api.CharacterSnapshot
+		user   *api.User
+		class  string
 	}
 
-	slices.SortFunc(ranks, func(a, b snapRank) int {
+	// Filter candidates with > 5 games minimum requirement
+	var candidates []snapCandidate
+	for id, st := range statsMap {
+		if st.GamesCount <= 5 {
+			continue
+		}
+		snap, err := s.snapshotService.Get(ctx, id)
+		if err != nil || snap == nil {
+			continue
+		}
+
+		var u *api.User
+		var charClass string
+		if snap.UserID != "" && s.userService != nil {
+			userObj, err := s.userService.GetUser(ctx, snap.UserID)
+			if err == nil && userObj != nil {
+				u = &api.User{
+					ID:                  userObj.ID,
+					DisplayName:         userObj.DisplayName,
+					UniqueName:          userObj.UniqueName,
+					MemberID:            userObj.MemberID,
+					PrimaryMembershipID: userObj.PrimaryMembershipID,
+					CreatedAt:           userObj.CreatedAt,
+					CharacterIDs:        userObj.CharacterIDs,
+				}
+				for _, c := range userObj.Characters {
+					if c.Id == snap.CharacterID && c.Class != "" {
+						charClass = c.Class
+						break
+					}
+				}
+			}
+		}
+
+		subclassName := ""
+		if snap.Loadout != nil {
+			subClassKey := strconv.FormatInt(destiny.SubClass, 10)
+			if item, ok := snap.Loadout[subClassKey]; ok {
+				subclassName = item.ItemProperties.BaseInfo.Name
+			}
+		}
+
+		detectedClass := determineClass(charClass, subclassName)
+		candidates = append(candidates, snapCandidate{
+			snapID: id,
+			stats:  st,
+			snap:   snap,
+			user:   u,
+			class:  detectedClass,
+		})
+	}
+
+	// If fewer candidates have > 5 games, loosen threshold to > 0 games
+	if len(candidates) < count {
+		for id, st := range statsMap {
+			if st.GamesCount > 5 {
+				continue // already included
+			}
+			snap, err := s.snapshotService.Get(ctx, id)
+			if err != nil || snap == nil {
+				continue
+			}
+
+			var u *api.User
+			var charClass string
+			if snap.UserID != "" && s.userService != nil {
+				userObj, err := s.userService.GetUser(ctx, snap.UserID)
+				if err == nil && userObj != nil {
+					u = &api.User{
+						ID:                  userObj.ID,
+						DisplayName:         userObj.DisplayName,
+						UniqueName:          userObj.UniqueName,
+						MemberID:            userObj.MemberID,
+						PrimaryMembershipID: userObj.PrimaryMembershipID,
+						CreatedAt:           userObj.CreatedAt,
+						CharacterIDs:        userObj.CharacterIDs,
+					}
+					for _, c := range userObj.Characters {
+						if c.Id == snap.CharacterID && c.Class != "" {
+							charClass = c.Class
+							break
+						}
+					}
+				}
+			}
+
+			subclassName := ""
+			if snap.Loadout != nil {
+				subClassKey := strconv.FormatInt(destiny.SubClass, 10)
+				if item, ok := snap.Loadout[subClassKey]; ok {
+					subclassName = item.ItemProperties.BaseInfo.Name
+				}
+			}
+
+			detectedClass := determineClass(charClass, subclassName)
+			candidates = append(candidates, snapCandidate{
+				snapID: id,
+				stats:  st,
+				snap:   snap,
+				user:   u,
+				class:  detectedClass,
+			})
+		}
+	}
+
+	// Sort candidates by games count and KD
+	slices.SortFunc(candidates, func(a, b snapCandidate) int {
 		if a.stats.GamesCount != b.stats.GamesCount {
 			return b.stats.GamesCount - a.stats.GamesCount
 		}
@@ -375,47 +481,83 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		return 0
 	})
 
+	daySeed := time.Now().YearDay() + time.Now().Year()*365
+
+	// Partition candidates by class for mandatory class representation (Titan, Hunter, Warlock)
+	classBuckets := map[string][]snapCandidate{
+		"Titan":   {},
+		"Hunter":  {},
+		"Warlock": {},
+		"Other":   {},
+	}
+	for _, c := range candidates {
+		classBuckets[c.class] = append(classBuckets[c.class], c)
+	}
+
+	// Rotate each class bucket deterministically by daySeed
+	rotateBucket := func(bucket []snapCandidate) []snapCandidate {
+		if len(bucket) <= 1 {
+			return bucket
+		}
+		offset := daySeed % len(bucket)
+		rotated := make([]snapCandidate, len(bucket))
+		for i := 0; i < len(bucket); i++ {
+			rotated[i] = bucket[(i+offset)%len(bucket)]
+		}
+		return rotated
+	}
+
+	classBuckets["Titan"] = rotateBucket(classBuckets["Titan"])
+	classBuckets["Hunter"] = rotateBucket(classBuckets["Hunter"])
+	classBuckets["Warlock"] = rotateBucket(classBuckets["Warlock"])
+	classBuckets["Other"] = rotateBucket(classBuckets["Other"])
+
 	var featured []api.FeaturedLoadout
 	seenSnapIDs := make(map[string]bool)
 	seenUserIDs := make(map[string]bool)
 
-	daySeed := time.Now().YearDay() + time.Now().Year()*365
-
-	// Deterministically rotate candidate ranks based on the day of the year so featured loadouts rotate daily
-	if len(ranks) > count {
-		offset := daySeed % len(ranks)
-		rotated := make([]snapRank, len(ranks))
-		for i := 0; i < len(ranks); i++ {
-			rotated[i] = ranks[(i+offset)%len(ranks)]
+	addCandidate := func(cand snapCandidate) bool {
+		if seenSnapIDs[cand.snapID] {
+			return false
 		}
-		ranks = rotated
+		if cand.snap.UserID != "" && seenUserIDs[cand.snap.UserID] {
+			return false
+		}
+
+		seenSnapIDs[cand.snapID] = true
+		if cand.snap.UserID != "" {
+			seenUserIDs[cand.snap.UserID] = true
+		}
+
+		featItem := s.buildFeaturedLoadoutWithUser(cand.snap, cand.user, cand.stats)
+		featured = append(featured, featItem)
+		return true
 	}
 
-	for _, r := range ranks {
+	// Guarantee at least 1 Titan, 1 Hunter, and 1 Warlock
+	for _, cls := range []string{"Titan", "Hunter", "Warlock"} {
+		for _, cand := range classBuckets[cls] {
+			if addCandidate(cand) {
+				break
+			}
+		}
+	}
+
+	// Fill remaining slots up to count (default 5) from all remaining candidates
+	remainingPool := append([]snapCandidate{}, classBuckets["Titan"]...)
+	remainingPool = append(remainingPool, classBuckets["Hunter"]...)
+	remainingPool = append(remainingPool, classBuckets["Warlock"]...)
+	remainingPool = append(remainingPool, classBuckets["Other"]...)
+	remainingPool = rotateBucket(remainingPool)
+
+	for _, cand := range remainingPool {
 		if len(featured) >= count {
 			break
 		}
-		snap, err := s.snapshotService.Get(ctx, r.snapID)
-		if err != nil || snap == nil {
-			continue
-		}
-		if seenSnapIDs[snap.ID] {
-			continue
-		}
-		// Enforce unique creators: max 1 loadout per user ID
-		if snap.UserID != "" && seenUserIDs[snap.UserID] {
-			continue
-		}
-
-		seenSnapIDs[snap.ID] = true
-		if snap.UserID != "" {
-			seenUserIDs[snap.UserID] = true
-		}
-
-		featItem := s.buildFeaturedLoadout(ctx, snap, r.stats)
-		featured = append(featured, featItem)
+		addCandidate(cand)
 	}
 
+	// Fallback to recent snapshots if we still have fewer than count
 	if len(featured) < count {
 		recentDocs, err := s.DB.Collection(snapshotsCollection).
 			OrderBy("createdAt", firestore.Desc).
@@ -424,7 +566,6 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		if err == nil {
 			recentSnaps, err := utils.GetAllToStructs[api.CharacterSnapshot](recentDocs)
 			if err == nil {
-				// Also rotate recent fallback snapshots deterministically by daySeed
 				if len(recentSnaps) > count {
 					offset := daySeed % len(recentSnaps)
 					rotated := make([]api.CharacterSnapshot, len(recentSnaps))
@@ -441,7 +582,6 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 					if seenSnapIDs[snap.ID] {
 						continue
 					}
-					// Enforce unique creators in fallback as well
 					if snap.UserID != "" && seenUserIDs[snap.UserID] {
 						continue
 					}
@@ -458,6 +598,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		}
 	}
 
+	// Assign detailed featured reasons
 	for i := range featured {
 		classType := "PvP"
 		if featured[i].Snapshot.Loadout != nil {
@@ -472,13 +613,70 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		reason := fmt.Sprintf("Featured %s Choice", classType)
 		if i == 0 {
 			reason = fmt.Sprintf("Top %s PvP Loadout of the Day", classType)
-		} else if featured[i].UsageCount != nil && *featured[i].UsageCount > 1 {
-			reason = fmt.Sprintf("Most Active %s Community Loadout", classType)
+		} else if featured[i].UsageCount != nil && *featured[i].UsageCount > 5 {
+			reason = fmt.Sprintf("Most Active %s Community Loadout (>5 Games)", classType)
 		}
 		featured[i].FeaturedReason = ptr.Of(reason)
 	}
 
 	return featured, nil
+}
+
+func determineClass(charClass string, subclassName string) string {
+	c := strings.ToLower(charClass)
+	sub := strings.ToLower(subclassName)
+
+	if strings.Contains(c, "titan") || strings.Contains(sub, "striker") || strings.Contains(sub, "sunbreaker") || strings.Contains(sub, "sentinel") || strings.Contains(sub, "behemoth") || strings.Contains(sub, "berserker") {
+		return "Titan"
+	}
+	if strings.Contains(c, "hunter") || strings.Contains(sub, "gunslinger") || strings.Contains(sub, "nightstalker") || strings.Contains(sub, "arcstrider") || strings.Contains(sub, "revenant") || strings.Contains(sub, "threadrunner") {
+		return "Hunter"
+	}
+	if strings.Contains(c, "warlock") || strings.Contains(sub, "voidwalker") || strings.Contains(sub, "dawnblade") || strings.Contains(sub, "stormcaller") || strings.Contains(sub, "shadebinder") || strings.Contains(sub, "broodweaver") {
+		return "Warlock"
+	}
+	return "Other"
+}
+
+func (s *service) buildFeaturedLoadoutWithUser(snap *api.CharacterSnapshot, u *api.User, st *snapStats) api.FeaturedLoadout {
+	feat := api.FeaturedLoadout{
+		Snapshot: *snap,
+		User:     u,
+	}
+
+	if st != nil {
+		feat.UsageCount = ptr.Of(st.GamesCount)
+		feat.Stats = &api.PlayerStats{
+			Assists: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Assists)),
+				Value:        ptr.Of(float64(st.Assists)),
+			}),
+			Deaths: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Deaths)),
+				Value:        ptr.Of(float64(st.Deaths)),
+			}),
+			Kills: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Kills)),
+				Value:        ptr.Of(float64(st.Kills)),
+			}),
+			Kd: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
+				Value:        ptr.Of(getKD(st.Kills, st.Deaths)),
+			}),
+			Kda: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
+				Value:        ptr.Of(getKDA(st.Kills, st.Deaths, st.Assists)),
+			}),
+			Standing: ptr.Of(api.StatsValuePair{
+				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Wins, st.GamesCount))),
+				Value:        ptr.Of(getKD(st.Wins, st.GamesCount)),
+			}),
+		}
+	} else {
+		feat.UsageCount = ptr.Of(1)
+	}
+
+	return feat
 }
 
 func (s *service) buildFeaturedLoadout(ctx context.Context, snap *api.CharacterSnapshot, st *snapStats) api.FeaturedLoadout {
