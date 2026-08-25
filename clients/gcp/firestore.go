@@ -4,11 +4,15 @@ import (
 	"cloud.google.com/go/firestore"
 	"context"
 	"log"
+	"os"
 )
 
 func CreateFirestore(ctx context.Context) *firestore.Client {
 	// Sets your Google Cloud Platform project ID.
-	projectID := "gruntt-destiny"
+	projectID := os.Getenv("GCP_PROJECT_ID")
+	if projectID == "" {
+		projectID = "gruntt-destiny"
+	}
 
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {

@@ -23,10 +23,12 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-resty/resty/v2"
+	"github.com/joho/godotenv"
 	"github.com/oapi-codegen/gin-middleware"
 )
 
 func main() {
+	_ = godotenv.Load()
 	env := envvars.GetEvn()
 	if envvars.IsDev(env) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
