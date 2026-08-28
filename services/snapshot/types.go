@@ -5,7 +5,10 @@ import (
 	"time"
 )
 
-var NotFound = errors.New("not found")
+var (
+	NotFound     = errors.New("not found")
+	Unauthorized = errors.New("unauthorized")
+)
 
 type History struct {
 	ID          string    `json:"id" firestore:"id"`

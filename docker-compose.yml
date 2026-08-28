@@ -2,7 +2,35 @@ services:
   firestore-emulator:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     container_name: firestore-emulator
-    command: gcloud beta emulators firestore start --host-port=0.0.0.0:8080
+    stop_signal: SIGINT
+    command: >
+      sh -c '
+        /google-cloud-sdk/platform/cloud-firestore-emulator/cloud_firestore_emulator --host=0.0.0.0 --port=8080 &
+        pid=$$!
+
+        cleanup() {
+          echo "Exporting emulator data..."
+          curl -s -X POST "http://localhost:8080/emulator/v1/projects/gruntt-destiny:export" \
+            -H "Content-Type: application/json" \
+            -d "{\"database\": \"projects/gruntt-destiny/databases/(default)\", \"export_directory\": \"/opt/emulator-data\"}"
+          echo "Done exporting."
+          kill -TERM $$pid
+        }
+
+        trap cleanup INT TERM
+
+        sleep 2
+        latest=$$(find /opt/emulator-data -name "*.overall_export_metadata" 2>/dev/null | sort | tail -n 1)
+        if [ -n "$$latest" ]; then
+          echo "Importing emulator data from $$latest..."
+          curl -s -X POST "http://localhost:8080/emulator/v1/projects/gruntt-destiny:import" \
+            -H "Content-Type: application/json" \
+            -d "{\"database\": \"projects/gruntt-destiny/databases/(default)\", \"export_directory\": \"$$latest\"}"
+          echo "Done importing."
+        fi
+
+        wait $$pid
+      '
     ports:
       - "8081:8080"
     environment:

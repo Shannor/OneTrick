@@ -34,6 +34,12 @@ type Service interface {
 
 	// Update allows for updating an aggregate document's data.
 	Update(ctx context.Context, aggregateID string, updateFn func(data map[string]interface{}) error, shouldMerge bool) error
+
+	// RemoveSession removes all references to sessionID from aggregates and deletes orphaned aggregates.
+	RemoveSession(ctx context.Context, sessionID string) error
+
+	// RemoveSnapshot removes all references to snapshotID from aggregates and deletes orphaned aggregates.
+	RemoveSnapshot(ctx context.Context, snapshotID string) error
 }
 
 const (
@@ -226,6 +232,152 @@ func (s *service) UpdateAllAggregates(ctx context.Context) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+func (s *service) RemoveSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+
+	docs, err := s.DB.Collection(collection).
+		Where("sessionIds", "array-contains", sessionID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return fmt.Errorf("failed to query aggregates for session %s: %w", sessionID, err)
+	}
+
+	for _, doc := range docs {
+		docRef := doc.Ref
+		data := doc.Data()
+
+		// Remove sessionID from sessionIds array
+		if sessionIDs, ok := data["sessionIds"].([]any); ok {
+			newSessionIDs := make([]any, 0, len(sessionIDs))
+			for _, id := range sessionIDs {
+				if idStr, ok := id.(string); ok && idStr == sessionID {
+					continue
+				}
+				newSessionIDs = append(newSessionIDs, id)
+			}
+			data["sessionIds"] = newSessionIDs
+		}
+
+		// Remove sessionId from snapshotLinks
+		if linksMap, ok := data["snapshotLinks"].(map[string]any); ok {
+			for charID, linkVal := range linksMap {
+				if linkObj, ok := linkVal.(map[string]any); ok {
+					if sessID, ok := linkObj["sessionId"].(string); ok && sessID == sessionID {
+						delete(linkObj, "sessionId")
+						linksMap[charID] = linkObj
+					}
+				}
+			}
+			data["snapshotLinks"] = linksMap
+		}
+
+		if isAggregateOrphaned(data) {
+			slog.Info("Deleting orphaned aggregate after session removal", "aggregateID", docRef.ID, "sessionID", sessionID)
+			if _, err := docRef.Delete(ctx); err != nil {
+				return fmt.Errorf("failed to delete orphaned aggregate %s: %w", docRef.ID, err)
+			}
+		} else {
+			if _, err := docRef.Set(ctx, data); err != nil {
+				return fmt.Errorf("failed to update aggregate %s: %w", docRef.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *service) RemoveSnapshot(ctx context.Context, snapshotID string) error {
+	if snapshotID == "" {
+		return nil
+	}
+
+	docs, err := s.DB.Collection(collection).
+		Where("snapshotIds", "array-contains", snapshotID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return fmt.Errorf("failed to query aggregates for snapshot %s: %w", snapshotID, err)
+	}
+
+	for _, doc := range docs {
+		docRef := doc.Ref
+		data := doc.Data()
+
+		// Remove snapshotID from snapshotIds array
+		if snapshotIDs, ok := data["snapshotIds"].([]any); ok {
+			newSnapshotIDs := make([]any, 0, len(snapshotIDs))
+			for _, id := range snapshotIDs {
+				if idStr, ok := id.(string); ok && idStr == snapshotID {
+					continue
+				}
+				newSnapshotIDs = append(newSnapshotIDs, id)
+			}
+			data["snapshotIds"] = newSnapshotIDs
+		}
+
+		// Remove snapshotId and originalSnapshotId from snapshotLinks
+		if linksMap, ok := data["snapshotLinks"].(map[string]any); ok {
+			for charID, linkVal := range linksMap {
+				if linkObj, ok := linkVal.(map[string]any); ok {
+					modified := false
+					if snapID, ok := linkObj["snapshotId"].(string); ok && snapID == snapshotID {
+						delete(linkObj, "snapshotId")
+						modified = true
+					}
+					if origSnapID, ok := linkObj["originalSnapshotId"].(string); ok && origSnapID == snapshotID {
+						delete(linkObj, "originalSnapshotId")
+						modified = true
+					}
+					if modified {
+						linksMap[charID] = linkObj
+					}
+				}
+			}
+			data["snapshotLinks"] = linksMap
+		}
+
+		if isAggregateOrphaned(data) {
+			slog.Info("Deleting orphaned aggregate after snapshot removal", "aggregateID", docRef.ID, "snapshotID", snapshotID)
+			if _, err := docRef.Delete(ctx); err != nil {
+				return fmt.Errorf("failed to delete orphaned aggregate %s: %w", docRef.ID, err)
+			}
+		} else {
+			if _, err := docRef.Set(ctx, data); err != nil {
+				return fmt.Errorf("failed to update aggregate %s: %w", docRef.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+func isAggregateOrphaned(data map[string]any) bool {
+	// Check sessionIds
+	if sessionIDs, ok := data["sessionIds"].([]any); ok && len(sessionIDs) > 0 {
+		return false
+	}
+
+	// Check snapshotIds
+	if snapshotIDs, ok := data["snapshotIds"].([]any); ok && len(snapshotIDs) > 0 {
+		return false
+	}
+
+	// Check snapshotLinks map
+	if linksMap, ok := data["snapshotLinks"].(map[string]any); ok && len(linksMap) > 0 {
+		for _, linkVal := range linksMap {
+			if linkObj, ok := linkVal.(map[string]any); ok {
+				if sid, ok := linkObj["snapshotId"].(string); ok && sid != "" {
+					return false
+				}
+				if sessID, ok := linkObj["sessionId"].(string); ok && sessID != "" {
+					return false
+				}
+			}
+		}
+	}
+
+	return true
 }
 
 // Helper function to convert any slice to []interface{}

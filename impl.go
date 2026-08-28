@@ -54,6 +54,36 @@ func NewServer(
 	}
 }
 
+func (s Server) DeleteSession(ctx context.Context, request api.DeleteSessionRequestObject) (api.DeleteSessionResponseObject, error) {
+	err := s.SessionService.Delete(ctx, request.SessionID, request.Params.XUserID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return api.DeleteSession404JSONResponse{Message: "session not found"}, nil
+		}
+		if errors.Is(err, session.ErrUnauthorized) {
+			return api.DeleteSession401JSONResponse{Message: "unauthorized"}, nil
+		}
+		slog.Error("failed to delete session", "sessionID", request.SessionID, "error", err)
+		return api.DeleteSession500JSONResponse{Message: err.Error()}, nil
+	}
+	return api.DeleteSession204Response{}, nil
+}
+
+func (s Server) DeleteSnapshot(ctx context.Context, request api.DeleteSnapshotRequestObject) (api.DeleteSnapshotResponseObject, error) {
+	err := s.SnapshotService.Delete(ctx, request.SnapshotID, request.Params.XUserID)
+	if err != nil {
+		if errors.Is(err, snapshot.NotFound) {
+			return api.DeleteSnapshot404JSONResponse{Message: "snapshot not found"}, nil
+		}
+		if errors.Is(err, snapshot.Unauthorized) {
+			return api.DeleteSnapshot401JSONResponse{Message: "unauthorized"}, nil
+		}
+		slog.Error("failed to delete snapshot", "snapshotID", request.SnapshotID, "error", err)
+		return api.DeleteSnapshot500JSONResponse{Message: err.Error()}, nil
+	}
+	return api.DeleteSnapshot204Response{}, nil
+}
+
 func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSnapshotInfoRequestObject) (api.BackfillSnapshotInfoResponseObject, error) {
 	snapshots, err := s.SnapshotService.GetAll(ctx)
 	if err != nil {

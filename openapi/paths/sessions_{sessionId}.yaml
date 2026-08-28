@@ -9,7 +9,7 @@ get:
   operationId: GetSession
   description: Get a specific session
   responses:
-    '200':
+    "200":
       description: Return a session
       content:
         application/json:
@@ -42,9 +42,47 @@ put:
   operationId: UpdateSession
   description: Update a session
   responses:
-    '200':
+    "200":
       description: Return the session
       content:
         application/json:
           schema:
             $ref: ../components/schemas/Session.yaml
+delete:
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - name: sessionId
+      in: path
+      required: true
+      x-go-name: sessionID
+      schema:
+        type: string
+  operationId: DeleteSession
+  description: Delete a session
+  responses:
+    "204":
+      description: Session deleted successfully
+    "400":
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "401":
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "404":
+      description: Session not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "500":
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

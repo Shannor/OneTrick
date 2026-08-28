@@ -7,11 +7,14 @@ import (
 	"oneTrick/api"
 	"oneTrick/generator"
 	"oneTrick/ptr"
+	"oneTrick/services/aggregate"
 	"oneTrick/utils"
 	"slices"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Service interface {
@@ -23,16 +26,25 @@ type Service interface {
 	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error)
 	Complete(ctx context.Context, ID string) error
 	SetLastActivity(ctx context.Context, ID, activityID string) error
+	Delete(ctx context.Context, sessionID string, userID string) error
 }
+
+var (
+	ErrNotFound     = fmt.Errorf("session not found")
+	ErrUnauthorized = fmt.Errorf("unauthorized")
+)
+
 type service struct {
-	db *firestore.Client
+	db               *firestore.Client
+	aggregateService aggregate.Service
 }
 
 var _ Service = (*service)(nil)
 
-func NewService(db *firestore.Client) Service {
+func NewService(db *firestore.Client, aggregateService aggregate.Service) Service {
 	return &service{
-		db: db,
+		db:               db,
+		aggregateService: aggregateService,
 	}
 }
 
@@ -247,6 +259,39 @@ func (s service) SetLastActivity(ctx context.Context, ID, activityID string) err
 	if err != nil {
 		return fmt.Errorf("failed to update session: %v", err)
 	}
+	return nil
+}
+
+func (s service) Delete(ctx context.Context, sessionID string, userID string) error {
+	docRef := s.db.Collection(collection).Doc(sessionID)
+	doc, err := docRef.Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return ErrNotFound
+		}
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+
+	var ses api.Session
+	if err := doc.DataTo(&ses); err != nil {
+		return fmt.Errorf("failed to parse session: %w", err)
+	}
+
+	if ses.UserID != userID {
+		return ErrUnauthorized
+	}
+
+	// Remove session references from aggregates
+	if err := s.aggregateService.RemoveSession(ctx, sessionID); err != nil {
+		slog.Error("failed to remove session references from aggregates", "sessionID", sessionID, "error", err)
+		return fmt.Errorf("failed to clean up session aggregates: %w", err)
+	}
+
+	// Delete session document
+	if _, err := docRef.Delete(ctx); err != nil {
+		return fmt.Errorf("failed to delete session: %w", err)
+	}
+
 	return nil
 }
 

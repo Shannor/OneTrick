@@ -10,7 +10,7 @@ get:
         type: string
       description: The unique identifier for the snapshot.
   responses:
-    '200':
+    "200":
       description: Specific character snapshot
       content:
         application/json:
@@ -45,31 +45,70 @@ put:
               type: string
               description: Description of the snapshot
   responses:
-    '200':
+    "200":
       description: Updated snapshot
       content:
         application/json:
           schema:
             $ref: ../components/schemas/CharacterSnapshot.yaml
-    '400':
+    "400":
       description: Bad Request
       content:
         application/json:
           schema:
             $ref: ../components/schemas/OneTrickError.yaml
-    '401':
+    "401":
       description: Unauthorized
       content:
         application/json:
           schema:
             $ref: ../components/schemas/OneTrickError.yaml
-    '404':
+    "404":
       description: Snapshot not found
       content:
         application/json:
           schema:
             $ref: ../components/schemas/OneTrickError.yaml
-    '500':
+    "500":
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+delete:
+  operationId: DeleteSnapshot
+  description: Delete a snapshot in the system
+  parameters:
+    - $ref: "../components/parameters/X-User-ID.yaml"
+    - name: snapshotId
+      in: path
+      x-go-name: snapshotID
+      required: true
+      schema:
+        type: string
+      description: The unique identifier for the snapshot.
+  responses:
+    "204":
+      description: Snapshot deleted successfully
+    "400":
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "401":
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "404":
+      description: Snapshot not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "500":
       description: Internal Server Error
       content:
         application/json:

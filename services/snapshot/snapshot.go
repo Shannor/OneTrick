@@ -16,6 +16,9 @@ import (
 	"oneTrick/utils"
 	"strconv"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Service defines the interface for working with character snapshots and aggregates.
@@ -49,6 +52,9 @@ type Service interface {
 
 	// Update allows for updating a snapshot document's data.
 	Update(ctx context.Context, snapshotID string, updateFn func(data map[string]any) error) error
+
+	// Delete deletes a snapshot document, its subcollection history, and cleans up references in aggregates.
+	Delete(ctx context.Context, snapshotID string, userID string) error
 }
 
 const (
@@ -377,6 +383,51 @@ func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID 
 	}
 
 	return api.CharacterSnapshot{}, nil
+}
+
+func (s *service) Delete(ctx context.Context, snapshotID string, userID string) error {
+	docRef := s.DB.Collection(collection).Doc(snapshotID)
+	doc, err := docRef.Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return NotFound
+		}
+		return fmt.Errorf("failed to get snapshot: %w", err)
+	}
+
+	var snap api.CharacterSnapshot
+	if err := doc.DataTo(&snap); err != nil {
+		return fmt.Errorf("failed to parse snapshot: %w", err)
+	}
+
+	if snap.UserID != userID {
+		return Unauthorized
+	}
+
+	// Delete subcollection history documents
+	historyDocs, err := docRef.Collection(historyCollection).Documents(ctx).GetAll()
+	if err != nil {
+		slog.Warn("failed to fetch snapshot history subcollection for deletion", "snapshotID", snapshotID, "error", err)
+	} else {
+		for _, hDoc := range historyDocs {
+			if _, err := hDoc.Ref.Delete(ctx); err != nil {
+				slog.Error("failed to delete history document", "historyID", hDoc.Ref.ID, "snapshotID", snapshotID, "error", err)
+			}
+		}
+	}
+
+	// Remove snapshot references from aggregates
+	if err := s.aggregateService.RemoveSnapshot(ctx, snapshotID); err != nil {
+		slog.Error("failed to remove snapshot references from aggregates", "snapshotID", snapshotID, "error", err)
+		return fmt.Errorf("failed to clean up snapshot aggregates: %w", err)
+	}
+
+	// Delete snapshot document
+	if _, err := docRef.Delete(ctx); err != nil {
+		return fmt.Errorf("failed to delete snapshot: %w", err)
+	}
+
+	return nil
 }
 
 // snapshotCanMerge will grow to cover a more complex answer on if a snapshot can be merged.

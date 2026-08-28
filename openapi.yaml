@@ -10,17 +10,17 @@ paths:
   /ping:
     get:
       responses:
-        '200':
+        "200":
           description: ping response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Pong'
+                $ref: "#/components/schemas/Pong"
   /admin/backfill-character-ids:
     post:
       operationId: BackfillAllUsersCharacterIds
       responses:
-        '200':
+        "200":
           description: Summary of backfilled users
           content:
             application/json:
@@ -40,7 +40,7 @@ paths:
     post:
       operationId: BackfillSnapshotInfo
       responses:
-        '200':
+        "200":
           description: Summary of backfilled users
           content:
             application/json:
@@ -60,7 +60,7 @@ paths:
     post:
       operationId: BackfillAggregateData
       responses:
-        '200':
+        "200":
           description: Summary of backfilled users
           content:
             application/json:
@@ -95,7 +95,7 @@ paths:
                   type: integer
                   format: int32
       responses:
-        '200':
+        "200":
           description: Return a list of search results found
           content:
             application/json:
@@ -108,27 +108,27 @@ paths:
                   results:
                     type: array
                     items:
-                      $ref: '#/components/schemas/SearchUserResult'
+                      $ref: "#/components/schemas/SearchUserResult"
                   hasMore:
                     type: boolean
   /fireteam:
     get:
       operationId: GetFireteam
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
-        - $ref: '#/components/parameters/X-Membership-ID'
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
       security:
         - bearerAuth: []
       responses:
-        '200':
+        "200":
           description: Returns the current fireteam. Will include the user if they are online. If offline the array will be empty
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/FireteamMember'
-        '503':
+                  $ref: "#/components/schemas/FireteamMember"
+        "503":
           description: Server is down
           content:
             application/json:
@@ -142,7 +142,7 @@ paths:
                     type: string
                     description: User friendly description of the error
                   status:
-                    $ref: '#/components/schemas/InternalError'
+                    $ref: "#/components/schemas/InternalError"
   /users/{userId}:
     get:
       operationId: GetUser
@@ -154,13 +154,13 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: User Profile Info
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Profile'
-        '503':
+                $ref: "#/components/schemas/Profile"
+        "503":
           description: Server is down
           content:
             application/json:
@@ -174,7 +174,7 @@ paths:
                     type: string
                     description: User friendly description of the error
                   status:
-                    $ref: '#/components/schemas/InternalError'
+                    $ref: "#/components/schemas/InternalError"
   /login:
     post:
       operationId: Login
@@ -189,12 +189,12 @@ paths:
                 code:
                   type: string
       responses:
-        '200':
+        "200":
           description: Logging in
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthResponse'
+                $ref: "#/components/schemas/AuthResponse"
   /refresh:
     post:
       operationId: RefreshToken
@@ -209,17 +209,17 @@ paths:
                 code:
                   type: string
       responses:
-        '200':
+        "200":
           description: Refreshing token
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthResponse'
+                $ref: "#/components/schemas/AuthResponse"
   /users/{userId}/sessions:
     post:
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
-        - $ref: '#/components/parameters/X-Membership-ID'
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
         - in: path
           name: userId
           x-go-name: userID
@@ -246,13 +246,13 @@ paths:
       operationId: StartUserSession
       description: Create a new session
       responses:
-        '201':
+        "201":
           description: Return the created session
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Session'
-        '400':
+                $ref: "#/components/schemas/Session"
+        "400":
           description: Request is invalid
           content:
             application/json:
@@ -304,19 +304,19 @@ paths:
               - SessionRequestComplete
       operationId: GetUserSessions
       responses:
-        '200':
+        "200":
           description: List of Sessions
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Session'
+                  $ref: "#/components/schemas/Session"
   /snapshots:
     post:
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
-        - $ref: '#/components/parameters/X-Membership-ID'
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
       requestBody:
         description: Provide the character to take the snapshot of
         required: true
@@ -331,21 +331,21 @@ paths:
                   type: string
                   x-go-name: characterID
       operationId: CreateSnapshot
-      description: 'Creates a new snapshot in the system and returns a list of '
+      description: "Creates a new snapshot in the system and returns a list of "
       responses:
-        '201':
+        "201":
           description: Return the created snapshot
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CharacterSnapshot'
+                $ref: "#/components/schemas/CharacterSnapshot"
     get:
       operationId: GetSnapshots
       security:
         - bearerAuth: []
       description: Returns a list of snapshots in the system for a character
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
+        - $ref: "#/components/parameters/X-User-ID"
         - name: count
           in: query
           required: true
@@ -365,14 +365,14 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: Returns an array of all snapshots for a character
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/CharacterSnapshot'
+                  $ref: "#/components/schemas/CharacterSnapshot"
   /snapshots/{snapshotId}:
     get:
       operationId: GetSnapshot
@@ -386,17 +386,17 @@ paths:
             type: string
           description: The unique identifier for the snapshot.
       responses:
-        '200':
+        "200":
           description: Specific character snapshot
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CharacterSnapshot'
+                $ref: "#/components/schemas/CharacterSnapshot"
     put:
       operationId: UpdateSnapshot
       description: Updates a snapshot in the system
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
+        - $ref: "#/components/parameters/X-User-ID"
         - name: snapshotId
           in: path
           x-go-name: snapshotID
@@ -421,42 +421,81 @@ paths:
                   type: string
                   description: Description of the snapshot
       responses:
-        '200':
+        "200":
           description: Updated snapshot
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CharacterSnapshot'
-        '400':
+                $ref: "#/components/schemas/CharacterSnapshot"
+        "400":
           description: Bad Request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '401':
+                $ref: "#/components/schemas/OneTrickError"
+        "401":
           description: Unauthorized
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '404':
+                $ref: "#/components/schemas/OneTrickError"
+        "404":
           description: Snapshot not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '500':
+                $ref: "#/components/schemas/OneTrickError"
+        "500":
           description: Internal Server Error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
+                $ref: "#/components/schemas/OneTrickError"
+    delete:
+      operationId: DeleteSnapshot
+      description: Delete a snapshot in the system
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - name: snapshotId
+          in: path
+          x-go-name: snapshotID
+          required: true
+          schema:
+            type: string
+          description: The unique identifier for the snapshot.
+      responses:
+        "204":
+          description: Snapshot deleted successfully
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
+        "404":
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
   /snapshots/{snapshotId}/merge:
     post:
       operationId: MergeSnapshots
       description: Merge two snapshots into a single snapshot
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
+        - $ref: "#/components/parameters/X-User-ID"
         - name: snapshotId
           in: path
           x-go-name: snapshotID
@@ -476,13 +515,13 @@ paths:
                   type: string
                   x-go-name: sourceSnapshotID
       responses:
-        '200':
+        "200":
           description: Merged snapshot
           content:
             application/json:
               schema:
                 type: boolean
-        '500':
+        "500":
           description: Error merging snapshots
           content:
             application/json:
@@ -509,10 +548,10 @@ paths:
           in: query
           x-go-name: gameMode
           schema:
-            $ref: '#/components/schemas/GameMode'
+            $ref: "#/components/schemas/GameMode"
           description: The game mode for the snapshot metrics
       responses:
-        '200':
+        "200":
           description: Aggregates for a snapshot
           content:
             application/json:
@@ -521,12 +560,12 @@ paths:
                   - aggregates
                 type: array
                 items:
-                  $ref: '#/components/schemas/Aggregate'
+                  $ref: "#/components/schemas/Aggregate"
   /activities:
     get:
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
-        - $ref: '#/components/parameters/X-Membership-ID'
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
         - name: count
           in: query
           required: true
@@ -551,17 +590,17 @@ paths:
         - name: mode
           in: query
           schema:
-            $ref: '#/components/schemas/ActivityMode'
+            $ref: "#/components/schemas/ActivityMode"
       operationId: GetActivities
       responses:
-        '200':
+        "200":
           description: List of Activities that have past
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/DetailActivity'
+                  $ref: "#/components/schemas/DetailActivity"
   /activities/{activityId}:
     get:
       operationId: GetActivity
@@ -579,7 +618,7 @@ paths:
             type: string
           description: The unique identifier for the activity.
       responses:
-        '200':
+        "200":
           description: Array of used guns during an activity
           content:
             application/json:
@@ -592,17 +631,17 @@ paths:
                   - users
                 properties:
                   activity:
-                    $ref: '#/components/schemas/ActivityHistory'
+                    $ref: "#/components/schemas/ActivityHistory"
                   teams:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Team'
+                      $ref: "#/components/schemas/Team"
                   aggregate:
-                    $ref: '#/components/schemas/Aggregate'
+                    $ref: "#/components/schemas/Aggregate"
                   snapshots:
                     type: object
                     additionalProperties:
-                      $ref: '#/components/schemas/CharacterSnapshot'
+                      $ref: "#/components/schemas/CharacterSnapshot"
                   postGameEntries:
                     type: array
                     items:
@@ -610,30 +649,30 @@ paths:
                   users:
                     type: object
                     additionalProperties:
-                      $ref: '#/components/schemas/User'
-        '400':
+                      $ref: "#/components/schemas/User"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '404':
+                $ref: "#/components/schemas/OneTrickError"
+        "404":
           description: Activity not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '500':
+                $ref: "#/components/schemas/OneTrickError"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
+                $ref: "#/components/schemas/OneTrickError"
   /sessions:
     post:
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
-        - $ref: '#/components/parameters/X-Membership-ID'
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
       requestBody:
         description: Provide the character to start the session for
         required: true
@@ -654,13 +693,13 @@ paths:
       operationId: StartSession
       description: Create a new session
       responses:
-        '201':
+        "201":
           description: Return the created session
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Session'
-        '400':
+                $ref: "#/components/schemas/Session"
+        "400":
           description: Request is invalid
           content:
             application/json:
@@ -709,14 +748,14 @@ paths:
               - SessionRequestComplete
       operationId: GetSessions
       responses:
-        '200':
+        "200":
           description: List of Sessions
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Session'
+                  $ref: "#/components/schemas/Session"
   /sessions/{sessionId}:
     get:
       parameters:
@@ -729,16 +768,16 @@ paths:
       operationId: GetSession
       description: Get a specific session
       responses:
-        '200':
+        "200":
           description: Return a session
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Session'
+                $ref: "#/components/schemas/Session"
     put:
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
-        - $ref: '#/components/parameters/X-Membership-ID'
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
         - name: sessionId
           in: path
           required: true
@@ -762,17 +801,55 @@ paths:
       operationId: UpdateSession
       description: Update a session
       responses:
-        '200':
+        "200":
           description: Return the session
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Session'
+                $ref: "#/components/schemas/Session"
+    delete:
+      parameters:
+        - $ref: "#/components/parameters/X-User-ID"
+        - name: sessionId
+          in: path
+          required: true
+          x-go-name: sessionID
+          schema:
+            type: string
+      operationId: DeleteSession
+      description: Delete a session
+      responses:
+        "204":
+          description: Session deleted successfully
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OneTrickError"
   /sessions/{sessionId}/complete:
     put:
       parameters:
-        - $ref: '#/components/parameters/X-User-ID'
-        - $ref: '#/components/parameters/X-Membership-ID'
+        - $ref: "#/components/parameters/X-User-ID"
+        - $ref: "#/components/parameters/X-Membership-ID"
         - name: sessionId
           in: path
           required: true
@@ -799,12 +876,12 @@ paths:
       operationId: CompleteSession
       description: Complete a session
       responses:
-        '200':
+        "200":
           description: Return the completed session
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Session'
+                $ref: "#/components/schemas/Session"
   /sessions/{sessionId}/aggregates:
     get:
       operationId: GetSessionAggregates
@@ -816,7 +893,7 @@ paths:
             type: string
             x-go-name: sessionID
       responses:
-        '200':
+        "200":
           description: Array of aggregates
           content:
             application/json:
@@ -829,11 +906,11 @@ paths:
                   aggregates:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Aggregate'
+                      $ref: "#/components/schemas/Aggregate"
                   snapshots:
                     type: object
                     additionalProperties:
-                      $ref: '#/components/schemas/CharacterSnapshot'
+                      $ref: "#/components/schemas/CharacterSnapshot"
   /metrics/best-performing-loadouts:
     get:
       operationId: GetBestPerformingLoadouts
@@ -853,7 +930,7 @@ paths:
         - in: query
           name: gameMode
           schema:
-            $ref: '#/components/schemas/GameMode'
+            $ref: "#/components/schemas/GameMode"
         - in: query
           name: count
           schema:
@@ -867,7 +944,7 @@ paths:
             minimum: 1
             maximum: 1000
       responses:
-        '200':
+        "200":
           description: Return the top snapshots for a user
           content:
             application/json:
@@ -881,11 +958,11 @@ paths:
                   items:
                     type: array
                     items:
-                      $ref: '#/components/schemas/CharacterSnapshot'
+                      $ref: "#/components/schemas/CharacterSnapshot"
                   stats:
                     type: object
                     additionalProperties:
-                      $ref: '#/components/schemas/PlayerStats'
+                      $ref: "#/components/schemas/PlayerStats"
                   count:
                     type: object
                     additionalProperties:
@@ -905,9 +982,9 @@ paths:
         - in: query
           name: gameMode
           schema:
-            $ref: '#/components/schemas/GameMode'
+            $ref: "#/components/schemas/GameMode"
       responses:
-        '200':
+        "200":
           description: Returns featured loadouts of the day
           content:
             application/json:
@@ -919,31 +996,31 @@ paths:
                   items:
                     type: array
                     items:
-                      $ref: '#/components/schemas/FeaturedLoadout'
-        '400':
+                      $ref: "#/components/schemas/FeaturedLoadout"
+        "400":
           description: Bad request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '401':
+                $ref: "#/components/schemas/OneTrickError"
+        "401":
           description: Unauthorized
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '404':
+                $ref: "#/components/schemas/OneTrickError"
+        "404":
           description: Not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
-        '500':
+                $ref: "#/components/schemas/OneTrickError"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OneTrickError'
+                $ref: "#/components/schemas/OneTrickError"
 components:
   securitySchemes:
     bearerAuth:
@@ -1095,7 +1172,7 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: currentTitle
         emblemColor:
-          $ref: '#/components/schemas/Color'
+          $ref: "#/components/schemas/Color"
         race:
           type: string
           x-oapi-codegen-extra-tags:
@@ -1107,7 +1184,7 @@ components:
         stats:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/ClassStat'
+            $ref: "#/components/schemas/ClassStat"
     FireteamMember:
       x-oapi-codegen-extra-tags:
         firestore: fireteamMember
@@ -1135,7 +1212,7 @@ components:
         characters:
           type: array
           items:
-            $ref: '#/components/schemas/Character'
+            $ref: "#/components/schemas/Character"
           x-oapi-codegen-extra-tags:
             firestore: characters
     InternalError:
@@ -1168,7 +1245,7 @@ components:
         characters:
           type: array
           items:
-            $ref: '#/components/schemas/Character'
+            $ref: "#/components/schemas/Character"
     AuthResponse:
       type: object
       properties:
@@ -1270,13 +1347,13 @@ components:
         startedBy:
           type: object
           allOf:
-            - $ref: '#/components/schemas/AuditField'
+            - $ref: "#/components/schemas/AuditField"
           x-oapi-codegen-extra-tags:
             firestore: startedBy
         completedBy:
           type: object
           allOf:
-            - $ref: '#/components/schemas/AuditField'
+            - $ref: "#/components/schemas/AuditField"
           x-oapi-codegen-extra-tags:
             firestore: completedBy
         status:
@@ -1365,11 +1442,11 @@ components:
         styleBasicInfo:
           type: object
           allOf:
-            - $ref: '#/components/schemas/BaseItemInfo'
+            - $ref: "#/components/schemas/BaseItemInfo"
           x-oapi-codegen-extra-tags:
             firestore: styleBasicInfo
         damage:
-          $ref: '#/components/schemas/DamageInfo'
+          $ref: "#/components/schemas/DamageInfo"
     DamageInfo:
       x-oapi-codegen-extra-tags:
         firestore: damageInfo
@@ -1393,7 +1470,7 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: transparentIcon
         color:
-          $ref: '#/components/schemas/Color'
+          $ref: "#/components/schemas/Color"
     Perk:
       x-oapi-codegen-extra-tags:
         firestore: perks
@@ -1456,7 +1533,7 @@ components:
         firestore: stats
       type: object
       additionalProperties:
-        $ref: '#/components/schemas/GunStat'
+        $ref: "#/components/schemas/GunStat"
       x-dictionary-key:
         type: string
     Socket:
@@ -1520,19 +1597,19 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: characterId
         baseInfo:
-          $ref: '#/components/schemas/BaseItemInfo'
+          $ref: "#/components/schemas/BaseItemInfo"
         perks:
           type: array
           items:
-            $ref: '#/components/schemas/Perk'
-          description: 'Information specifically about the perks currently active on the item. COMPONENT TYPE: ItemPerks'
+            $ref: "#/components/schemas/Perk"
+          description: "Information specifically about the perks currently active on the item. COMPONENT TYPE: ItemPerks"
           x-oapi-codegen-extra-tags:
             firestore: perks
         stats:
           type: object
           allOf:
-            - $ref: '#/components/schemas/Stats'
-          description: 'Information about the computed stats of the item: power, defense, etc... COMPONENT TYPE: ItemStats'
+            - $ref: "#/components/schemas/Stats"
+          description: "Information about the computed stats of the item: power, defense, etc... COMPONENT TYPE: ItemStats"
           x-oapi-codegen-extra-tags:
             firestore: stats
         sockets:
@@ -1540,8 +1617,8 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: sockets
           items:
-            $ref: '#/components/schemas/Socket'
-          description: 'Information about the sockets of the item: which are currently active, what potential sockets you could have and the stats/abilities/perks you can gain from them. COMPONENT TYPE: ItemSockets'
+            $ref: "#/components/schemas/Socket"
+          description: "Information about the sockets of the item: which are currently active, what potential sockets you could have and the stats/abilities/perks you can gain from them. COMPONENT TYPE: ItemSockets"
       description: 'The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn''t have an "itemInstanceId": for those, get your information from the DestinyInventoryDefinition.'
     ItemSnapshot:
       type: object
@@ -1575,12 +1652,12 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: bucketHash
         details:
-          $ref: '#/components/schemas/ItemProperties'
+          $ref: "#/components/schemas/ItemProperties"
     Loadout:
       description: All buckets that we currently care about, Kinetic, Energy, Heavy and Class for now. Each will be a key in the items.
       type: object
       additionalProperties:
-        $ref: '#/components/schemas/ItemSnapshot'
+        $ref: "#/components/schemas/ItemSnapshot"
       x-oapi-codegen-extra-tags:
         firestore: loadout
     CharacterSnapshot:
@@ -1636,7 +1713,7 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: stats
           additionalProperties:
-            $ref: '#/components/schemas/ClassStat'
+            $ref: "#/components/schemas/ClassStat"
         createdAt:
           type: string
           format: date-time
@@ -1650,7 +1727,7 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: updatedAt
         loadout:
-          $ref: '#/components/schemas/Loadout'
+          $ref: "#/components/schemas/Loadout"
     OneTrickError:
       description: Known errors for the one trick API
       type: object
@@ -1662,7 +1739,7 @@ components:
           type: string
           description: User friendly description of the error
         status:
-          $ref: '#/components/schemas/InternalError'
+          $ref: "#/components/schemas/InternalError"
     GameMode:
       type: string
       enum:
@@ -1718,7 +1795,7 @@ components:
         activityHash:
           type: integer
           format: int64
-          description: 'Hash id of the type of activity: Strike, Competitive, QuickPlay, etc. '
+          description: "Hash id of the type of activity: Strike, Competitive, QuickPlay, etc. "
           x-oapi-codegen-extra-tags:
             firestore: activityHash
         activityIcon:
@@ -1805,9 +1882,9 @@ components:
             firestore: sessionId
           type: string
         confidenceLevel:
-          $ref: '#/components/schemas/ConfidenceLevel'
+          $ref: "#/components/schemas/ConfidenceLevel"
         confidenceSource:
-          $ref: '#/components/schemas/ConfidenceSource'
+          $ref: "#/components/schemas/ConfidenceSource"
         createdAt:
           type: string
           format: date-time
@@ -1838,56 +1915,56 @@ components:
         kills:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Number of kills done in the match
           x-oapi-codegen-extra-tags:
             firestore: kills
         assists:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Number of assists done in the match
           x-oapi-codegen-extra-tags:
             firestore: assists
         deaths:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Number of deaths done in the match
           x-oapi-codegen-extra-tags:
             firestore: deaths
         kd:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: ratio of kill / deaths in the match
           x-oapi-codegen-extra-tags:
             firestore: kd
         kda:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: ratio of kills + assists/ deaths in the match
           x-oapi-codegen-extra-tags:
             firestore: kda
         standing:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Win or lose in the match
           x-oapi-codegen-extra-tags:
             firestore: standing
         team:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Id for the team the player was on this match
           x-oapi-codegen-extra-tags:
             firestore: team
         fireTeamId:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: ID for the fireteam player was on. If the same as another player then they were together
           x-oapi-codegen-extra-tags:
             firestore: fireTeamId
@@ -1895,7 +1972,7 @@ components:
         timePlayed:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Time in seconds the player was in the match
           x-oapi-codegen-extra-tags:
             firestore: timePlayed
@@ -1940,21 +2017,21 @@ components:
         basic:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Basic stat value.
           x-oapi-codegen-extra-tags:
             firestore: basic
         pga:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Per game average for the statistic, if applicable
           x-oapi-codegen-extra-tags:
             firestore: pga
         weighted:
           type: object
           allOf:
-            - $ref: '#/components/schemas/StatsValuePair'
+            - $ref: "#/components/schemas/StatsValuePair"
           description: Weighted value of the stat if a weight greater than 1 has been assigned.
           x-oapi-codegen-extra-tags:
             firestore: weighted
@@ -1979,15 +2056,15 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: referenceId
         display:
-          $ref: '#/components/schemas/Display'
+          $ref: "#/components/schemas/Display"
         properties:
-          $ref: '#/components/schemas/ItemProperties'
+          $ref: "#/components/schemas/ItemProperties"
         stats:
           x-oapi-codegen-extra-tags:
             firestore: stats
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/UniqueStatValue'
+            $ref: "#/components/schemas/UniqueStatValue"
     InstancePerformance:
       type: object
       x-oapi-codegen-extra-tags:
@@ -1997,11 +2074,11 @@ components:
         - weapons
       properties:
         playerStats:
-          $ref: '#/components/schemas/PlayerStats'
+          $ref: "#/components/schemas/PlayerStats"
         weapons:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/WeaponInstanceMetrics'
+            $ref: "#/components/schemas/WeaponInstanceMetrics"
           x-oapi-codegen-extra-tags:
             firestore: weapons
         extra:
@@ -2009,7 +2086,7 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: extra
           additionalProperties:
-            $ref: '#/components/schemas/UniqueStatValue'
+            $ref: "#/components/schemas/UniqueStatValue"
     Aggregate:
       type: object
       required:
@@ -2052,19 +2129,19 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: snapshotIds
         activityDetails:
-          $ref: '#/components/schemas/ActivityHistory'
+          $ref: "#/components/schemas/ActivityHistory"
         snapshotLinks:
           type: object
           x-oapi-codegen-extra-tags:
             firestore: snapshotLinks
           additionalProperties:
-            $ref: '#/components/schemas/SnapshotLink'
+            $ref: "#/components/schemas/SnapshotLink"
         performance:
           type: object
           x-oapi-codegen-extra-tags:
             firestore: performance
           additionalProperties:
-            $ref: '#/components/schemas/InstancePerformance'
+            $ref: "#/components/schemas/InstancePerformance"
         createdAt:
           type: string
           format: date-time
@@ -2088,9 +2165,9 @@ components:
         - activity
       properties:
         activity:
-          $ref: '#/components/schemas/ActivityHistory'
+          $ref: "#/components/schemas/ActivityHistory"
         aggregate:
-          $ref: '#/components/schemas/Aggregate'
+          $ref: "#/components/schemas/Aggregate"
     Team:
       x-oapi-codegen-extra-tags:
         firestore: team
@@ -2168,7 +2245,7 @@ components:
         memberships:
           type: array
           items:
-            $ref: '#/components/schemas/Membership'
+            $ref: "#/components/schemas/Membership"
         createdAt:
           type: string
           format: date-time
@@ -2188,11 +2265,11 @@ components:
         - snapshot
       properties:
         snapshot:
-          $ref: '#/components/schemas/CharacterSnapshot'
+          $ref: "#/components/schemas/CharacterSnapshot"
         user:
-          $ref: '#/components/schemas/User'
+          $ref: "#/components/schemas/User"
         stats:
-          $ref: '#/components/schemas/PlayerStats'
+          $ref: "#/components/schemas/PlayerStats"
         usageCount:
           type: integer
         featuredReason:
