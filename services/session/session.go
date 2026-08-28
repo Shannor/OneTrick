@@ -263,35 +263,43 @@ func (s service) SetLastActivity(ctx context.Context, ID, activityID string) err
 }
 
 func (s service) Delete(ctx context.Context, sessionID string, userID string) error {
+	slog.Info("Initiating session deletion", "sessionID", sessionID, "userID", userID)
 	docRef := s.db.Collection(collection).Doc(sessionID)
 	doc, err := docRef.Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
+			slog.Warn("Session not found for deletion", "sessionID", sessionID, "userID", userID)
 			return ErrNotFound
 		}
+		slog.Error("Failed to fetch session document for deletion", "sessionID", sessionID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 
 	var ses api.Session
 	if err := doc.DataTo(&ses); err != nil {
+		slog.Error("Failed to parse session data for deletion", "sessionID", sessionID, "error", err)
 		return fmt.Errorf("failed to parse session: %w", err)
 	}
 
 	if ses.UserID != userID {
+		slog.Warn("Unauthorized attempt to delete session", "sessionID", sessionID, "requestUserID", userID, "sessionUserID", ses.UserID)
 		return ErrUnauthorized
 	}
 
 	// Remove session references from aggregates
 	if err := s.aggregateService.RemoveSession(ctx, sessionID); err != nil {
-		slog.Error("failed to remove session references from aggregates", "sessionID", sessionID, "error", err)
+		slog.Error("Failed to remove session references from aggregates", "sessionID", sessionID, "error", err)
 		return fmt.Errorf("failed to clean up session aggregates: %w", err)
 	}
+	slog.Info("Successfully cleaned up aggregate references for session", "sessionID", sessionID)
 
 	// Delete session document
 	if _, err := docRef.Delete(ctx); err != nil {
+		slog.Error("Failed to delete session document", "sessionID", sessionID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
+	slog.Info("Successfully deleted session document", "sessionID", sessionID, "userID", userID)
 	return nil
 }
 

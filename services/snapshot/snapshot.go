@@ -386,47 +386,60 @@ func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID 
 }
 
 func (s *service) Delete(ctx context.Context, snapshotID string, userID string) error {
+	slog.Info("Initiating snapshot deletion", "snapshotID", snapshotID, "userID", userID)
 	docRef := s.DB.Collection(collection).Doc(snapshotID)
 	doc, err := docRef.Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
+			slog.Warn("Snapshot not found for deletion", "snapshotID", snapshotID, "userID", userID)
 			return NotFound
 		}
+		slog.Error("Failed to fetch snapshot document for deletion", "snapshotID", snapshotID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to get snapshot: %w", err)
 	}
 
 	var snap api.CharacterSnapshot
 	if err := doc.DataTo(&snap); err != nil {
+		slog.Error("Failed to parse snapshot data for deletion", "snapshotID", snapshotID, "error", err)
 		return fmt.Errorf("failed to parse snapshot: %w", err)
 	}
 
 	if snap.UserID != userID {
+		slog.Warn("Unauthorized attempt to delete snapshot", "snapshotID", snapshotID, "requestUserID", userID, "snapshotUserID", snap.UserID)
 		return Unauthorized
 	}
 
 	// Delete subcollection history documents
 	historyDocs, err := docRef.Collection(historyCollection).Documents(ctx).GetAll()
 	if err != nil {
-		slog.Warn("failed to fetch snapshot history subcollection for deletion", "snapshotID", snapshotID, "error", err)
+		slog.Warn("Failed to fetch snapshot history subcollection for deletion", "snapshotID", snapshotID, "error", err)
 	} else {
+		slog.Info("Deleting subcollection history entries for snapshot", "snapshotID", snapshotID, "count", len(historyDocs))
+		deletedHistoryCount := 0
 		for _, hDoc := range historyDocs {
 			if _, err := hDoc.Ref.Delete(ctx); err != nil {
-				slog.Error("failed to delete history document", "historyID", hDoc.Ref.ID, "snapshotID", snapshotID, "error", err)
+				slog.Error("Failed to delete history document", "historyID", hDoc.Ref.ID, "snapshotID", snapshotID, "error", err)
+			} else {
+				deletedHistoryCount++
 			}
 		}
+		slog.Info("Completed history entries deletion", "snapshotID", snapshotID, "deletedCount", deletedHistoryCount)
 	}
 
 	// Remove snapshot references from aggregates
 	if err := s.aggregateService.RemoveSnapshot(ctx, snapshotID); err != nil {
-		slog.Error("failed to remove snapshot references from aggregates", "snapshotID", snapshotID, "error", err)
+		slog.Error("Failed to remove snapshot references from aggregates", "snapshotID", snapshotID, "error", err)
 		return fmt.Errorf("failed to clean up snapshot aggregates: %w", err)
 	}
+	slog.Info("Successfully cleaned up aggregate references for snapshot", "snapshotID", snapshotID)
 
 	// Delete snapshot document
 	if _, err := docRef.Delete(ctx); err != nil {
+		slog.Error("Failed to delete snapshot document", "snapshotID", snapshotID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to delete snapshot: %w", err)
 	}
 
+	slog.Info("Successfully deleted snapshot document", "snapshotID", snapshotID, "userID", userID)
 	return nil
 }
 

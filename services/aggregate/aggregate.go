@@ -239,13 +239,16 @@ func (s *service) RemoveSession(ctx context.Context, sessionID string) error {
 		return nil
 	}
 
+	slog.Info("Removing session references from aggregates", "sessionID", sessionID)
 	docs, err := s.DB.Collection(collection).
 		Where("sessionIds", "array-contains", sessionID).
 		Documents(ctx).GetAll()
 	if err != nil {
+		slog.Error("Failed to query aggregates for session removal", "sessionID", sessionID, "error", err)
 		return fmt.Errorf("failed to query aggregates for session %s: %w", sessionID, err)
 	}
 
+	slog.Info("Found aggregates referencing session", "sessionID", sessionID, "count", len(docs))
 	for _, doc := range docs {
 		docRef := doc.Ref
 		data := doc.Data()
@@ -278,14 +281,19 @@ func (s *service) RemoveSession(ctx context.Context, sessionID string) error {
 		if isAggregateOrphaned(data) {
 			slog.Info("Deleting orphaned aggregate after session removal", "aggregateID", docRef.ID, "sessionID", sessionID)
 			if _, err := docRef.Delete(ctx); err != nil {
+				slog.Error("Failed to delete orphaned aggregate", "aggregateID", docRef.ID, "sessionID", sessionID, "error", err)
 				return fmt.Errorf("failed to delete orphaned aggregate %s: %w", docRef.ID, err)
 			}
+			slog.Info("Successfully deleted orphaned aggregate", "aggregateID", docRef.ID, "sessionID", sessionID)
 		} else {
 			if _, err := docRef.Set(ctx, data); err != nil {
+				slog.Error("Failed to update aggregate after session removal", "aggregateID", docRef.ID, "sessionID", sessionID, "error", err)
 				return fmt.Errorf("failed to update aggregate %s: %w", docRef.ID, err)
 			}
+			slog.Info("Successfully updated aggregate after session removal", "aggregateID", docRef.ID, "sessionID", sessionID)
 		}
 	}
+	slog.Info("Finished removing session references from aggregates", "sessionID", sessionID, "affectedAggregates", len(docs))
 	return nil
 }
 
@@ -294,13 +302,16 @@ func (s *service) RemoveSnapshot(ctx context.Context, snapshotID string) error {
 		return nil
 	}
 
+	slog.Info("Removing snapshot references from aggregates", "snapshotID", snapshotID)
 	docs, err := s.DB.Collection(collection).
 		Where("snapshotIds", "array-contains", snapshotID).
 		Documents(ctx).GetAll()
 	if err != nil {
+		slog.Error("Failed to query aggregates for snapshot removal", "snapshotID", snapshotID, "error", err)
 		return fmt.Errorf("failed to query aggregates for snapshot %s: %w", snapshotID, err)
 	}
 
+	slog.Info("Found aggregates referencing snapshot", "snapshotID", snapshotID, "count", len(docs))
 	for _, doc := range docs {
 		docRef := doc.Ref
 		data := doc.Data()
@@ -341,14 +352,19 @@ func (s *service) RemoveSnapshot(ctx context.Context, snapshotID string) error {
 		if isAggregateOrphaned(data) {
 			slog.Info("Deleting orphaned aggregate after snapshot removal", "aggregateID", docRef.ID, "snapshotID", snapshotID)
 			if _, err := docRef.Delete(ctx); err != nil {
+				slog.Error("Failed to delete orphaned aggregate", "aggregateID", docRef.ID, "snapshotID", snapshotID, "error", err)
 				return fmt.Errorf("failed to delete orphaned aggregate %s: %w", docRef.ID, err)
 			}
+			slog.Info("Successfully deleted orphaned aggregate", "aggregateID", docRef.ID, "snapshotID", snapshotID)
 		} else {
 			if _, err := docRef.Set(ctx, data); err != nil {
+				slog.Error("Failed to update aggregate after snapshot removal", "aggregateID", docRef.ID, "snapshotID", snapshotID, "error", err)
 				return fmt.Errorf("failed to update aggregate %s: %w", docRef.ID, err)
 			}
+			slog.Info("Successfully updated aggregate after snapshot removal", "aggregateID", docRef.ID, "snapshotID", snapshotID)
 		}
 	}
+	slog.Info("Finished removing snapshot references from aggregates", "snapshotID", snapshotID, "affectedAggregates", len(docs))
 	return nil
 }
 

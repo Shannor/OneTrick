@@ -3,7 +3,7 @@ package gcp
 import (
 	"cloud.google.com/go/firestore"
 	"context"
-	"log"
+	"log/slog"
 	"os"
 )
 
@@ -14,11 +14,18 @@ func CreateFirestore(ctx context.Context) *firestore.Client {
 		projectID = "gruntt-destiny"
 	}
 
+	emulatorHost := os.Getenv("FIRESTORE_EMULATOR_HOST")
+	if emulatorHost != "" {
+		slog.Info("Connecting to Firestore emulator", "host", emulatorHost, "projectID", projectID)
+	} else {
+		slog.Info("Connecting to Google Cloud Firestore", "projectID", projectID)
+	}
+
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {
-		log.Fatalf("Failed to create client: %v", err)
+		slog.Error("Failed to create Firestore client", "projectID", projectID, "error", err)
+		os.Exit(1)
 	}
-	// Close client when done with
-	// defer client.Close()
+	slog.Info("Successfully initialized Firestore client", "projectID", projectID)
 	return client
 }
