@@ -1,0 +1,16 @@
+type: object
+x-oapi-codegen-extra-tags:
+  firestore: sessionWeaponSummary
+properties:
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  icon:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: icon
+  kills:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: kills

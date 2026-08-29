@@ -78,4 +78,17 @@ func main() {
 				u.Ref.ID, d["displayName"], d["uniqueName"])
 		}
 	}
+
+	// 4. Inspect Sessions
+	sessions, err := client.Collection("sessions").Limit(5).Documents(ctx).GetAll()
+	if err != nil {
+		fmt.Printf("Error reading sessions: %v\n", err)
+	} else {
+		fmt.Printf("\n--- Sessions (Sample %d) ---\n", len(sessions))
+		for _, s := range sessions {
+			d := s.Data()
+			fmt.Printf("ID: %s | UserID: %v | CharacterID: %v | Status: %v | Summary: %+v\n",
+				s.Ref.ID, d["userId"], d["characterId"], d["status"], d["sessionSummary"])
+		}
+	}
 }
