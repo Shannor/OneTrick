@@ -1300,6 +1300,81 @@ components:
           type: string
           x-oapi-codegen-extra-tags:
             firestore: username
+    SessionWeaponSummary:
+      type: object
+      x-oapi-codegen-extra-tags:
+        firestore: sessionWeaponSummary
+      properties:
+        name:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: name
+        icon:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: icon
+        kills:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: kills
+    SessionSummary:
+      type: object
+      x-oapi-codegen-extra-tags:
+        firestore: sessionSummary
+      properties:
+        totalMatches:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: totalMatches
+        wins:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: wins
+        losses:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: losses
+        winRate:
+          type: number
+          format: double
+          x-oapi-codegen-extra-tags:
+            firestore: winRate
+        kills:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: kills
+        deaths:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: deaths
+        assists:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: assists
+        kdRatio:
+          type: number
+          format: double
+          x-go-name: KDRatio
+          x-oapi-codegen-extra-tags:
+            firestore: kdRatio
+        kdaRatio:
+          type: number
+          format: double
+          x-go-name: KDARatio
+          x-oapi-codegen-extra-tags:
+            firestore: kdaRatio
+        modesPlayed:
+          type: array
+          items:
+            type: string
+          x-oapi-codegen-extra-tags:
+            firestore: modesPlayed
+        topWeapons:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionWeaponSummary"
+          x-oapi-codegen-extra-tags:
+            firestore: topWeapons
     Session:
       x-oapi-codegen-extra-tags:
         firestore: session
@@ -1386,6 +1461,10 @@ components:
           writeOnly: true
           x-oapi-codegen-extra-tags:
             firestore: lastSeenTimestamp
+        summary:
+          $ref: "#/components/schemas/SessionSummary"
+          x-oapi-codegen-extra-tags:
+            firestore: summary
     BaseItemInfo:
       x-oapi-codegen-extra-tags:
         firestore: baseItemInfo

@@ -83,3 +83,7 @@ properties:
     writeOnly: true
     x-oapi-codegen-extra-tags:
       firestore: lastSeenTimestamp
+  summary:
+    $ref: ./SessionSummary.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: summary
