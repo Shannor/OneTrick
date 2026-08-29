@@ -7,6 +7,7 @@ import (
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -315,6 +316,9 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activity
 		instID = *history.InstanceId
 	}
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(history.Mode))
+	if directorDef.DisplayProperties.Name == "Iron Banner: Tribute" || strings.Contains(strings.ToLower(directorDef.DisplayProperties.Name), "tribute") {
+		mode = "Iron Banner Tribute"
+	}
 	return &api.ActivityHistory{
 		ActivityHash: actHash,
 		InstanceID:   instID,
@@ -390,6 +394,9 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 	}
 	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
+	if activity.DisplayProperties.Name == "Iron Banner: Tribute" || strings.Contains(strings.ToLower(activity.DisplayProperties.Name), "tribute") {
+		mode = "Iron Banner Tribute"
+	}
 
 	var pTime time.Time
 	if period.Period != nil {
@@ -547,7 +554,7 @@ func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	case bungie.CurrentActivityModeTypeIronBannerClash:
 		return "Iron Banner Clash"
 	case bungie.CurrentActivityModeTypeIronBannerSupremacy:
-		return "Iron Banner Supremacy"
+		return "Iron Banner Tribute / Supremacy"
 	case bungie.CurrentActivityModeTypePrivateMatchesSurvival:
 		return "Private Matches Survival"
 	case bungie.CurrentActivityModeTypeTrialsSurvival:
@@ -580,7 +587,20 @@ func gameModeToActivityModes(gameMode api.GameMode) ([]string, error) {
 	case api.GameModeQuickPlay:
 		return []string{"Control Quickplay", "Control", "Control: Matchmade", "Clash", "Clash Quickplay"}, nil
 	case api.GameModeIronBanner:
-		return []string{"Iron Banner Zone:Control", "Iron Banner:Control", "Iron Banner", "Iron Banner:Supremacy", "Iron Banner:Rift", "Iron Banner:Clash"}, nil
+		return []string{
+			"Iron Banner Zone:Control",
+			"Iron Banner:Control",
+			"Iron Banner",
+			"Iron Banner:Supremacy",
+			"Iron Banner:Rift",
+			"Iron Banner:Clash",
+			"Iron Banner: Tribute",
+			"Iron Banner Tribute",
+			"Fortress: Matchmade",
+			"Iron Banner: Fortress",
+			"Eruption: Matchmade",
+			"Iron Banner: Eruption",
+		}, nil
 	case api.GameModeTrials:
 		return []string{"Trials of Osiris", "Trials of Osiris: Matchmade"}, nil
 	default:
