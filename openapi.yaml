@@ -341,38 +341,95 @@ paths:
                 $ref: "#/components/schemas/CharacterSnapshot"
     get:
       operationId: GetSnapshots
-      security:
-        - bearerAuth: []
-      description: Returns a list of snapshots in the system for a character
+      description: Returns a paginated list of snapshots in the system for a user and character, with optional metrics, sorting, and gameMode filtering
       parameters:
-        - $ref: "#/components/parameters/X-User-ID"
-        - name: count
+        - name: userId
           in: query
+          x-go-name: userID
           required: true
           schema:
-            type: integer
-            format: int64
-        - name: page
-          in: query
-          required: true
-          schema:
-            type: integer
-            format: int64
+            type: string
         - name: characterId
           in: query
           x-go-name: characterID
           required: true
           schema:
             type: string
+        - name: count
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int
+            minimum: 1
+            maximum: 50
+            default: 10
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int
+            minimum: 0
+            default: 0
+        - name: gameMode
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/GameMode"
+        - name: minimumGames
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: includeStats
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: sortBy
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - created_at
+              - win_rate
+              - kd_ratio
+              - matches_played
+            x-enum-varnames:
+              - SortByCreatedAt
+              - SortByWinRate
+              - SortByKDRatio
+              - SortByMatchesPlayed
+            default: created_at
       responses:
         "200":
-          description: Returns an array of all snapshots for a character
+          description: Returns loadouts response with optional metrics map and match counts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/CharacterSnapshot"
+                required:
+                  - items
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CharacterSnapshot"
+                  stats:
+                    type: object
+                    description: Map of snapshot ID to PlayerStats (populated when includeStats is true or when sorting by metrics)
+                    additionalProperties:
+                      $ref: "#/components/schemas/PlayerStats"
+                  count:
+                    type: object
+                    description: Map of snapshot ID to total matches played
+                    additionalProperties:
+                      type: integer
   /snapshots/{snapshotId}:
     get:
       operationId: GetSnapshot
@@ -1465,6 +1522,20 @@ components:
           $ref: "#/components/schemas/SessionSummary"
           x-oapi-codegen-extra-tags:
             firestore: summary
+    GameMode:
+      type: string
+      enum:
+        - allGameModes
+        - quickplay
+        - competitive
+        - trials
+        - ironBanner
+      x-enum-varnames:
+        - GameModeAll
+        - GameModeQuickPlay
+        - GameModeCompetitive
+        - GameModeTrials
+        - GameModeIronBanner
     BaseItemInfo:
       x-oapi-codegen-extra-tags:
         firestore: baseItemInfo
@@ -1807,6 +1878,92 @@ components:
             firestore: updatedAt
         loadout:
           $ref: "#/components/schemas/Loadout"
+    StatsValuePair:
+      type: object
+      x-oapi-codegen-extra-tags:
+        firestore: statsValuePair
+      properties:
+        value:
+          type: number
+          description: Raw value of the statistic
+          format: double
+          x-oapi-codegen-extra-tags:
+            firestore: value
+        displayValue:
+          type: string
+          description: Localized formatted version of the value.
+          x-oapi-codegen-extra-tags:
+            firestore: displayValue
+    PlayerStats:
+      x-oapi-codegen-extra-tags:
+        firestore: playerStats
+      type: object
+      description: All Player Stats from a match that we currently care about
+      properties:
+        kills:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Number of kills done in the match
+          x-oapi-codegen-extra-tags:
+            firestore: kills
+        assists:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Number of assists done in the match
+          x-oapi-codegen-extra-tags:
+            firestore: assists
+        deaths:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Number of deaths done in the match
+          x-oapi-codegen-extra-tags:
+            firestore: deaths
+        kd:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: ratio of kill / deaths in the match
+          x-oapi-codegen-extra-tags:
+            firestore: kd
+        kda:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: ratio of kills + assists/ deaths in the match
+          x-oapi-codegen-extra-tags:
+            firestore: kda
+        standing:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Win or lose in the match
+          x-oapi-codegen-extra-tags:
+            firestore: standing
+        team:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Id for the team the player was on this match
+          x-oapi-codegen-extra-tags:
+            firestore: team
+        fireTeamId:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: ID for the fireteam player was on. If the same as another player then they were together
+          x-oapi-codegen-extra-tags:
+            firestore: fireTeamId
+          x-go-name: fireTeamID
+        timePlayed:
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/StatsValuePair"
+          description: Time in seconds the player was in the match
+          x-oapi-codegen-extra-tags:
+            firestore: timePlayed
     OneTrickError:
       description: Known errors for the one trick API
       type: object
@@ -1819,20 +1976,6 @@ components:
           description: User friendly description of the error
         status:
           $ref: "#/components/schemas/InternalError"
-    GameMode:
-      type: string
-      enum:
-        - allGameModes
-        - quickplay
-        - competitive
-        - trials
-        - ironBanner
-      x-enum-varnames:
-        - GameModeAll
-        - GameModeQuickPlay
-        - GameModeCompetitive
-        - GameModeTrials
-        - GameModeIronBanner
     ActivityHistory:
       type: object
       x-oapi-codegen-extra-tags:
@@ -1969,92 +2112,6 @@ components:
           format: date-time
           x-oapi-codegen-extra-tags:
             firestore: createdAt
-    StatsValuePair:
-      type: object
-      x-oapi-codegen-extra-tags:
-        firestore: statsValuePair
-      properties:
-        value:
-          type: number
-          description: Raw value of the statistic
-          format: double
-          x-oapi-codegen-extra-tags:
-            firestore: value
-        displayValue:
-          type: string
-          description: Localized formatted version of the value.
-          x-oapi-codegen-extra-tags:
-            firestore: displayValue
-    PlayerStats:
-      x-oapi-codegen-extra-tags:
-        firestore: playerStats
-      type: object
-      description: All Player Stats from a match that we currently care about
-      properties:
-        kills:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: Number of kills done in the match
-          x-oapi-codegen-extra-tags:
-            firestore: kills
-        assists:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: Number of assists done in the match
-          x-oapi-codegen-extra-tags:
-            firestore: assists
-        deaths:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: Number of deaths done in the match
-          x-oapi-codegen-extra-tags:
-            firestore: deaths
-        kd:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: ratio of kill / deaths in the match
-          x-oapi-codegen-extra-tags:
-            firestore: kd
-        kda:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: ratio of kills + assists/ deaths in the match
-          x-oapi-codegen-extra-tags:
-            firestore: kda
-        standing:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: Win or lose in the match
-          x-oapi-codegen-extra-tags:
-            firestore: standing
-        team:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: Id for the team the player was on this match
-          x-oapi-codegen-extra-tags:
-            firestore: team
-        fireTeamId:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: ID for the fireteam player was on. If the same as another player then they were together
-          x-oapi-codegen-extra-tags:
-            firestore: fireTeamId
-          x-go-name: fireTeamID
-        timePlayed:
-          type: object
-          allOf:
-            - $ref: "#/components/schemas/StatsValuePair"
-          description: Time in seconds the player was in the match
-          x-oapi-codegen-extra-tags:
-            firestore: timePlayed
     Display:
       x-oapi-codegen-extra-tags:
         firestore: display

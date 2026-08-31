@@ -1,22 +1,21 @@
 package snapshot
 
 import (
-	"oneTrick/services/aggregate"
-
-	"cloud.google.com/go/firestore"
-	"log/slog"
-
 	"context"
 	"fmt"
+	"log/slog"
 	"oneTrick/api"
 	"oneTrick/generator"
 	"oneTrick/ptr"
+	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"oneTrick/utils"
+	"slices"
 	"strconv"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -28,11 +27,9 @@ type Service interface {
 	// snapshot data on success and an error if the generating or save to the DB fails
 	Save(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error)
 
-	// GetAllByCharacter retrieves all snapshots for a given user and character.
+	// GetAllByCharacter retrieves all snapshots for a given user and character with pagination.
 	// Snapshots are returned in reverse chronological order based on their timestamp.
-	// Takes a context, user ID, and character ID as input.
-	// Returns a slice of snapshots or an error if the operation fails.
-	GetAllByCharacter(ctx context.Context, userID string, characterID string) ([]api.CharacterSnapshot, error)
+	GetAllByCharacter(ctx context.Context, userID string, characterID string, count int, offset int) ([]api.CharacterSnapshot, error)
 
 	// Get retrieves a specific snapshot for a given user, character, and snapshot ID.
 	// Takes a context, user ID, character ID, and snapshot ID as input.
@@ -143,19 +140,39 @@ func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapsh
 	return &og.ID, nil
 }
 
-func (s *service) GetAllByCharacter(ctx context.Context, userID string, characterID string) ([]api.CharacterSnapshot, error) {
-	docs, err := s.DB.Collection(collection).
+func (s *service) GetAllByCharacter(ctx context.Context, userID string, characterID string, count int, offset int) ([]api.CharacterSnapshot, error) {
+	query := s.DB.Collection(collection).
 		Where("userId", "==", userID).
-		Where("characterId", "==", characterID).
-		OrderBy("createdAt", firestore.Desc).
-		Documents(ctx).GetAll()
+		Where("characterId", "==", characterID)
+
+	docs, err := query.Documents(ctx).GetAll()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query snapshots: %w", err)
 	}
+
 	snapshots, err := utils.GetAllToStructs[api.CharacterSnapshot](docs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse snapshots: %w", err)
 	}
+
+	// Sort by CreatedAt descending (newest first)
+	slices.SortFunc(snapshots, func(a, b api.CharacterSnapshot) int {
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
+
+	// Apply offset
+	if offset > 0 {
+		if offset >= len(snapshots) {
+			return []api.CharacterSnapshot{}, nil
+		}
+		snapshots = snapshots[offset:]
+	}
+
+	// Apply count limit if specified (count > 0 means limit; count <= 0 means return all)
+	if count > 0 && count < len(snapshots) {
+		snapshots = snapshots[:count]
+	}
+
 	return snapshots, nil
 }
 
