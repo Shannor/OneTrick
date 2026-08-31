@@ -27,6 +27,7 @@ type Service interface {
 
 	GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string) ([]api.CharacterSnapshot, map[string]int, error)
 	GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
+	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameModeFilter []string, minimumGames int, sortBy string, includeStats bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, error)
 
 	GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error)
 }
@@ -79,7 +80,7 @@ func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID st
 		Where("characterIds", "array-contains", characterID)
 
 	if len(activityFilter) > 0 {
-		q = q.Where("activityHistory.activity", "in", activityFilter)
+		q = q.Where("activityHistory.mode", "in", activityFilter)
 	}
 
 	aggDocs, err := q.Documents(ctx).GetAll()
@@ -97,6 +98,219 @@ func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID st
 // Implementation details:
 // - This yields all activity aggregates where this character was linked to the specified snapshot (loadout).
 // - We then sort the results by the number of sessions (sessions.length) and return the top 10.
+func (s *service) GetSnapshotsWithMetrics(
+	ctx context.Context,
+	userID string,
+	characterID string,
+	gameModeFilter []string,
+	minimumGames int,
+	sortBy string,
+	includeStats bool,
+	count int,
+	offset int,
+) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, error) {
+	if characterID == "" {
+		return nil, nil, nil, fmt.Errorf("characterID is required")
+	}
+
+	l := slog.With(
+		"userID", userID,
+		"characterID", characterID,
+		"minimumGames", minimumGames,
+		"sortBy", sortBy,
+		"includeStats", includeStats,
+		"count", count,
+		"offset", offset,
+		"gameModeFilter", gameModeFilter,
+	)
+	l.Info("GetSnapshotsWithMetrics request received")
+
+	needsAggs := includeStats || sortBy == "win_rate" || sortBy == "kd_ratio" || sortBy == "matches_played" || len(gameModeFilter) > 0 || minimumGames > 0
+
+	if !needsAggs && sortBy == "created_at" {
+		snapshots, err := s.snapshotService.GetAllByCharacter(ctx, userID, characterID, count, offset)
+		if err != nil {
+			l.Error("failed to fetch snapshots for created_at fast path", "error", err)
+			return nil, nil, nil, err
+		}
+		l.Info("Returning snapshots via fast path created_at", "returnedCount", len(snapshots))
+		return snapshots, nil, nil, nil
+	}
+
+	aggs, err := s.GetAggregatesByCharacterID(ctx, characterID, gameModeFilter)
+	if err != nil {
+		l.Error("failed to fetch aggregates by character ID", "error", err)
+		return nil, nil, nil, err
+	}
+	l.Info("Fetched aggregates for character", "numAggregates", len(aggs))
+
+	type stat struct {
+		Kills   int
+		Deaths  int
+		Assists int
+		Wins    int
+	}
+	stats := make(map[string]stat)
+	counts := make(map[string]int)
+	for _, agg := range aggs {
+		link, ok := agg.SnapshotLinks[characterID]
+		if !ok || link.SnapshotID == nil || *link.SnapshotID == "" {
+			continue
+		}
+		performance, ok := agg.Performance[characterID]
+		if !ok {
+			continue
+		}
+		st := stats[*link.SnapshotID]
+		if performance.PlayerStats.Kills != nil && performance.PlayerStats.Kills.Value != nil {
+			st.Kills += int(*performance.PlayerStats.Kills.Value)
+		}
+		if performance.PlayerStats.Deaths != nil && performance.PlayerStats.Deaths.Value != nil {
+			st.Deaths += int(*performance.PlayerStats.Deaths.Value)
+		}
+		if performance.PlayerStats.Assists != nil && performance.PlayerStats.Assists.Value != nil {
+			st.Assists += int(*performance.PlayerStats.Assists.Value)
+		}
+		if performance.PlayerStats.Standing != nil && performance.PlayerStats.Standing.Value != nil && *performance.PlayerStats.Standing.Value == 0 {
+			st.Wins++
+		}
+		stats[*link.SnapshotID] = st
+		counts[*link.SnapshotID]++
+	}
+
+	// Fetch all snapshots for this character (unlimited)
+	allSnapshots, err := s.snapshotService.GetAllByCharacter(ctx, userID, characterID, 0, 0)
+	if err != nil {
+		l.Error("failed to fetch all snapshots for character", "error", err)
+		return nil, nil, nil, err
+	}
+	l.Info("Fetched all snapshots from DB", "totalSnapshotsInDB", len(allSnapshots), "uniqueSnapshotsWithAggMatches", len(counts))
+
+	// Filter by minimumGames if set
+	filteredSnapshots := make([]api.CharacterSnapshot, 0, len(allSnapshots))
+	for _, snap := range allSnapshots {
+		c := counts[snap.ID]
+		if minimumGames > 0 && c < minimumGames {
+			continue
+		}
+		filteredSnapshots = append(filteredSnapshots, snap)
+	}
+	l.Info("Snapshots after minimumGames filter", "passedCount", len(filteredSnapshots), "totalBeforeFilter", len(allSnapshots))
+
+	// Sort snapshots based on sortBy
+	slices.SortFunc(filteredSnapshots, func(a, b api.CharacterSnapshot) int {
+		switch sortBy {
+		case "win_rate":
+			ca, cb := counts[a.ID], counts[b.ID]
+			wra := getKD(stats[a.ID].Wins, ca)
+			wrb := getKD(stats[b.ID].Wins, cb)
+			if wra == wrb {
+				return b.CreatedAt.Compare(a.CreatedAt)
+			}
+			if wra < wrb {
+				return 1
+			}
+			return -1
+		case "kd_ratio":
+			sa, sb := stats[a.ID], stats[b.ID]
+			kda := getKD(sa.Kills, sa.Deaths)
+			kdb := getKD(sb.Kills, sb.Deaths)
+			if kda == kdb {
+				return b.CreatedAt.Compare(a.CreatedAt)
+			}
+			if kda < kdb {
+				return 1
+			}
+			return -1
+		case "matches_played":
+			ca, cb := counts[a.ID], counts[b.ID]
+			if ca == cb {
+				return b.CreatedAt.Compare(a.CreatedAt)
+			}
+			return cb - ca
+		case "created_at":
+			fallthrough
+		default:
+			return b.CreatedAt.Compare(a.CreatedAt)
+		}
+	})
+
+	for idx := 0; idx < len(filteredSnapshots) && idx < 5; idx++ {
+		sID := filteredSnapshots[idx].ID
+		l.Info("Sorted snapshot entry preview",
+			"rank", idx+1,
+			"snapshotID", sID,
+			"name", filteredSnapshots[idx].Name,
+			"matchesPlayed", counts[sID],
+			"winRate", getKD(stats[sID].Wins, counts[sID]),
+			"kdRatio", getKD(stats[sID].Kills, stats[sID].Deaths),
+		)
+	}
+
+	// Apply offset
+	if offset > 0 {
+		if offset >= len(filteredSnapshots) {
+			l.Info("Offset beyond available filtered snapshots", "offset", offset, "totalFiltered", len(filteredSnapshots))
+			return []api.CharacterSnapshot{}, nil, nil, nil
+		}
+		filteredSnapshots = filteredSnapshots[offset:]
+	}
+
+	// Apply limit (count)
+	limit := 10
+	if count > 0 {
+		limit = count
+	}
+	if limit < len(filteredSnapshots) {
+		filteredSnapshots = filteredSnapshots[:limit]
+	}
+
+	l.Info("Final paginated snapshots result", "returnedCount", len(filteredSnapshots))
+
+	var finalPlayerStats *map[string]api.PlayerStats
+	var finalCounts *map[string]int
+
+	if includeStats || sortBy == "win_rate" || sortBy == "kd_ratio" || sortBy == "matches_played" {
+		psMap := make(map[string]api.PlayerStats)
+		cMap := make(map[string]int)
+		for _, snap := range filteredSnapshots {
+			c := counts[snap.ID]
+			st := stats[snap.ID]
+			cMap[snap.ID] = c
+			psMap[snap.ID] = api.PlayerStats{
+				Assists: ptr.Of(api.StatsValuePair{
+					DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Assists)),
+					Value:        ptr.Of(float64(st.Assists)),
+				}),
+				Deaths: ptr.Of(api.StatsValuePair{
+					DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Deaths)),
+					Value:        ptr.Of(float64(st.Deaths)),
+				}),
+				Kills: ptr.Of(api.StatsValuePair{
+					DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Kills)),
+					Value:        ptr.Of(float64(st.Kills)),
+				}),
+				Kd: ptr.Of(api.StatsValuePair{
+					DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
+					Value:        ptr.Of(getKD(st.Kills, st.Deaths)),
+				}),
+				Kda: ptr.Of(api.StatsValuePair{
+					DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
+					Value:        ptr.Of(getKDA(st.Kills, st.Deaths, st.Assists)),
+				}),
+				Standing: ptr.Of(api.StatsValuePair{
+					DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Wins, c))),
+					Value:        ptr.Of(getKD(st.Wins, c)),
+				}),
+			}
+		}
+		finalPlayerStats = &psMap
+		finalCounts = &cMap
+	}
+
+	return filteredSnapshots, finalPlayerStats, finalCounts, nil
+}
+
 func (s *service) GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string) ([]api.CharacterSnapshot, map[string]int, error) {
 	if characterID == "" {
 		return nil, nil, fmt.Errorf("characterID is required")

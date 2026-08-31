@@ -23,10 +23,10 @@ Content-Type: application/json
 }
 
 ###
-GET http://localhost:8080/snapshots?
-    count={{$placeholder}}&
-    page={{$placeholder}}&
-    characterId={{$placeholder}}
+GET http://localhost:8080/snapshots?characterId=2305843009261519028&userId=TTXWDT9pzDEA0XiO1iAc&page=1&count=10&includeStats=true&sortBy=created_at
+
+###
+GET http://localhost:8080/snapshots?characterId={{$placeholder}}&userId={{$placeholder}}&count=10&page=1
 
 ###
 GET http://localhost:8080/snapshots/{{snapshotId}}

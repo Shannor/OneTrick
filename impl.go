@@ -724,11 +724,72 @@ func (s Server) GetSnapshotAggregates(ctx context.Context, request api.GetSnapsh
 }
 
 func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsRequestObject) (api.GetSnapshotsResponseObject, error) {
-	snapshots, err := s.SnapshotService.GetAllByCharacter(ctx, request.Params.XUserID, request.Params.CharacterID)
+	userID := request.Params.UserID
+	characterID := request.Params.CharacterID
+
+	count := 10
+	if request.Params.Count != nil && *request.Params.Count > 0 {
+		count = *request.Params.Count
+	}
+	offset := 0
+	if request.Params.Page != nil && *request.Params.Page > 1 {
+		offset = (*request.Params.Page - 1) * count
+	}
+
+	minimumGames := 0
+	if request.Params.MinimumGames != nil {
+		minimumGames = *request.Params.MinimumGames
+	}
+	includeStats := false
+	if request.Params.IncludeStats != nil {
+		includeStats = *request.Params.IncludeStats
+	}
+	sortBy := "created_at"
+	if request.Params.SortBy != nil {
+		sortBy = string(*request.Params.SortBy)
+	}
+
+	slog.Info("GetSnapshots called",
+		"userID", userID,
+		"characterID", characterID,
+		"count", count,
+		"page", request.Params.Page,
+		"offset", offset,
+		"minimumGames", minimumGames,
+		"includeStats", includeStats,
+		"sortBy", sortBy,
+		"gameMode", request.Params.GameMode,
+	)
+
+	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
 	if err != nil {
+		slog.Error("failed to parse game mode for GetSnapshots", "error", err)
+		return nil, fmt.Errorf("failed to parse game mode: %w", err)
+	}
+
+	items, stats, counts, err := s.StatsService.GetSnapshotsWithMetrics(
+		ctx,
+		userID,
+		characterID,
+		gameModeFilter,
+		minimumGames,
+		sortBy,
+		includeStats,
+		count,
+		offset,
+	)
+	if err != nil {
+		slog.Error("failed to fetch snapshots with metrics", "error", err)
 		return nil, fmt.Errorf("failed to fetch snapshots: %w", err)
 	}
-	return api.GetSnapshots200JSONResponse(snapshots), nil
+
+	slog.Info("GetSnapshots returning response", "numItems", len(items))
+
+	return api.GetSnapshots200JSONResponse{
+		Items: items,
+		Stats: stats,
+		Count: counts,
+	}, nil
 }
 
 func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRequestObject) (api.CreateSnapshotResponseObject, error) {
