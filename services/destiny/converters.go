@@ -583,14 +583,33 @@ func gameModeToActivityModes(gameMode api.GameMode) ([]string, error) {
 	case api.GameModeAll:
 		return nil, nil
 	case api.GameModeCompetitive:
-		return []string{"Competitive: Matchmade", "Competitive"}, nil
+		return []string{
+			"Competitive: Matchmade",
+			"Competitive",
+			"Survival",
+			"Control Competitive",
+			"Clash Competitive",
+		}, nil
 	case api.GameModeQuickPlay:
-		return []string{"Control Quickplay", "Control", "Control: Matchmade", "Clash", "Clash Quickplay"}, nil
+		return []string{
+			"Control Quickplay",
+			"Control",
+			"Zone Control",
+			"Control: Matchmade",
+			"Clash",
+			"Clash Quickplay",
+		}, nil
 	case api.GameModeIronBanner:
 		return []string{
+			"Iron Banner",
+			"Iron Banner Control",
+			"Iron Banner Zone Control",
+			"Iron Banner Clash",
+			"Iron Banner Supremacy",
+			"Iron Banner Rift",
+			"Iron Banner Tribute / Supremacy",
 			"Iron Banner Zone:Control",
 			"Iron Banner:Control",
-			"Iron Banner",
 			"Iron Banner:Supremacy",
 			"Iron Banner:Rift",
 			"Iron Banner:Clash",
@@ -602,7 +621,12 @@ func gameModeToActivityModes(gameMode api.GameMode) ([]string, error) {
 			"Iron Banner: Eruption",
 		}, nil
 	case api.GameModeTrials:
-		return []string{"Trials of Osiris", "Trials of Osiris: Matchmade"}, nil
+		return []string{
+			"Trials of Osiris",
+			"Trials of Osiris: Matchmade",
+			"Trials Survival",
+			"Trials Countdown",
+		}, nil
 	default:
 		return nil, nil
 	}
