@@ -1,7 +1,9 @@
 package destiny
 
 import (
+	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/ptr"
 	"testing"
 )
 
@@ -107,5 +109,172 @@ func TestTransformCharacter_WithTitle(t *testing.T) {
 
 	if char.CurrentTitle != "Godslayer" {
 		t.Errorf("expected CurrentTitle 'Godslayer', got %s", char.CurrentTitle)
+	}
+}
+
+func TestMatchesGameMode(t *testing.T) {
+	allModes := []api.GameMode{
+		api.GameModeCompetitive,
+		api.GameModeQuickPlay,
+		api.GameModeIronBanner,
+		api.GameModeTrials,
+	}
+
+	tests := []struct {
+		name         string
+		mode         string
+		activity     string
+		expectedMode api.GameMode
+	}{
+		// Competitive combinations
+		{
+			name:         "Competitive Clash Quickplay Matchmade",
+			mode:         "Clash Quickplay",
+			activity:     "Competitive: Matchmade",
+			expectedMode: api.GameModeCompetitive,
+		},
+		{
+			name:         "Competitive Zone Control Matchmade",
+			mode:         "Zone Control",
+			activity:     "Competitive: Matchmade",
+			expectedMode: api.GameModeCompetitive,
+		},
+		{
+			name:         "Competitive Clash Quickplay",
+			mode:         "Clash Quickplay",
+			activity:     "Competitive",
+			expectedMode: api.GameModeCompetitive,
+		},
+		{
+			name:         "Competitive Rift",
+			mode:         "Rift",
+			activity:     "Competitive",
+			expectedMode: api.GameModeCompetitive,
+		},
+		{
+			name:         "Competitive Survival",
+			mode:         "Survival",
+			activity:     "Competitive",
+			expectedMode: api.GameModeCompetitive,
+		},
+		{
+			name:         "Competitive Control Competitive",
+			mode:         "Control Competitive",
+			activity:     "Competitive: Matchmade",
+			expectedMode: api.GameModeCompetitive,
+		},
+		{
+			name:         "Competitive Clash Competitive",
+			mode:         "Clash Competitive",
+			activity:     "Competitive: Matchmade",
+			expectedMode: api.GameModeCompetitive,
+		},
+
+		// Quickplay combinations
+		{
+			name:         "Quickplay Control Matchmade",
+			mode:         "Control Quickplay",
+			activity:     "Control: Matchmade",
+			expectedMode: api.GameModeQuickPlay,
+		},
+		{
+			name:         "Quickplay Control",
+			mode:         "Control Quickplay",
+			activity:     "Control",
+			expectedMode: api.GameModeQuickPlay,
+		},
+		{
+			name:         "Quickplay Clash 3v3 Matchmade",
+			mode:         "Clash Quickplay",
+			activity:     "Clash 3v3: Matchmade",
+			expectedMode: api.GameModeQuickPlay,
+		},
+		{
+			name:         "Quickplay Zone Control Matchmade",
+			mode:         "Zone Control",
+			activity:     "Zone Control: Matchmade",
+			expectedMode: api.GameModeQuickPlay,
+		},
+		{
+			name:         "Quickplay Cutting Edge Zone Control Matchmade",
+			mode:         "Zone Control",
+			activity:     "Cutting Edge: Zone Control: Matchmade",
+			expectedMode: api.GameModeQuickPlay,
+		},
+
+		// Iron Banner combinations
+		{
+			name:         "Iron Banner Control with Control Matchmade activity",
+			mode:         "Iron Banner Control",
+			activity:     "Control: Matchmade",
+			expectedMode: api.GameModeIronBanner,
+		},
+		{
+			name:         "Iron Banner Control",
+			mode:         "Iron Banner Control",
+			activity:     "Iron Banner: Control",
+			expectedMode: api.GameModeIronBanner,
+		},
+		{
+			name:         "Iron Banner Supremacy Tribute",
+			mode:         "Iron Banner Supremacy",
+			activity:     "Iron Banner: Tribute",
+			expectedMode: api.GameModeIronBanner,
+		},
+		{
+			name:         "Iron Banner Clash Eruption Matchmade",
+			mode:         "Iron Banner Clash",
+			activity:     "Eruption: Matchmade",
+			expectedMode: api.GameModeIronBanner,
+		},
+		{
+			name:         "Iron Banner Clash Iron Banner Eruption",
+			mode:         "Iron Banner Clash",
+			activity:     "Iron Banner: Eruption",
+			expectedMode: api.GameModeIronBanner,
+		},
+
+		// Trials of Osiris combinations
+		{
+			name:         "Trials of Osiris Matchmade",
+			mode:         "Trials of Osiris",
+			activity:     "Trials of Osiris: Matchmade",
+			expectedMode: api.GameModeTrials,
+		},
+		{
+			name:         "Trials of Osiris",
+			mode:         "Trials of Osiris",
+			activity:     "Trials of Osiris",
+			expectedMode: api.GameModeTrials,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			est := EstimateGameMode(ptr.Of(tt.mode), tt.activity)
+			if est == nil || *est != tt.expectedMode {
+				t.Errorf("EstimateGameMode(%q, %q) = %v, want %q", tt.mode, tt.activity, est, tt.expectedMode)
+			}
+
+			history := api.ActivityHistory{
+				Mode:              ptr.Of(tt.mode),
+				Activity:          tt.activity,
+				EstimatedGameMode: est,
+			}
+
+			// Should always match GameModeAll
+			if !MatchesGameMode(history, api.GameModeAll) {
+				t.Errorf("expected (%q, %q) to match GameModeAll", tt.mode, tt.activity)
+			}
+
+			// Should match only the expected GameMode and none of the others
+			for _, gm := range allModes {
+				got := MatchesGameMode(history, gm)
+				want := gm == tt.expectedMode
+				if got != want {
+					t.Errorf("MatchesGameMode((mode=%q, activity=%q), %q) = %v, want %v", tt.mode, tt.activity, gm, got, want)
+				}
+			}
+		})
 	}
 }

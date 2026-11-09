@@ -24,7 +24,7 @@ type Service interface {
 	// Limited to max of 30 documents at once
 	GetAggregates(ctx context.Context, IDs []string) ([]api.Aggregate, error)
 
-	BySnapshotID(ctx context.Context, snapshotID string, gameModeFilter []string) ([]api.Aggregate, error)
+	BySnapshotID(ctx context.Context, snapshotID string, gameMode *api.GameMode) ([]api.Aggregate, error)
 
 	UpdateAllAggregates(ctx context.Context) (int, error)
 
@@ -86,7 +86,7 @@ func (s *service) Update(ctx context.Context, aggregateID string, updateFn func(
 	return err
 }
 
-func (s *service) BySnapshotID(ctx context.Context, snapshotID string, gameModeFilter []string) ([]api.Aggregate, error) {
+func (s *service) BySnapshotID(ctx context.Context, snapshotID string, gameMode *api.GameMode) ([]api.Aggregate, error) {
 	if snapshotID == "" {
 		return nil, fmt.Errorf("snapshotID is required")
 	}
@@ -94,8 +94,8 @@ func (s *service) BySnapshotID(ctx context.Context, snapshotID string, gameModeF
 	q := s.DB.Collection(collection).
 		Where("snapshotIds", "array-contains", snapshotID)
 
-	if len(gameModeFilter) > 0 {
-		q = q.Where("activityHistory.mode", "in", gameModeFilter)
+	if gameMode != nil && *gameMode != "" && *gameMode != api.GameModeAll {
+		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
 	}
 
 	docs, err := q.Documents(ctx).GetAll()

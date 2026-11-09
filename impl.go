@@ -271,11 +271,7 @@ func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBe
 	if request.Params.MinimumGames != nil {
 		minimumGames = *request.Params.MinimumGames
 	}
-	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
-	if err != nil {
-		return api.GetBestPerformingLoadouts200JSONResponse{}, err
-	}
-	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, characterID, gameModeFilter)
+	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, characterID, request.Params.GameMode)
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
 	}
@@ -711,11 +707,7 @@ func (s Server) GetSnapshotAggregates(ctx context.Context, request api.GetSnapsh
 		return nil, err
 	}
 
-	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
-	if err != nil {
-		return nil, err
-	}
-	aggs, err := s.StatsService.GetAggregatesForSnapshot(ctx, snap.ID, gameModeFilter)
+	aggs, err := s.StatsService.GetAggregatesForSnapshot(ctx, snap.ID, request.Params.GameMode)
 	if err != nil {
 		return nil, err
 	}
@@ -732,8 +724,8 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		count = *request.Params.Count
 	}
 	offset := 0
-	if request.Params.Page != nil && *request.Params.Page > 1 {
-		offset = (*request.Params.Page - 1) * count
+	if request.Params.Page != nil && *request.Params.Page > 0 {
+		offset = *request.Params.Page * count
 	}
 
 	minimumGames := 0
@@ -761,17 +753,11 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		"gameMode", request.Params.GameMode,
 	)
 
-	gameModeFilter, err := s.D2Service.GetActivityModesFromGameMode(request.Params.GameMode)
-	if err != nil {
-		slog.Error("failed to parse game mode for GetSnapshots", "error", err)
-		return nil, fmt.Errorf("failed to parse game mode: %w", err)
-	}
-
 	items, stats, counts, err := s.StatsService.GetSnapshotsWithMetrics(
 		ctx,
 		userID,
 		characterID,
-		gameModeFilter,
+		request.Params.GameMode,
 		minimumGames,
 		sortBy,
 		includeStats,

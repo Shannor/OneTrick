@@ -235,6 +235,26 @@ func TestGetUserSessionsEmptyCharacterID(t *testing.T) {
 
 type mockStatsService struct {
 	stats.Service
+	capturedCount    int
+	capturedOffset   int
+	capturedGameMode *api.GameMode
+}
+
+func (m *mockStatsService) GetSnapshotsWithMetrics(
+	ctx context.Context,
+	userID string,
+	characterID string,
+	gameMode *api.GameMode,
+	minimumGames int,
+	sortBy string,
+	includeStats bool,
+	count int,
+	offset int,
+) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, error) {
+	m.capturedCount = count
+	m.capturedOffset = offset
+	m.capturedGameMode = gameMode
+	return []api.CharacterSnapshot{}, nil, nil, nil
 }
 
 func (m *mockStatsService) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error) {
@@ -278,5 +298,47 @@ func TestGetFeaturedLoadouts(t *testing.T) {
 
 	if jsonResp.Items[0].Snapshot.ID != "snap-1" {
 		t.Errorf("expected snapshot ID snap-1, got %s", jsonResp.Items[0].Snapshot.ID)
+	}
+}
+
+func TestGetSnapshotsZeroIndexedPageOffset(t *testing.T) {
+	tests := []struct {
+		name           string
+		page           *int
+		count          *int
+		expectedOffset int
+	}{
+		{name: "nil page defaults to offset 0", page: nil, count: ptr.Of(10), expectedOffset: 0},
+		{name: "page 0 uses offset 0", page: ptr.Of(0), count: ptr.Of(10), expectedOffset: 0},
+		{name: "page 1 uses offset 10", page: ptr.Of(1), count: ptr.Of(10), expectedOffset: 10},
+		{name: "page 2 uses offset 20", page: ptr.Of(2), count: ptr.Of(10), expectedOffset: 20},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statsMock := &mockStatsService{}
+			d2Mock := &mockD2Service{}
+			server := Server{
+				StatsService: statsMock,
+				D2Service:    d2Mock,
+			}
+
+			req := api.GetSnapshotsRequestObject{
+				Params: api.GetSnapshotsParams{
+					UserID:      "u1",
+					CharacterID: "c1",
+					Page:        tt.page,
+					Count:       tt.count,
+				},
+			}
+
+			_, err := server.GetSnapshots(context.Background(), req)
+			if err != nil {
+				t.Fatalf("expected GetSnapshots to succeed, got: %v", err)
+			}
+			if statsMock.capturedOffset != tt.expectedOffset {
+				t.Errorf("expected offset %d, got %d", tt.expectedOffset, statsMock.capturedOffset)
+			}
+		})
 	}
 }

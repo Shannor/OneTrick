@@ -11,3 +11,5 @@ x-enum-varnames:
   - GameModeCompetitive
   - GameModeTrials
   - GameModeIronBanner
+x-oapi-codegen-extra-tags:
+  firestore: estimatedGameMode,omitempty

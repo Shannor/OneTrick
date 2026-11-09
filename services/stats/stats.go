@@ -22,12 +22,12 @@ import (
 // Note: "Loadout" in product language corresponds to a Snapshot in code.
 // This service focuses on aggregating data to support stats views for a user's loadouts.
 type Service interface {
-	GetAggregatesForSnapshot(ctx context.Context, snapshotID string, gameModeFilter []string) ([]api.Aggregate, error)
-	GetAggregatesByCharacterID(ctx context.Context, characterID string, gameModeFilter []string) ([]api.Aggregate, error)
+	GetAggregatesForSnapshot(ctx context.Context, snapshotID string, gameMode *api.GameMode) ([]api.Aggregate, error)
+	GetAggregatesByCharacterID(ctx context.Context, characterID string, gameMode *api.GameMode) ([]api.Aggregate, error)
 
 	GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string) ([]api.CharacterSnapshot, map[string]int, error)
 	GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
-	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameModeFilter []string, minimumGames int, sortBy string, includeStats bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, error)
+	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameMode *api.GameMode, minimumGames int, sortBy string, includeStats bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, error)
 
 	GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error)
 }
@@ -48,7 +48,33 @@ const (
 	snapshotsCollection  = "snapshots"
 )
 
-func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID string, gameModeFilter []string) ([]api.Aggregate, error) {
+// MatchesGameMode classifies whether an ActivityHistory record belongs to the specified GameMode
+// by inspecting both history.Mode and history.Activity.
+func MatchesGameMode(history api.ActivityHistory, gameMode api.GameMode) bool {
+	return destiny.MatchesGameMode(history, gameMode)
+}
+
+func hasGameModeFilter(gameMode *api.GameMode) bool {
+	return gameMode != nil && *gameMode != "" && *gameMode != api.GameModeAll
+}
+
+func filterSnapshotsByGameModeAndMinGames(allSnapshots []api.CharacterSnapshot, counts map[string]int, gameMode *api.GameMode, minimumGames int) []api.CharacterSnapshot {
+	gameModeActive := hasGameModeFilter(gameMode)
+	filtered := make([]api.CharacterSnapshot, 0, len(allSnapshots))
+	for _, snap := range allSnapshots {
+		c := counts[snap.ID]
+		if gameModeActive && c == 0 {
+			continue
+		}
+		if minimumGames > 0 && c < minimumGames {
+			continue
+		}
+		filtered = append(filtered, snap)
+	}
+	return filtered
+}
+
+func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID string, gameMode *api.GameMode) ([]api.Aggregate, error) {
 	if snapshotID == "" {
 		return nil, fmt.Errorf("snapshotID is required")
 	}
@@ -56,8 +82,8 @@ func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID strin
 	q := s.DB.Collection(aggregatesCollection).
 		Where("snapshotIds", "array-contains", snapshotID)
 
-	if len(gameModeFilter) > 0 {
-		q = q.Where("activityHistory.mode", "in", gameModeFilter)
+	if hasGameModeFilter(gameMode) {
+		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
 	}
 
 	docs, err := q.Documents(ctx).GetAll()
@@ -72,15 +98,15 @@ func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID strin
 	return results, nil
 }
 
-func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID string, activityFilter []string) ([]api.Aggregate, error) {
+func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID string, gameMode *api.GameMode) ([]api.Aggregate, error) {
 	if characterID == "" {
 		return nil, fmt.Errorf("characterID is required")
 	}
 	q := s.DB.Collection(aggregatesCollection).
 		Where("characterIds", "array-contains", characterID)
 
-	if len(activityFilter) > 0 {
-		q = q.Where("activityHistory.mode", "in", activityFilter)
+	if hasGameModeFilter(gameMode) {
+		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
 	}
 
 	aggDocs, err := q.Documents(ctx).GetAll()
@@ -94,15 +120,12 @@ func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID st
 	return aggs, nil
 }
 
-// GetMostUsedLoadouts returns the top 10 most used loadouts for the given characterID.
-// Implementation details:
-// - This yields all activity aggregates where this character was linked to the specified snapshot (loadout).
-// - We then sort the results by the number of sessions (sessions.length) and return the top 10.
+// GetMostUsedLoadouts returns the top 10 most used loadouts for the given characterID.\n// Implementation details:\n// - This yields all activity aggregates where this character was linked to the specified snapshot (loadout).\n// - We then sort the results by the number of sessions (sessions.length) and return the top 10.
 func (s *service) GetSnapshotsWithMetrics(
 	ctx context.Context,
 	userID string,
 	characterID string,
-	gameModeFilter []string,
+	gameMode *api.GameMode,
 	minimumGames int,
 	sortBy string,
 	includeStats bool,
@@ -121,11 +144,12 @@ func (s *service) GetSnapshotsWithMetrics(
 		"includeStats", includeStats,
 		"count", count,
 		"offset", offset,
-		"gameModeFilter", gameModeFilter,
+		"gameMode", gameMode,
 	)
 	l.Info("GetSnapshotsWithMetrics request received")
 
-	needsAggs := includeStats || sortBy == "win_rate" || sortBy == "kd_ratio" || sortBy == "matches_played" || len(gameModeFilter) > 0 || minimumGames > 0
+	gameModeActive := hasGameModeFilter(gameMode)
+	needsAggs := includeStats || sortBy == "win_rate" || sortBy == "kd_ratio" || sortBy == "matches_played" || gameModeActive || minimumGames > 0
 
 	if !needsAggs && sortBy == "created_at" {
 		snapshots, err := s.snapshotService.GetAllByCharacter(ctx, userID, characterID, count, offset)
@@ -137,7 +161,7 @@ func (s *service) GetSnapshotsWithMetrics(
 		return snapshots, nil, nil, nil
 	}
 
-	aggs, err := s.GetAggregatesByCharacterID(ctx, characterID, gameModeFilter)
+	aggs, err := s.GetAggregatesByCharacterID(ctx, characterID, gameMode)
 	if err != nil {
 		l.Error("failed to fetch aggregates by character ID", "error", err)
 		return nil, nil, nil, err
@@ -186,15 +210,8 @@ func (s *service) GetSnapshotsWithMetrics(
 	}
 	l.Info("Fetched all snapshots from DB", "totalSnapshotsInDB", len(allSnapshots), "uniqueSnapshotsWithAggMatches", len(counts))
 
-	// Filter by minimumGames if set
-	filteredSnapshots := make([]api.CharacterSnapshot, 0, len(allSnapshots))
-	for _, snap := range allSnapshots {
-		c := counts[snap.ID]
-		if minimumGames > 0 && c < minimumGames {
-			continue
-		}
-		filteredSnapshots = append(filteredSnapshots, snap)
-	}
+	// Filter by minimumGames if set, or exclude 0-match snapshots when a gameMode filter is active
+	filteredSnapshots := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, gameMode, minimumGames)
 	l.Info("Snapshots after minimumGames filter", "passedCount", len(filteredSnapshots), "totalBeforeFilter", len(allSnapshots))
 
 	// Sort snapshots based on sortBy
@@ -523,8 +540,8 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 	}
 
 	q := s.DB.Collection(aggregatesCollection).Query
-	if gameMode != nil {
-		q = q.Where("activityHistory.mode", "==", string(*gameMode))
+	if hasGameModeFilter(gameMode) {
+		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
 	}
 	aggDocs, err := q.Limit(500).Documents(ctx).GetAll()
 	if err != nil {

@@ -320,16 +320,17 @@ func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activity
 		mode = "Iron Banner Tribute"
 	}
 	return &api.ActivityHistory{
-		ActivityHash: actHash,
-		InstanceID:   instID,
-		IsPrivate:    history.IsPrivate,
-		Mode:         &mode,
-		ReferenceID:  refID,
-		Location:     activityDefinition.DisplayProperties.Name,
-		Description:  activityDefinition.DisplayProperties.Description,
-		Activity:     directorDef.DisplayProperties.Name,
-		ImageURL:     setBaseBungieURL(&activityDefinition.PgcrImage),
-		ActivityIcon: setBaseBungieURL(&modeDefinition.DisplayProperties.Icon),
+		ActivityHash:      actHash,
+		InstanceID:        instID,
+		IsPrivate:         history.IsPrivate,
+		Mode:              &mode,
+		EstimatedGameMode: EstimateGameMode(&mode, directorDef.DisplayProperties.Name),
+		ReferenceID:       refID,
+		Location:          activityDefinition.DisplayProperties.Name,
+		Description:       activityDefinition.DisplayProperties.Description,
+		Activity:          directorDef.DisplayProperties.Name,
+		ImageURL:          setBaseBungieURL(&activityDefinition.PgcrImage),
+		ActivityIcon:      setBaseBungieURL(&modeDefinition.DisplayProperties.Icon),
 	}
 }
 
@@ -404,17 +405,18 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 	}
 
 	return &api.ActivityHistory{
-		ActivityHash: int64(*period.ActivityDetails.DirectorActivityHash),
-		InstanceID:   *period.ActivityDetails.InstanceId,
-		IsPrivate:    period.ActivityDetails.IsPrivate,
-		Mode:         &mode,
-		ReferenceID:  int64(*period.ActivityDetails.ReferenceId),
-		Location:     definition.DisplayProperties.Name,
-		Description:  definition.DisplayProperties.Description,
-		Activity:     activity.DisplayProperties.Name,
-		ImageURL:     setBaseBungieURL(&definition.PgcrImage),
-		ActivityIcon: setBaseBungieURL(&activityMode.DisplayProperties.Icon),
-		Period:       pTime,
+		ActivityHash:      int64(*period.ActivityDetails.DirectorActivityHash),
+		InstanceID:        *period.ActivityDetails.InstanceId,
+		IsPrivate:         period.ActivityDetails.IsPrivate,
+		Mode:              &mode,
+		EstimatedGameMode: EstimateGameMode(&mode, activity.DisplayProperties.Name),
+		ReferenceID:       int64(*period.ActivityDetails.ReferenceId),
+		Location:          definition.DisplayProperties.Name,
+		Description:       definition.DisplayProperties.Description,
+		Activity:          activity.DisplayProperties.Name,
+		ImageURL:          setBaseBungieURL(&definition.PgcrImage),
+		ActivityIcon:      setBaseBungieURL(&activityMode.DisplayProperties.Icon),
+		Period:            pTime,
 	}
 }
 
@@ -578,58 +580,102 @@ func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	}
 }
 
-func gameModeToActivityModes(gameMode api.GameMode) ([]string, error) {
-	switch gameMode {
-	case api.GameModeAll:
-		return nil, nil
-	case api.GameModeCompetitive:
-		return []string{
-			"Competitive: Matchmade",
-			"Competitive",
-			"Survival",
-			"Control Competitive",
-			"Clash Competitive",
-		}, nil
-	case api.GameModeQuickPlay:
-		return []string{
-			"Control Quickplay",
-			"Control",
-			"Zone Control",
-			"Control: Matchmade",
-			"Clash",
-			"Clash Quickplay",
-		}, nil
-	case api.GameModeIronBanner:
-		return []string{
-			"Iron Banner",
-			"Iron Banner Control",
-			"Iron Banner Zone Control",
-			"Iron Banner Clash",
-			"Iron Banner Supremacy",
-			"Iron Banner Rift",
-			"Iron Banner Tribute / Supremacy",
-			"Iron Banner Zone:Control",
-			"Iron Banner:Control",
-			"Iron Banner:Supremacy",
-			"Iron Banner:Rift",
-			"Iron Banner:Clash",
-			"Iron Banner: Tribute",
-			"Iron Banner Tribute",
-			"Fortress: Matchmade",
-			"Iron Banner: Fortress",
-			"Eruption: Matchmade",
-			"Iron Banner: Eruption",
-		}, nil
-	case api.GameModeTrials:
-		return []string{
-			"Trials of Osiris",
-			"Trials of Osiris: Matchmade",
-			"Trials Survival",
-			"Trials Countdown",
-		}, nil
-	default:
-		return nil, nil
+var quickplayModesAndActivities = []string{
+	"Control Quickplay",
+	"Control",
+	"Zone Control",
+	"Control: Matchmade",
+	"Zone Control: Matchmade",
+	"Cutting Edge: Zone Control: Matchmade",
+	"Clash",
+	"Clash Quickplay",
+	"Clash 3v3: Matchmade",
+}
+
+func isIronBannerActivity(mode, activity string) bool {
+	for _, s := range []string{mode, activity} {
+		lower := strings.ToLower(s)
+		if strings.Contains(lower, "iron banner") ||
+			strings.Contains(lower, "eruption") ||
+			strings.Contains(lower, "fortress") ||
+			strings.Contains(lower, "tribute") {
+			return true
+		}
 	}
+	return false
+}
+
+func isCompetitiveActivity(mode, activity string) bool {
+	if strings.Contains(strings.ToLower(activity), "competitive") ||
+		strings.Contains(strings.ToLower(mode), "competitive") {
+		return true
+	}
+	switch strings.ToLower(mode) {
+	case "survival", "control competitive", "clash competitive", "competitive", "competitive: matchmade":
+		return true
+	}
+	switch strings.ToLower(activity) {
+	case "survival", "control competitive", "clash competitive", "competitive", "competitive: matchmade":
+		return true
+	}
+	return false
+}
+
+func isTrialsActivity(mode, activity string) bool {
+	for _, s := range []string{mode, activity} {
+		lower := strings.ToLower(s)
+		if strings.Contains(lower, "trials of osiris") ||
+			strings.EqualFold(s, "Trials Survival") ||
+			strings.EqualFold(s, "Trials Countdown") {
+			return true
+		}
+	}
+	return false
+}
+
+func isQuickplayActivity(mode, activity string) bool {
+	for _, qp := range quickplayModesAndActivities {
+		if strings.EqualFold(mode, qp) || strings.EqualFold(activity, qp) {
+			return true
+		}
+	}
+	return false
+}
+
+// EstimateGameMode classifies an activity into a canonical api.GameMode using the priority order:
+// ironBanner -> trials -> competitive -> quickplay.
+func EstimateGameMode(mode *string, activity string) *api.GameMode {
+	m := ""
+	if mode != nil {
+		m = strings.TrimSpace(*mode)
+	}
+	act := strings.TrimSpace(activity)
+
+	if isIronBannerActivity(m, act) {
+		return ptr.Of(api.GameModeIronBanner)
+	}
+	if isTrialsActivity(m, act) {
+		return ptr.Of(api.GameModeTrials)
+	}
+	if isCompetitiveActivity(m, act) {
+		return ptr.Of(api.GameModeCompetitive)
+	}
+	if isQuickplayActivity(m, act) {
+		return ptr.Of(api.GameModeQuickPlay)
+	}
+	return nil
+}
+
+// MatchesGameMode classifies whether an ActivityHistory record belongs to the specified GameMode.
+func MatchesGameMode(history api.ActivityHistory, gameMode api.GameMode) bool {
+	if gameMode == "" || gameMode == api.GameModeAll {
+		return true
+	}
+	if history.EstimatedGameMode != nil {
+		return *history.EstimatedGameMode == gameMode
+	}
+	est := EstimateGameMode(history.Mode, history.Activity)
+	return est != nil && *est == gameMode
 }
 
 //func TransformUserSearchDetail(detail bungie.UserSearchDetail) *api.SearchUserResult {

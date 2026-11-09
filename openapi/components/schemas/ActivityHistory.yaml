@@ -67,3 +67,7 @@ properties:
     description: Name
     x-oapi-codegen-extra-tags:
       firestore: mode
+  estimatedGameMode:
+    $ref: ./GameMode.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: estimatedGameMode,omitempty

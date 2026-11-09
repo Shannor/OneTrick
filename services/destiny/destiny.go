@@ -30,7 +30,6 @@ type Service interface {
 	GetPerformances(ctx context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error)
 	GetEnrichedActivity(ctx context.Context, activityID string, characterIDs []string) (*EnrichedActivity, error)
 	Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error)
-	GetActivityModesFromGameMode(gameMode *api.GameMode) ([]string, error)
 }
 
 type service struct {
@@ -564,11 +563,4 @@ func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.P
 	data := resp.JSON200.PostGameCarnageReportData
 
 	return data, TransformTeams(data.Teams), nil
-}
-
-func (a *service) GetActivityModesFromGameMode(gameMode *api.GameMode) ([]string, error) {
-	if gameMode == nil {
-		return nil, nil
-	}
-	return gameModeToActivityModes(*gameMode)
 }
