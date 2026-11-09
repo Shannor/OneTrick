@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 )
 
 type Service interface {
@@ -89,14 +90,14 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 	if err != nil {
 		return nil, err
 	}
-	s := slog.With(
-		"membershipID", membershipID,
-		"membershipType", membershipType,
-		"characterID", characterID,
-		"count", count,
-		"mode", mode,
-		"page", page,
-	)
+	clog.WithGroupFields(ctx, "destinyService.getActivityHistory", clog.Fields{
+		"membershipId":   membershipID,
+		"membershipType": membershipType,
+		"characterId":    characterID,
+		"count":          count,
+		"mode":           mode,
+		"page":           page,
+	})
 	resp, err := a.Client.Destiny2GetActivityHistoryWithResponse(
 		ctx,
 		int32(membershipType),
@@ -109,11 +110,10 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		},
 	)
 	if err != nil {
-		s.With("error", err.Error()).Error("Failed to get activity history")
 		return nil, err
 	}
 	if resp.StatusCode() != http.StatusOK {
-		s.With("status", resp.Status(), "status code", resp.StatusCode()).Error("Failed to get activity history")
+		clog.WithGroupField(ctx, "destinyService.getActivityHistory", "statusCode", resp.StatusCode())
 		return nil, fmt.Errorf("failed to get activity history")
 	}
 	if resp.JSON200 == nil {
@@ -135,7 +135,9 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		return nil, fmt.Errorf("cannot enhance activities: %v", err)
 	}
 
-	return TransformPeriodGroups(*resp.JSON200.Response.Activities, activities, modes), nil
+	history := TransformPeriodGroups(*resp.JSON200.Response.Activities, activities, modes)
+	clog.WithGroupField(ctx, "destinyService.getActivityHistory", "returnedCount", len(history))
+	return history, nil
 }
 
 func (a *service) GetPerformances(ctx context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error) {
@@ -144,15 +146,16 @@ func (a *service) GetPerformances(ctx context.Context, activityID string, charac
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
 
-	l := slog.With("activityId", activityID)
+	clog.WithGroupFields(ctx, "destinyService.getPerformances", clog.Fields{
+		"activityId":     activityID,
+		"characterCount": len(characterIDs),
+	})
 
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
-		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, err
 	}
 	if resp.JSON200 == nil || resp.JSON200.PostGameCarnageReportData == nil {
-		l.Error("No data found for activity")
 		return nil, fmt.Errorf("nil data response")
 	}
 	data := resp.JSON200.PostGameCarnageReportData
@@ -173,6 +176,7 @@ func (a *service) GetPerformances(ctx context.Context, activityID string, charac
 		}
 	}
 
+	clog.WithGroupField(ctx, "destinyService.getPerformances", "returnedCount", len(performances))
 	return performances, nil
 }
 
@@ -182,15 +186,16 @@ func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, ch
 		return nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
 
-	l := slog.With("activityId", activityID)
+	clog.WithGroupFields(ctx, "destinyService.getEnrichedActivity", clog.Fields{
+		"activityId":     activityID,
+		"characterCount": len(characterIDs),
+	})
 
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
-		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, err
 	}
 	if resp.JSON200 == nil || resp.JSON200.PostGameCarnageReportData == nil {
-		l.Error("No data found for activity")
 		return nil, fmt.Errorf("nil data response")
 	}
 	data := resp.JSON200.PostGameCarnageReportData
@@ -245,6 +250,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, ch
 		Teams:           TransformTeams(data.Teams),
 		PostGameEntries: entries,
 	}
+	clog.WithGroupField(ctx, "destinyService.getEnrichedActivity", "entryCount", len(entries))
 	return &result, nil
 }
 
@@ -278,6 +284,11 @@ func buildItemsSet(ctx context.Context, data *bungie.PostGameCarnageReportData, 
 }
 
 func (a *service) GetItemDetails(ctx context.Context, membershipID int64, membershipType int64, weaponInstanceID string) (*bungie.DestinyItem, error) {
+	clog.WithGroupFields(ctx, "destinyService.getItemDetails", clog.Fields{
+		"membershipId":     membershipID,
+		"membershipType":   membershipType,
+		"weaponInstanceId": weaponInstanceID,
+	})
 	components := []int32{ItemPerksCode, ItemStatsCode, ItemSocketsCode, ItemCommonDataCode, ItemInstanceCode}
 	weaponInstanceIDInt64, err := strconv.ParseInt(weaponInstanceID, 10, 64)
 	if err != nil {
@@ -292,12 +303,6 @@ func (a *service) GetItemDetails(ctx context.Context, membershipID int64, member
 		&params,
 	)
 	if err != nil {
-		slog.With(
-			"error",
-			err.Error(),
-			"weapon instance id",
-			weaponInstanceID,
-		).Error("Failed to get item details")
 		return nil, err
 	}
 	if response.JSON200 == nil || response.JSON200.DestinyItem == nil {
@@ -360,9 +365,14 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 
 	}
 
+	clog.WithGroupFields(ctx, "destinyService.getLoadout", clog.Fields{
+		"membershipId":   membershipID,
+		"membershipType": membershipType,
+		"characterId":    characterID,
+	})
 	statDefinitions, err := a.ManifestService.GetStats(ctx)
 	if err != nil {
-		slog.Warn("failed to get statDefinitions but still will generate stats", "error", err)
+		clog.WithGroupField(ctx, "destinyService.getLoadout", "warning", "failed to get stat definitions")
 	}
 	stats := make(map[string]api.ClassStat)
 	if test.JSON200.Response.Characters != nil && test.JSON200.Response.Characters.Data != nil {
@@ -376,9 +386,9 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 	}
 	loadout, err := a.buildLoadout(ctx, membershipID, membershipType, results, statDefinitions)
 	if err != nil {
-		slog.Error("couldn't build the loadout", "error", err)
 		return nil, nil, nil, err
 	}
+	clog.WithGroupField(ctx, "destinyService.getLoadout", "itemCount", len(loadout))
 	return loadout, stats, timeStamp, nil
 }
 
@@ -403,7 +413,6 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 	loadout := make(api.Loadout)
 	for _, item := range items {
 		if item.ItemInstanceId == nil {
-			slog.Warn("no instance id found", "membershipId", membershipID)
 			continue
 		}
 		snap := api.ItemSnapshot{
@@ -411,7 +420,6 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 		}
 		d, err := a.GetItemDetails(ctx, membershipID, membershipType, *item.ItemInstanceId)
 		if err != nil {
-			slog.With("error", err.Error()).Error("failed to get item details")
 			continue
 		}
 		details := TransformItemToDetails(d, d2Items, damageTypes, perks, stats)
@@ -426,6 +434,10 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 }
 
 func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
+	clog.WithGroupFields(ctx, "destinyService.getCharacters", clog.Fields{
+		"primaryMembershipId": primaryMembershipId,
+		"membershipType":      membershipType,
+	})
 	var components []int32
 	components = append(components, CharactersCode)
 	params := &bungie.Destiny2GetProfileParams{
@@ -433,30 +445,18 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 	}
 	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), primaryMembershipId, params)
 	if err != nil {
-		slog.Error("Failed to request profile from Bungie", "error", err, "primaryMembershipId", primaryMembershipId, "membershipType", membershipType)
 		return nil, err
 	}
 	if resp.StatusCode() != http.StatusOK {
 		if resp.StatusCode() == http.StatusServiceUnavailable {
 			return nil, ErrDestinyServerDown
 		}
-		slog.Error("Bungie returned non-200 status fetching profile",
-			"status", resp.Status(),
-			"statusCode", resp.StatusCode(),
-			"primaryMembershipId", primaryMembershipId,
-			"membershipType", membershipType,
-			"rawBody", string(resp.Body),
-		)
+		clog.WithGroupField(ctx, "destinyService.getCharacters", "statusCode", resp.StatusCode())
 		return nil, fmt.Errorf("failed to get characters")
 	}
 
 	if resp.JSON200 == nil || resp.JSON200.Response == nil || resp.JSON200.Response.Characters == nil || resp.JSON200.Response.Characters.Data == nil {
-		slog.Error("Bungie profile response missing character data",
-			"statusCode", resp.StatusCode(),
-			"primaryMembershipId", primaryMembershipId,
-			"membershipType", membershipType,
-			"rawBody", string(resp.Body),
-		)
+		clog.WithGroupField(ctx, "destinyService.getCharacters", "statusCode", resp.StatusCode())
 		return nil, fmt.Errorf("no response found")
 	}
 	classes, err := a.ManifestService.GetClasses(ctx)
@@ -472,12 +472,7 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 	for _, d := range data {
 		if d.TitleRecordHash != nil {
 			record, err := a.ManifestService.GetRecord(ctx, int64(*d.TitleRecordHash))
-			if err != nil {
-				slog.Warn("missing id for title record")
-				continue
-			}
-			if record == nil {
-				slog.Warn("record was nil", "Hash", *d.TitleRecordHash)
+			if err != nil || record == nil {
 				continue
 			}
 			records[strconv.Itoa(record.Hash)] = *record
@@ -494,10 +489,15 @@ func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, 
 		}
 		return strings.Compare(a.Class, b.Class)
 	})
+	clog.WithGroupField(ctx, "destinyService.getCharacters", "characterCount", len(results))
 	return results, nil
 }
 
 func (a *service) GetPartyMembers(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]bungie.PartyMember, error) {
+	clog.WithGroupFields(ctx, "destinyService.getPartyMembers", clog.Fields{
+		"primaryMembershipId": primaryMembershipId,
+		"membershipType":      membershipType,
+	})
 	var components []int32
 	components = append(components, TransitoryCode)
 	params := &bungie.Destiny2GetProfileParams{
@@ -505,14 +505,13 @@ func (a *service) GetPartyMembers(ctx context.Context, primaryMembershipId int64
 	}
 	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), primaryMembershipId, params)
 	if err != nil {
-		slog.With("error", err.Error()).Error("failed to get profile")
 		return nil, err
 	}
 	if resp.StatusCode() != http.StatusOK {
 		if resp.StatusCode() == http.StatusServiceUnavailable {
 			return nil, ErrDestinyServerDown
 		}
-		slog.With("status", resp.Status(), "status code", resp.StatusCode()).Error("failed to get profile")
+		clog.WithGroupField(ctx, "destinyService.getPartyMembers", "statusCode", resp.StatusCode())
 		return nil, fmt.Errorf("failed to get characters")
 	}
 
@@ -521,12 +520,19 @@ func (a *service) GetPartyMembers(ctx context.Context, primaryMembershipId int64
 	}
 
 	if resp.JSON200.Response.ProfileTransitoryData == nil || resp.JSON200.Response.ProfileTransitoryData.Data == nil || resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers == nil {
+		clog.WithGroupField(ctx, "destinyService.getPartyMembers", "partySize", 0)
 		return nil, nil
 	}
-	return *resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers, nil
+	members := *resp.JSON200.Response.ProfileTransitoryData.Data.PartyMembers
+	clog.WithGroupField(ctx, "destinyService.getPartyMembers", "partySize", len(members))
+	return members, nil
 }
 
 func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {
+	clog.WithGroupFields(ctx, "destinyService.search", clog.Fields{
+		"prefix": prefix,
+		"page":   page,
+	})
 	body := bungie.UserSearchPrefixRequest{DisplayNamePrefix: ptr.Of(prefix)}
 	resp, err := a.Client.UserSearchByGlobalNamePostWithResponse(ctx, page, body)
 	if err != nil {
@@ -540,6 +546,10 @@ func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.
 		hasMore = *resp.JSON200.SearchResponse.HasMore
 	}
 	results := make([]api.SearchUserResult, 0)
+	clog.WithGroupFields(ctx, "destinyService.search", clog.Fields{
+		"hasMore":       hasMore,
+		"returnedCount": len(results),
+	})
 	return results, hasMore, nil
 }
 
@@ -549,18 +559,18 @@ func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.P
 		return nil, nil, fmt.Errorf("invalid activity ID: %w", err)
 	}
 
-	l := slog.With("activityId", activityID)
+	clog.WithGroupField(ctx, "destinyService.getActivity", "activityId", activityID)
 
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
-		l.Error("Failed to get post game carnage report", "error", err)
 		return nil, nil, err
 	}
 	if resp.JSON200 == nil || resp.JSON200.PostGameCarnageReportData == nil {
-		l.Error("No data found for activity")
 		return nil, nil, fmt.Errorf("nil data response")
 	}
 	data := resp.JSON200.PostGameCarnageReportData
+	teams := TransformTeams(data.Teams)
+	clog.WithGroupField(ctx, "destinyService.getActivity", "teamCount", len(teams))
 
-	return data, TransformTeams(data.Teams), nil
+	return data, teams, nil
 }

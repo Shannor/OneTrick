@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 )
 
 // ManifestService provides access to Destiny 2 manifest definitions stored in Firestore
@@ -118,6 +119,7 @@ func (m *manifestService) GetPlaces(ctx context.Context) (map[string]PlaceDefini
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getPlaces", "count", len(results))
 	return utils.ToMap[PlaceDefinition, string](results, func(t PlaceDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -132,6 +134,7 @@ func (m *manifestService) GetActivities(ctx context.Context) (map[string]Activit
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getActivities", "count", len(results))
 	return utils.ToMap[ActivityDefinition, string](results, func(t ActivityDefinition) string {
 		return strconv.FormatInt(int64(t.Hash), 10)
 	})
@@ -146,6 +149,7 @@ func (m *manifestService) GetClasses(ctx context.Context) (map[string]ClassDefin
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getClasses", "count", len(results))
 	return utils.ToMap[ClassDefinition, string](results, func(t ClassDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -160,6 +164,7 @@ func (m *manifestService) GetInventoryBuckets(ctx context.Context) (map[string]I
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getInventoryBuckets", "count", len(results))
 	return utils.ToMap[InventoryBucketDefinition, string](results, func(t InventoryBucketDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -174,6 +179,7 @@ func (m *manifestService) GetRaces(ctx context.Context) (map[string]RaceDefiniti
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getRaces", "count", len(results))
 	return utils.ToMap[RaceDefinition, string](results, func(t RaceDefinition) string {
 		return strconv.FormatInt(int64(t.Hash), 10)
 	})
@@ -188,6 +194,7 @@ func (m *manifestService) GetItemCategories(ctx context.Context) (map[string]Ite
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getItemCategories", "count", len(results))
 	return utils.ToMap[ItemCategory, string](results, func(t ItemCategory) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -202,6 +209,7 @@ func (m *manifestService) GetDamageTypes(ctx context.Context) (map[string]Damage
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getDamageTypes", "count", len(results))
 	return utils.ToMap[DamageType, string](results, func(t DamageType) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -216,6 +224,7 @@ func (m *manifestService) GetActivityModes(ctx context.Context) (map[string]Acti
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getActivityModes", "count", len(results))
 	return utils.ToMap[ActivityModeDefinition, string](results, func(t ActivityModeDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -230,6 +239,7 @@ func (m *manifestService) GetStats(ctx context.Context) (map[string]StatDefiniti
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getStats", "count", len(results))
 	return utils.ToMap[StatDefinition, string](results, func(t StatDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -244,6 +254,7 @@ func (m *manifestService) GetItems(ctx context.Context) (map[string]ItemDefiniti
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getItems", "count", len(results))
 	return utils.ToMap[ItemDefinition, string](results, func(t ItemDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -258,6 +269,7 @@ func (m *manifestService) GetPerks(ctx context.Context) (map[string]PerkDefiniti
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getPerks", "count", len(results))
 	return utils.ToMap[PerkDefinition, string](results, func(t PerkDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
@@ -272,6 +284,7 @@ func (m *manifestService) GetRecords(ctx context.Context) (map[string]RecordDefi
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "manifestService.getRecords", "count", len(results))
 	return utils.ToMap[RecordDefinition, string](results, func(t RecordDefinition) string {
 		return strconv.FormatInt(int64(t.Hash), 10)
 	})
@@ -279,6 +292,7 @@ func (m *manifestService) GetRecords(ctx context.Context) (map[string]RecordDefi
 
 // GetItem retrieves a single item definition from the manifest by its hash
 func (m *manifestService) GetItem(ctx context.Context, hash int64) (*ItemDefinition, error) {
+	clog.WithGroupField(ctx, "manifestService.getItem", "hash", hash)
 	hashStr := strconv.FormatInt(hash, 10)
 
 	doc, err := m.db.Collection(string(ItemDefinitionCollection)).Doc(hashStr).Get(ctx)
@@ -296,6 +310,7 @@ func (m *manifestService) GetItem(ctx context.Context, hash int64) (*ItemDefinit
 
 // GetActivity retrieves a single activity definition from the manifest by its hash
 func (m *manifestService) GetActivity(ctx context.Context, hash int64) (*ActivityDefinition, error) {
+	clog.WithGroupField(ctx, "manifestService.getActivity", "hash", hash)
 	if hash == 0 {
 		return nil, fmt.Errorf("activity hash cannot be zero")
 	}
@@ -317,6 +332,7 @@ func (m *manifestService) GetActivity(ctx context.Context, hash int64) (*Activit
 
 // GetActivityMode retrieves a single activity mode definition from the manifest by its hash
 func (m *manifestService) GetActivityMode(ctx context.Context, hash int64) (*ActivityModeDefinition, error) {
+	clog.WithGroupField(ctx, "manifestService.getActivityMode", "hash", hash)
 	if hash == 0 {
 		return nil, fmt.Errorf("activity mode hash cannot be zero")
 	}
@@ -338,6 +354,7 @@ func (m *manifestService) GetActivityMode(ctx context.Context, hash int64) (*Act
 
 // GetRecord retrieves a single record definition from the manifest by its hash
 func (m *manifestService) GetRecord(ctx context.Context, hash int64) (*RecordDefinition, error) {
+	clog.WithGroupField(ctx, "manifestService.getRecord", "hash", hash)
 	if hash == 0 {
 		return nil, fmt.Errorf("record hash cannot be zero")
 	}

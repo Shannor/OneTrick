@@ -33,7 +33,20 @@ This server powers the One Trick Destiny 2 Application
 
 
 
+## Logging Conventions (`canonical-logger` / `clog`)
+
+- The project uses [`github.com/Shannor/canonical-logger`](https://github.com/Shannor/canonical-logger) (`clog`) for canonical wide-event logging (one structured log line per HTTP request or background task).
+- **Process lifecycle events** (startup/shutdown in `main.go`, `clients/gcp`, `envvars`) use standard `slog.Info` / `slog.Error`.
+- **Inside active requests or background tasks** (`impl.go`, `services/*`):
+  - Never call `slog.Info`, `slog.Warn`, `slog.Error`, or `slog.Debug`.
+  - Enrich the context's `FieldBag` via `clog.WithGroupField` / `clog.WithGroupFields`.
+  - API handlers (`impl.go`) enrich the `"request"` and `"actor"` groups; outcomes are recorded automatically by `logger.GinStrictMiddleware`.
+  - Services (`services/*`) enrich `"<serviceName>.<methodName>"` groups and return standard Go errors (never write to the `"error"` group directly).
+  - Use `clog.Go` for detached background goroutines and `clog.LoopRollup` for batch loops.
+  - All `clog.Fields` keys must be `camelCase` with the `Id` suffix (e.g., `"userId"`, `"sessionId"`, `"snapshotId"`, `"characterId"`). Never log PII.
+
 ## Notable Libraries
 
 - Firebase
 - openapi-generator
+- canonical-logger (`clog`)

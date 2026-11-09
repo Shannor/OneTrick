@@ -70,7 +70,7 @@ The project follows a clean architecture approach with a focus on separation of 
 - **[Gin](https://github.com/gin-gonic/gin)**: HTTP web framework.
 - **[oapi-codegen](https://github.com/oapi-codegen/oapi-codegen)**: OpenAPI client and server code generator.
 - **[Firebase Admin SDK](https://firebase.google.com/docs/admin/setup)**: For interacting with Firebase services.
-- **[slog](https://pkg.go.dev/log/slog)**: Standard library structured JSON logger with GCP Cloud Logging handler.
+- **[canonical-logger (`clog`)](https://github.com/Shannor/canonical-logger)**: Structured canonical wide-event logger built on standard library `log/slog`.
 
 ## Contributing
 

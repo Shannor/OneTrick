@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/utils"
 	"sort"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 	"google.golang.org/api/iterator"
 )
 
@@ -70,32 +70,36 @@ func (s *service) Update(ctx context.Context, aggregateID string, updateFn func(
 		return err
 	}
 
+	clog.WithGroupFields(ctx, "aggregateService.update", clog.Fields{
+		"aggregateId": aggregateID,
+		"shouldMerge": shouldMerge,
+	})
 	if shouldMerge {
 		_, err = docRef.Set(ctx, data, firestore.MergeAll)
 		if err != nil {
-			slog.Error("failed to merge aggregate", "error", err)
-			return err
+			return fmt.Errorf("failed to merge aggregate: %w", err)
 		}
 		return nil
 	}
 	_, err = docRef.Set(ctx, data)
 	if err != nil {
-		slog.Error("failed to save aggregate", "error", err)
-		return err
+		return fmt.Errorf("failed to save aggregate: %w", err)
 	}
-	return err
+	return nil
 }
 
 func (s *service) BySnapshotID(ctx context.Context, snapshotID string, gameMode *api.GameMode) ([]api.Aggregate, error) {
 	if snapshotID == "" {
 		return nil, fmt.Errorf("snapshotID is required")
 	}
+	clog.WithGroupField(ctx, "aggregateService.bySnapshotId", "snapshotId", snapshotID)
 
 	q := s.DB.Collection(collection).
 		Where("snapshotIds", "array-contains", snapshotID)
 
 	if gameMode != nil && *gameMode != "" && *gameMode != api.GameModeAll {
 		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
+		clog.WithGroupField(ctx, "aggregateService.bySnapshotId", "gameMode", string(*gameMode))
 	}
 
 	docs, err := q.Documents(ctx).GetAll()
@@ -107,10 +111,12 @@ func (s *service) BySnapshotID(ctx context.Context, snapshotID string, gameMode 
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "aggregateService.bySnapshotId", "returnedCount", len(results))
 	return results, nil
 }
 
 func (s *service) GetAggregate(ctx context.Context, activityID string) (*api.Aggregate, error) {
+	clog.WithGroupField(ctx, "aggregateService.getAggregate", "activityId", activityID)
 	iter := s.DB.
 		Collection(collection).
 		Where("activityId", "==", activityID).
@@ -129,12 +135,14 @@ func (s *service) GetAggregate(ctx context.Context, activityID string) (*api.Agg
 		if err != nil {
 			return nil, err
 		}
+		clog.WithGroupField(ctx, "aggregateService.getAggregate", "aggregateId", agg.ID)
 		return &agg, nil
 	}
 	return nil, NotFound
 }
 
 func (s *service) GetAggregatesByActivity(ctx context.Context, activityIDs []string) ([]api.Aggregate, error) {
+	clog.WithGroupField(ctx, "aggregateService.getAggregatesByActivity", "requestedCount", len(activityIDs))
 	docs, err := s.DB.
 		Collection(collection).
 		Where("activityId", "in", activityIDs).
@@ -146,11 +154,14 @@ func (s *service) GetAggregatesByActivity(ctx context.Context, activityIDs []str
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "aggregateService.getAggregatesByActivity", "returnedCount", len(results))
 	return results, nil
 }
 
 func (s *service) GetAggregates(ctx context.Context, IDs []string) ([]api.Aggregate, error) {
+	clog.WithGroupField(ctx, "aggregateService.getAggregates", "requestedCount", len(IDs))
 	if len(IDs) == 0 {
+		clog.WithGroupField(ctx, "aggregateService.getAggregates", "returnedCount", 0)
 		return []api.Aggregate{}, nil
 	}
 
@@ -183,6 +194,7 @@ func (s *service) GetAggregates(ctx context.Context, IDs []string) ([]api.Aggreg
 	sort.Slice(allResults, func(i, j int) bool {
 		return allResults[i].CreatedAt.Before(allResults[j].CreatedAt)
 	})
+	clog.WithGroupField(ctx, "aggregateService.getAggregates", "returnedCount", len(allResults))
 	return allResults, nil
 }
 
@@ -197,6 +209,7 @@ func (s *service) GetAllAggregates(ctx context.Context) ([]api.Aggregate, error)
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "aggregateService.getAllAggregates", "returnedCount", len(results))
 	return results, nil
 }
 
@@ -206,6 +219,7 @@ func (s *service) UpdateAllAggregates(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	count := 0
+	failedCount := 0
 	for _, agg := range aggregates {
 		snapshotIDs := make([]string, 0)
 		sessionIDs := make([]string, 0)
@@ -226,10 +240,18 @@ func (s *service) UpdateAllAggregates(ctx context.Context) (int, error) {
 				"characterIds": firestore.ArrayUnion(toInterfaceSlice(characterIDs)...),
 			}, firestore.MergeAll)
 			if err != nil {
-				slog.Warn("failed to update aggregate", "id", agg.ID, "error", err)
+				failedCount++
 			}
 			count++
 		}
+	}
+	clog.WithGroupFields(ctx, "aggregateService.updateAllAggregates", clog.Fields{
+		"totalAggregates":   len(aggregates),
+		"updatedAggregates": count,
+		"failedAggregates":  failedCount,
+	})
+	if failedCount > 0 {
+		clog.WithGroupField(ctx, "aggregateService.updateAllAggregates", "warning", "some aggregates failed to update")
 	}
 	return count, nil
 }
@@ -239,16 +261,16 @@ func (s *service) RemoveSession(ctx context.Context, sessionID string) error {
 		return nil
 	}
 
-	slog.Info("Removing session references from aggregates", "sessionID", sessionID)
+	clog.WithGroupField(ctx, "aggregateService.removeSession", "sessionId", sessionID)
 	docs, err := s.DB.Collection(collection).
 		Where("sessionIds", "array-contains", sessionID).
 		Documents(ctx).GetAll()
 	if err != nil {
-		slog.Error("Failed to query aggregates for session removal", "sessionID", sessionID, "error", err)
 		return fmt.Errorf("failed to query aggregates for session %s: %w", sessionID, err)
 	}
 
-	slog.Info("Found aggregates referencing session", "sessionID", sessionID, "count", len(docs))
+	deletedOrphans := 0
+	updatedCount := 0
 	for _, doc := range docs {
 		docRef := doc.Ref
 		data := doc.Data()
@@ -279,21 +301,22 @@ func (s *service) RemoveSession(ctx context.Context, sessionID string) error {
 		}
 
 		if isAggregateOrphaned(data) {
-			slog.Info("Deleting orphaned aggregate after session removal", "aggregateID", docRef.ID, "sessionID", sessionID)
 			if _, err := docRef.Delete(ctx); err != nil {
-				slog.Error("Failed to delete orphaned aggregate", "aggregateID", docRef.ID, "sessionID", sessionID, "error", err)
 				return fmt.Errorf("failed to delete orphaned aggregate %s: %w", docRef.ID, err)
 			}
-			slog.Info("Successfully deleted orphaned aggregate", "aggregateID", docRef.ID, "sessionID", sessionID)
+			deletedOrphans++
 		} else {
 			if _, err := docRef.Set(ctx, data); err != nil {
-				slog.Error("Failed to update aggregate after session removal", "aggregateID", docRef.ID, "sessionID", sessionID, "error", err)
 				return fmt.Errorf("failed to update aggregate %s: %w", docRef.ID, err)
 			}
-			slog.Info("Successfully updated aggregate after session removal", "aggregateID", docRef.ID, "sessionID", sessionID)
+			updatedCount++
 		}
 	}
-	slog.Info("Finished removing session references from aggregates", "sessionID", sessionID, "affectedAggregates", len(docs))
+	clog.WithGroupFields(ctx, "aggregateService.removeSession", clog.Fields{
+		"affectedAggregates": len(docs),
+		"deletedOrphans":     deletedOrphans,
+		"updatedAggregates":  updatedCount,
+	})
 	return nil
 }
 
@@ -302,16 +325,16 @@ func (s *service) RemoveSnapshot(ctx context.Context, snapshotID string) error {
 		return nil
 	}
 
-	slog.Info("Removing snapshot references from aggregates", "snapshotID", snapshotID)
+	clog.WithGroupField(ctx, "aggregateService.removeSnapshot", "snapshotId", snapshotID)
 	docs, err := s.DB.Collection(collection).
 		Where("snapshotIds", "array-contains", snapshotID).
 		Documents(ctx).GetAll()
 	if err != nil {
-		slog.Error("Failed to query aggregates for snapshot removal", "snapshotID", snapshotID, "error", err)
 		return fmt.Errorf("failed to query aggregates for snapshot %s: %w", snapshotID, err)
 	}
 
-	slog.Info("Found aggregates referencing snapshot", "snapshotID", snapshotID, "count", len(docs))
+	deletedOrphans := 0
+	updatedCount := 0
 	for _, doc := range docs {
 		docRef := doc.Ref
 		data := doc.Data()
@@ -350,21 +373,22 @@ func (s *service) RemoveSnapshot(ctx context.Context, snapshotID string) error {
 		}
 
 		if isAggregateOrphaned(data) {
-			slog.Info("Deleting orphaned aggregate after snapshot removal", "aggregateID", docRef.ID, "snapshotID", snapshotID)
 			if _, err := docRef.Delete(ctx); err != nil {
-				slog.Error("Failed to delete orphaned aggregate", "aggregateID", docRef.ID, "snapshotID", snapshotID, "error", err)
 				return fmt.Errorf("failed to delete orphaned aggregate %s: %w", docRef.ID, err)
 			}
-			slog.Info("Successfully deleted orphaned aggregate", "aggregateID", docRef.ID, "snapshotID", snapshotID)
+			deletedOrphans++
 		} else {
 			if _, err := docRef.Set(ctx, data); err != nil {
-				slog.Error("Failed to update aggregate after snapshot removal", "aggregateID", docRef.ID, "snapshotID", snapshotID, "error", err)
 				return fmt.Errorf("failed to update aggregate %s: %w", docRef.ID, err)
 			}
-			slog.Info("Successfully updated aggregate after snapshot removal", "aggregateID", docRef.ID, "snapshotID", snapshotID)
+			updatedCount++
 		}
 	}
-	slog.Info("Finished removing snapshot references from aggregates", "snapshotID", snapshotID, "affectedAggregates", len(docs))
+	clog.WithGroupFields(ctx, "aggregateService.removeSnapshot", clog.Fields{
+		"affectedAggregates": len(docs),
+		"deletedOrphans":     deletedOrphans,
+		"updatedAggregates":  updatedCount,
+	})
 	return nil
 }
 

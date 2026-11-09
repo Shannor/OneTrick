@@ -2,7 +2,6 @@ package destiny
 
 import (
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
@@ -171,7 +170,6 @@ func generatePerks(item *bungie.DestinyItem, perks map[string]PerkDefinition) []
 		}
 		perk, ok := perks[strconv.Itoa(int(*p.PerkHash))]
 		if !ok {
-			slog.Warn("Perk not found in manifest", "perkHash", strconv.Itoa(int(*p.PerkHash)))
 			continue
 		}
 		if !perk.IsDisplayable {
@@ -194,12 +192,10 @@ func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) 
 	}
 	for _, s := range *item.Sockets.Data.Sockets {
 		if s.PlugHash == nil {
-			slog.Warn("Socket has no plug hash")
 			continue
 		}
 		socket, ok := items[strconv.Itoa(int(*s.PlugHash))]
 		if !ok {
-			slog.Warn("Socket not found in manifest", "socketHash", *s.PlugHash)
 			continue
 		}
 
@@ -225,12 +221,10 @@ func generateStats(item *bungie.DestinyItem, statDefinitions map[string]StatDefi
 	}
 	for key, s := range *item.Stats.Data.Stats {
 		if s.StatHash == nil || s.Value == nil {
-			slog.Warn("Missing stat hash or value for stat", "statKey", key)
 			continue
 		}
 		stat, ok := statDefinitions[strconv.Itoa(int(*s.StatHash))]
 		if !ok {
-			slog.Warn("Stat not found in manifest", "statHash", strconv.Itoa(int(*s.StatHash)))
 			continue
 		}
 		value := int64(*s.Value)
@@ -266,7 +260,6 @@ func transformD2StatValue(item *bungie.HistoricalStatsValue) *api.UniqueStatValu
 		return nil
 	}
 	if item.Basic == nil {
-		slog.Warn("Missing basic value for stat")
 		return nil
 	}
 	result := &api.UniqueStatValue{
@@ -367,7 +360,6 @@ func TransformPeriodGroups(period []bungie.StatsPeriodGroup, activities map[stri
 	for _, group := range period {
 		r := TransformPeriodGroup(&group, activities, modes)
 		if r == nil {
-			slog.Warn("period group returned nil")
 			continue
 		}
 		result = append(result, *r)
@@ -385,12 +377,10 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 
 	definition, ok := activities[strconv.Itoa(int(*period.ActivityDetails.ReferenceId))]
 	if !ok {
-		slog.Warn("Activity locale not found in manifest", "referenceId", *period.ActivityDetails.ReferenceId)
 		return nil
 	}
 	activity, ok := activities[strconv.Itoa(int(*period.ActivityDetails.DirectorActivityHash))]
 	if !ok {
-		slog.Warn("Activity Directory not found in manifest", "directorActivityHash", *period.ActivityDetails.DirectorActivityHash)
 		return nil
 	}
 	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]
@@ -519,7 +509,6 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, items map[
 
 func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	if modeType == nil {
-		slog.Warn("Activity Mode type is nil")
 		return "Unknown"
 	}
 	switch *modeType {
@@ -733,7 +722,6 @@ func generateClassStats(statDefinitions map[string]StatDefinition, stats map[str
 	for key, value := range stats {
 		info, ok := statDefinitions[key]
 		if !ok {
-			slog.Warn("Missing stat", "statKey", key)
 			continue
 		}
 		i := api.ClassStat{

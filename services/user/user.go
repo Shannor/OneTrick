@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"oneTrick/utils"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 	"github.com/algolia/algoliasearch-client-go/v4/algolia/search"
 	"google.golang.org/api/iterator"
 )
@@ -57,6 +57,7 @@ func NewUserService(client *firestore.Client, service destiny.Service, searchCli
 var NotFound = errors.New("user not found")
 
 func (s *userService) GetUser(ctx context.Context, ID string) (*User, error) {
+	clog.WithGroupField(ctx, "userService.getUser", "lookupId", ID)
 	user := User{}
 
 	q1 := firestore.PropertyFilter{
@@ -93,6 +94,7 @@ func (s *userService) GetUser(ctx context.Context, ID string) (*User, error) {
 		if err != nil {
 			return nil, err
 		}
+		clog.WithGroupField(ctx, "userService.getUser", "userId", user.ID)
 		return &user, nil
 	}
 
@@ -110,6 +112,12 @@ func (s *userService) CreateUser(ctx context.Context, user *User) (*User, error)
 	ref := s.db.Collection(userCollection).NewDoc()
 	user.ID = ref.ID
 
+	clog.WithGroupFields(ctx, "userService.createUser", clog.Fields{
+		"userId":              user.ID,
+		"memberId":            user.MemberID,
+		"primaryMembershipId": user.PrimaryMembershipID,
+	})
+
 	_, err := ref.Set(ctx, user)
 	if err != nil {
 		return nil, err
@@ -118,6 +126,10 @@ func (s *userService) CreateUser(ctx context.Context, user *User) (*User, error)
 }
 
 func (s *userService) GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error) {
+	clog.WithGroupFields(ctx, "userService.getMembershipType", clog.Fields{
+		"userId":       userID,
+		"membershipId": membershipID,
+	})
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch user: %w", err)
@@ -128,10 +140,12 @@ func (s *userService) GetMembershipType(ctx context.Context, userID string, memb
 			membershipType = membership.Type
 		}
 	}
+	clog.WithGroupField(ctx, "userService.getMembershipType", "membershipType", membershipType)
 	return membershipType, nil
 }
 
 func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error) {
+	clog.WithGroupField(ctx, "userService.getFireteam", "userId", userID)
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -159,9 +173,10 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 	}
 
 	fireteam := make([]api.FireteamMember, 0)
+	missingMembershipIds := 0
 	for _, member := range partyMembers {
 		if member.MembershipId == nil {
-			slog.Warn("missing membership id for party member")
+			missingMembershipIds++
 			continue
 		}
 		member, err := s.GetUser(ctx, *member.MembershipId)
@@ -176,6 +191,12 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 			Characters:   member.Characters,
 		})
 	}
+	clog.WithGroupFields(ctx, "userService.getFireteam", clog.Fields{
+		"userId":               userID,
+		"partySize":            len(partyMembers),
+		"fireteamMatches":      len(fireteam),
+		"missingMembershipIds": missingMembershipIds,
+	})
 
 	return fireteam, nil
 }
@@ -184,6 +205,7 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 // characterIds array on the User document. This is useful for users created before
 // character IDs were persisted or when data needs to be refreshed.
 func (s *userService) BackfillCharacters(ctx context.Context, userID string) error {
+	clog.WithGroupField(ctx, "userService.backfillCharacters", "userId", userID)
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch user: %w", err)
@@ -222,10 +244,15 @@ func (s *userService) BackfillCharacters(ctx context.Context, userID string) err
 	if err != nil {
 		return fmt.Errorf("failed to update user character ids: %w", err)
 	}
+	clog.WithGroupField(ctx, "userService.backfillCharacters", "characterCount", len(charIDs))
 	return nil
 }
 
 func (s *userService) UpdateCharacters(ctx context.Context, userID string, characters []api.Character) error {
+	clog.WithGroupFields(ctx, "userService.updateCharacters", clog.Fields{
+		"userId":         userID,
+		"characterCount": len(characters),
+	})
 	charIDs := make([]string, 0, len(characters))
 	for _, c := range characters {
 		charIDs = append(charIDs, c.Id)
@@ -251,6 +278,7 @@ func (s *userService) GetAll(ctx context.Context) ([]User, error) {
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "userService.getAll", "returnedCount", len(results))
 	return results, nil
 }
 
@@ -259,6 +287,7 @@ func (s *userService) GetByCharacterID(ctx context.Context, characterID string) 
 	if characterID == "" {
 		return nil, nil
 	}
+	clog.WithGroupField(ctx, "userService.getByCharacterId", "characterId", characterID)
 	q := s.db.Collection(userCollection).
 		Where("characterIds", "array-contains", characterID).
 		Limit(1)
@@ -267,12 +296,17 @@ func (s *userService) GetByCharacterID(ctx context.Context, characterID string) 
 		return nil, err
 	}
 	if len(docs) == 0 {
+		clog.WithGroupField(ctx, "userService.getByCharacterId", "found", false)
 		return nil, nil
 	}
 	u := &User{}
 	if err := docs[0].DataTo(u); err != nil {
 		return nil, err
 	}
+	clog.WithGroupFields(ctx, "userService.getByCharacterId", clog.Fields{
+		"found":  true,
+		"userId": u.ID,
+	})
 	return u, nil
 }
 
@@ -301,11 +335,18 @@ func (s *userService) UpdateUserSearch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Done! Uploaded records in %d batches.", len(result))
+	clog.WithGroupFields(ctx, "userService.updateUserSearch", clog.Fields{
+		"userCount":  len(u),
+		"batchCount": len(result),
+	})
 	return nil
 }
 
 func (s *userService) Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, error) {
+	clog.WithGroupFields(ctx, "userService.search", clog.Fields{
+		"query": query,
+		"page":  page,
+	})
 	searchParams := search.SearchParams{
 		SearchParamsObject: search.
 			NewEmptySearchParamsObject().
@@ -332,5 +373,6 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 		results = append(results, result)
 	}
 
+	clog.WithGroupField(ctx, "userService.search", "returnedCount", len(results))
 	return results, nil
 }

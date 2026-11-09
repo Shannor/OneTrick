@@ -3,7 +3,6 @@ package stats
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/ptr"
 	"oneTrick/services/destiny"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 )
 
 // Service defines operations for retrieving stats-related data.
@@ -78,12 +78,14 @@ func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID strin
 	if snapshotID == "" {
 		return nil, fmt.Errorf("snapshotID is required")
 	}
+	clog.WithGroupField(ctx, "statsService.getAggregatesForSnapshot", "snapshotId", snapshotID)
 
 	q := s.DB.Collection(aggregatesCollection).
 		Where("snapshotIds", "array-contains", snapshotID)
 
 	if hasGameModeFilter(gameMode) {
 		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
+		clog.WithGroupField(ctx, "statsService.getAggregatesForSnapshot", "gameMode", string(*gameMode))
 	}
 
 	docs, err := q.Documents(ctx).GetAll()
@@ -95,6 +97,7 @@ func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID strin
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "statsService.getAggregatesForSnapshot", "returnedCount", len(results))
 	return results, nil
 }
 
@@ -102,11 +105,13 @@ func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID st
 	if characterID == "" {
 		return nil, fmt.Errorf("characterID is required")
 	}
+	clog.WithGroupField(ctx, "statsService.getAggregatesByCharacterId", "characterId", characterID)
 	q := s.DB.Collection(aggregatesCollection).
 		Where("characterIds", "array-contains", characterID)
 
 	if hasGameModeFilter(gameMode) {
 		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
+		clog.WithGroupField(ctx, "statsService.getAggregatesByCharacterId", "gameMode", string(*gameMode))
 	}
 
 	aggDocs, err := q.Documents(ctx).GetAll()
@@ -117,6 +122,7 @@ func (s *service) GetAggregatesByCharacterID(ctx context.Context, characterID st
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "statsService.getAggregatesByCharacterId", "returnedCount", len(aggs))
 	return aggs, nil
 }
 
@@ -136,37 +142,36 @@ func (s *service) GetSnapshotsWithMetrics(
 		return nil, nil, nil, fmt.Errorf("characterID is required")
 	}
 
-	l := slog.With(
-		"userID", userID,
-		"characterID", characterID,
-		"minimumGames", minimumGames,
-		"sortBy", sortBy,
-		"includeStats", includeStats,
-		"count", count,
-		"offset", offset,
-		"gameMode", gameMode,
-	)
-	l.Info("GetSnapshotsWithMetrics request received")
-
 	gameModeActive := hasGameModeFilter(gameMode)
 	needsAggs := includeStats || sortBy == "win_rate" || sortBy == "kd_ratio" || sortBy == "matches_played" || gameModeActive || minimumGames > 0
+
+	clog.WithGroupFields(ctx, "statsService.getSnapshotsWithMetrics", clog.Fields{
+		"userId":       userID,
+		"characterId":  characterID,
+		"minimumGames": minimumGames,
+		"sortBy":       sortBy,
+		"includeStats": includeStats,
+		"count":        count,
+		"offset":       offset,
+		"fastPath":     !needsAggs && sortBy == "created_at",
+	})
+	if gameMode != nil {
+		clog.WithGroupField(ctx, "statsService.getSnapshotsWithMetrics", "gameMode", string(*gameMode))
+	}
 
 	if !needsAggs && sortBy == "created_at" {
 		snapshots, err := s.snapshotService.GetAllByCharacter(ctx, userID, characterID, count, offset)
 		if err != nil {
-			l.Error("failed to fetch snapshots for created_at fast path", "error", err)
 			return nil, nil, nil, err
 		}
-		l.Info("Returning snapshots via fast path created_at", "returnedCount", len(snapshots))
+		clog.WithGroupField(ctx, "statsService.getSnapshotsWithMetrics", "returnedCount", len(snapshots))
 		return snapshots, nil, nil, nil
 	}
 
 	aggs, err := s.GetAggregatesByCharacterID(ctx, characterID, gameMode)
 	if err != nil {
-		l.Error("failed to fetch aggregates by character ID", "error", err)
 		return nil, nil, nil, err
 	}
-	l.Info("Fetched aggregates for character", "numAggregates", len(aggs))
 
 	type stat struct {
 		Kills   int
@@ -205,14 +210,12 @@ func (s *service) GetSnapshotsWithMetrics(
 	// Fetch all snapshots for this character (unlimited)
 	allSnapshots, err := s.snapshotService.GetAllByCharacter(ctx, userID, characterID, 0, 0)
 	if err != nil {
-		l.Error("failed to fetch all snapshots for character", "error", err)
 		return nil, nil, nil, err
 	}
-	l.Info("Fetched all snapshots from DB", "totalSnapshotsInDB", len(allSnapshots), "uniqueSnapshotsWithAggMatches", len(counts))
 
 	// Filter by minimumGames if set, or exclude 0-match snapshots when a gameMode filter is active
 	filteredSnapshots := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, gameMode, minimumGames)
-	l.Info("Snapshots after minimumGames filter", "passedCount", len(filteredSnapshots), "totalBeforeFilter", len(allSnapshots))
+	passedFilterCount := len(filteredSnapshots)
 
 	// Sort snapshots based on sortBy
 	slices.SortFunc(filteredSnapshots, func(a, b api.CharacterSnapshot) int {
@@ -252,22 +255,16 @@ func (s *service) GetSnapshotsWithMetrics(
 		}
 	})
 
-	for idx := 0; idx < len(filteredSnapshots) && idx < 5; idx++ {
-		sID := filteredSnapshots[idx].ID
-		l.Info("Sorted snapshot entry preview",
-			"rank", idx+1,
-			"snapshotID", sID,
-			"name", filteredSnapshots[idx].Name,
-			"matchesPlayed", counts[sID],
-			"winRate", getKD(stats[sID].Wins, counts[sID]),
-			"kdRatio", getKD(stats[sID].Kills, stats[sID].Deaths),
-		)
-	}
-
 	// Apply offset
 	if offset > 0 {
 		if offset >= len(filteredSnapshots) {
-			l.Info("Offset beyond available filtered snapshots", "offset", offset, "totalFiltered", len(filteredSnapshots))
+			clog.WithGroupFields(ctx, "statsService.getSnapshotsWithMetrics", clog.Fields{
+				"numAggregates":                 len(aggs),
+				"totalSnapshotsInDb":            len(allSnapshots),
+				"uniqueSnapshotsWithAggMatches": len(counts),
+				"passedFilterCount":             passedFilterCount,
+				"returnedCount":                 0,
+			})
 			return []api.CharacterSnapshot{}, nil, nil, nil
 		}
 		filteredSnapshots = filteredSnapshots[offset:]
@@ -282,7 +279,13 @@ func (s *service) GetSnapshotsWithMetrics(
 		filteredSnapshots = filteredSnapshots[:limit]
 	}
 
-	l.Info("Final paginated snapshots result", "returnedCount", len(filteredSnapshots))
+	clog.WithGroupFields(ctx, "statsService.getSnapshotsWithMetrics", clog.Fields{
+		"numAggregates":                 len(aggs),
+		"totalSnapshotsInDb":            len(allSnapshots),
+		"uniqueSnapshotsWithAggMatches": len(counts),
+		"passedFilterCount":             passedFilterCount,
+		"returnedCount":                 len(filteredSnapshots),
+	})
 
 	var finalPlayerStats *map[string]api.PlayerStats
 	var finalCounts *map[string]int
@@ -332,6 +335,10 @@ func (s *service) GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate,
 	if characterID == "" {
 		return nil, nil, fmt.Errorf("characterID is required")
 	}
+	clog.WithGroupFields(ctx, "statsService.getMostUsedLoadouts", clog.Fields{
+		"characterId":    characterID,
+		"aggregateCount": len(aggs),
+	})
 
 	counts := map[string]int{}
 	for _, agg := range aggs {
@@ -383,6 +390,7 @@ func (s *service) GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate,
 		}
 		return order[a.ID] - order[b.ID]
 	})
+	clog.WithGroupField(ctx, "statsService.getMostUsedLoadouts", "returnedCount", len(loadouts))
 	return loadouts, finalCount, nil
 }
 
@@ -399,6 +407,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 	}
 	stats := make(map[string]stat)
 	counts := make(map[string]int)
+	missingPerf := 0
 	for _, agg := range aggs {
 		link, ok := agg.SnapshotLinks[characterID]
 		if !ok || link.SnapshotID == nil || *link.SnapshotID == "" {
@@ -406,7 +415,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		}
 		performance, ok := agg.Performance[characterID]
 		if !ok {
-			slog.Warn("no performance found for character", "characterID", characterID)
+			missingPerf++
 			continue
 		}
 		s := stats[*link.SnapshotID]
@@ -428,7 +437,6 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		counts int
 	}
 	pairs := make([]pair, 0, len(stats))
-	slog.Debug("skipping loadout check", "characterID", characterID, "minimumGames", minimumGames)
 	skipped := 0
 	for id, obj := range stats {
 		if counts[id] < minimumGames {
@@ -437,7 +445,12 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		}
 		pairs = append(pairs, pair{id: id, stats: obj, counts: counts[id]})
 	}
-	slog.Debug("loadouts skipped", "skipped", skipped)
+	clog.WithGroupFields(ctx, "statsService.getBestPerformingLoadouts", clog.Fields{
+		"characterId":        characterID,
+		"minimumGames":       minimumGames,
+		"skippedCount":       skipped,
+		"missingPerformance": missingPerf,
+	})
 
 	slices.SortFunc(pairs, func(a, b pair) int {
 		kda := getKD(a.stats.Kills, a.stats.Deaths)
@@ -500,7 +513,6 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 	}
 	loadouts, err := s.snapshotService.GetByIDs(ctx, ids)
 	if err != nil {
-		slog.Error("failed to get loadouts", "error", err)
 		return nil, nil, nil, err
 	}
 	slices.SortFunc(loadouts, func(a, b api.CharacterSnapshot) int {
@@ -509,6 +521,7 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		}
 		return order[a.ID] - order[b.ID]
 	})
+	clog.WithGroupField(ctx, "statsService.getBestPerformingLoadouts", "returnedCount", len(loadouts))
 	return loadouts, finalPlayerStats, finalCount, nil
 }
 
@@ -538,6 +551,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 	if count <= 0 {
 		count = 5
 	}
+	clog.WithGroupField(ctx, "statsService.getFeaturedLoadouts", "requestedCount", count)
 
 	q := s.DB.Collection(aggregatesCollection).Query
 	if hasGameModeFilter(gameMode) {
@@ -545,7 +559,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 	}
 	aggDocs, err := q.Limit(500).Documents(ctx).GetAll()
 	if err != nil {
-		slog.Error("failed fetching aggregates for featured loadouts", "error", err)
+		clog.WithGroupField(ctx, "statsService.getFeaturedLoadouts", "warning", "failed fetching aggregates for featured loadouts")
 	}
 
 	statsMap := make(map[string]*snapStats)
@@ -850,6 +864,10 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		featured[i].FeaturedReason = ptr.Of(reason)
 	}
 
+	clog.WithGroupFields(ctx, "statsService.getFeaturedLoadouts", clog.Fields{
+		"candidateCount": len(candidates),
+		"returnedCount":  len(featured),
+	})
 	return featured, nil
 }
 

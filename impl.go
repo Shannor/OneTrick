@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
@@ -15,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	clog "github.com/Shannor/canonical-logger"
 	"github.com/fatih/structs"
 )
 
@@ -55,6 +55,9 @@ func NewServer(
 }
 
 func (s Server) DeleteSession(ctx context.Context, request api.DeleteSessionRequestObject) (api.DeleteSessionResponseObject, error) {
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	clog.WithGroupField(ctx, "request", "sessionId", request.SessionID)
+
 	err := s.SessionService.Delete(ctx, request.SessionID, request.Params.XUserID)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
@@ -63,13 +66,15 @@ func (s Server) DeleteSession(ctx context.Context, request api.DeleteSessionRequ
 		if errors.Is(err, session.ErrUnauthorized) {
 			return api.DeleteSession401JSONResponse{Message: "unauthorized"}, nil
 		}
-		slog.Error("failed to delete session", "sessionID", request.SessionID, "error", err)
 		return api.DeleteSession500JSONResponse{Message: err.Error()}, nil
 	}
 	return api.DeleteSession204Response{}, nil
 }
 
 func (s Server) DeleteSnapshot(ctx context.Context, request api.DeleteSnapshotRequestObject) (api.DeleteSnapshotResponseObject, error) {
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	clog.WithGroupField(ctx, "request", "snapshotId", request.SnapshotID)
+
 	err := s.SnapshotService.Delete(ctx, request.SnapshotID, request.Params.XUserID)
 	if err != nil {
 		if errors.Is(err, snapshot.NotFound) {
@@ -78,7 +83,6 @@ func (s Server) DeleteSnapshot(ctx context.Context, request api.DeleteSnapshotRe
 		if errors.Is(err, snapshot.Unauthorized) {
 			return api.DeleteSnapshot401JSONResponse{Message: "unauthorized"}, nil
 		}
-		slog.Error("failed to delete snapshot", "snapshotID", request.SnapshotID, "error", err)
 		return api.DeleteSnapshot500JSONResponse{Message: err.Error()}, nil
 	}
 	return api.DeleteSnapshot204Response{}, nil
@@ -99,7 +103,6 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 		for key, item := range snap.Loadout { // item is a copy of the struct in the map
 			d2Item, err := s.D2ManifestService.GetItem(ctx, item.ItemHash)
 			if err != nil {
-				slog.Warn("failed to get item from manifest", "error", err)
 				failed++
 				continue
 			}
@@ -114,10 +117,18 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 			return nil
 		})
 		if err != nil {
-			slog.Warn("failed to update snapshot", "error", err)
 			failed++
 		}
 		updated++
+	}
+
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"totalSnapshots": len(snapshots),
+		"updated":        updated,
+		"failed":         failed,
+	})
+	if failed > 0 {
+		clog.WithGroupField(ctx, "request", "warning", "some snapshot items failed to backfill")
 	}
 
 	return api.BackfillSnapshotInfo200JSONResponse{
@@ -127,9 +138,11 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 }
 
 func (s Server) MergeSnapshots(ctx context.Context, request api.MergeSnapshotsRequestObject) (api.MergeSnapshotsResponseObject, error) {
+	clog.WithGroupField(ctx, "request", "snapshotId", request.SnapshotID)
 	if request.Body == nil {
 		return api.MergeSnapshots500JSONResponse{Message: "body cannot be empty"}, nil
 	}
+	clog.WithGroupField(ctx, "request", "sourceSnapshotId", request.Body.SourceSnapshotID)
 	if request.SnapshotID == "" {
 		return api.MergeSnapshots500JSONResponse{Message: "snapshotID cannot be empty"}, nil
 	}
@@ -145,6 +158,11 @@ func (s Server) MergeSnapshots(ctx context.Context, request api.MergeSnapshotsRe
 }
 
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"userId":      request.UserID,
+		"characterId": request.Body.CharacterID,
+	})
 	if request.Params.XUserID != request.UserID {
 		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
 		// If not block the users from hitting it.
@@ -169,6 +187,13 @@ func (s Server) GetUserSessions(ctx context.Context, request api.GetUserSessions
 	if request.Params.Page > 1 {
 		offset = int(request.Params.Count) * int(request.Params.Page-1)
 	}
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"userId":      request.UserID,
+		"characterId": request.Params.CharacterID,
+		"count":       request.Params.Count,
+		"page":        request.Params.Page,
+		"offset":      offset,
+	})
 	var charID *string
 	if request.Params.CharacterID != "" {
 		charID = &request.Params.CharacterID
@@ -188,14 +213,17 @@ func (s Server) GetUserSessions(ctx context.Context, request api.GetUserSessions
 }
 
 func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (api.GetUserResponseObject, error) {
+	clog.WithGroupField(ctx, "request", "userId", request.UserID)
 	u, err := s.UserService.GetUser(ctx, request.UserID)
 	if err != nil {
 		return nil, err
 	}
-	go func() {
-		// Perform update for characters if needed
-		if u.LastUpdatedCharacters.Add(time.Hour).Before(time.Now()) {
-			slog.Info("Updating characters for user", "userId", u.ID)
+	if u.LastUpdatedCharacters.Add(time.Hour).Before(time.Now()) {
+		clog.Go(ctx, "update-user-characters-bg", func(bgCtx context.Context) error {
+			clog.WithGroupFields(bgCtx, "request", clog.Fields{
+				"userId":              u.ID,
+				"primaryMembershipId": u.PrimaryMembershipID,
+			})
 			t := int64(0)
 			for _, membership := range u.Memberships {
 				if membership.ID == u.PrimaryMembershipID {
@@ -208,21 +236,20 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 			}
 			pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 			if err != nil {
-				slog.Error("failed to parse primary membership id", "error", err)
-				return
+				return fmt.Errorf("failed to parse primary membership id: %w", err)
 			}
 
-			characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
-			if len(characters) > 0 {
-				err = s.UserService.UpdateCharacters(ctx, u.ID, characters)
-				if err != nil {
-					slog.Error("failed to update characters", "error", err)
-				}
-			} else {
-				slog.Warn("no characters found for user", "userId", u.ID)
+			characters, err := s.D2Service.GetCharacters(bgCtx, pmId, t)
+			if err != nil {
+				return err
 			}
-		}
-	}()
+			if len(characters) == 0 {
+				clog.WithGroupField(bgCtx, "request", "warning", "no characters found for user")
+				return nil
+			}
+			return s.UserService.UpdateCharacters(bgCtx, u.ID, characters)
+		})
+	}
 
 	result := api.GetUser200JSONResponse{
 		DisplayName:  u.DisplayName,
@@ -245,7 +272,6 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 		}
 		pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 		if err != nil {
-			slog.Error("failed to parse primary membership id", "error", err)
 			return result, err
 		}
 		characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
@@ -271,6 +297,11 @@ func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBe
 	if request.Params.MinimumGames != nil {
 		minimumGames = *request.Params.MinimumGames
 	}
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"characterId":  characterID,
+		"count":        count,
+		"minimumGames": minimumGames,
+	})
 	aggs, err := s.StatsService.GetAggregatesByCharacterID(ctx, characterID, request.Params.GameMode)
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
@@ -291,10 +322,10 @@ func (s Server) GetFeaturedLoadouts(ctx context.Context, request api.GetFeatured
 	if request.Params.Count != nil && *request.Params.Count > 0 {
 		count = *request.Params.Count
 	}
+	clog.WithGroupField(ctx, "request", "count", count)
 
 	featured, err := s.StatsService.GetFeaturedLoadouts(ctx, count, request.Params.GameMode)
 	if err != nil {
-		slog.Error("failed fetching featured loadouts", "error", err)
 		return api.GetFeaturedLoadouts500JSONResponse(api.OneTrickError{
 			Message: err.Error(),
 		}), nil
@@ -306,6 +337,7 @@ func (s Server) GetFeaturedLoadouts(ctx context.Context, request api.GetFeatured
 }
 
 func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestObject) (api.GetFireteamResponseObject, error) {
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	members, err := s.UserService.GetFireteam(ctx, request.Params.XUserID)
 	if err != nil {
 		return nil, err
@@ -315,16 +347,19 @@ func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestO
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	sessionID := request.SessionId
-	l := slog.With("sessionID", sessionID)
+	clog.WithGroupField(ctx, "request", "sessionId", sessionID)
 	ses, err := s.SessionService.Get(ctx, sessionID)
 	if err != nil {
-		l.Error("failed to fetch session", "error", err)
 		return nil, err
 	}
 	return api.GetSession200JSONResponse(*ses), nil
 }
 
 func (s Server) Search(ctx context.Context, request api.SearchRequestObject) (api.SearchResponseObject, error) {
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"prefix": request.Body.Prefix,
+		"page":   request.Body.Page,
+	})
 	results, err := s.UserService.Search(ctx, request.Body.Prefix, int(request.Body.Page))
 	if err != nil {
 		return nil, err
@@ -340,6 +375,11 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 	if request.Params.Page > 1 {
 		offset = int((request.Params.Page - 1) * request.Params.Count)
 	}
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"count":  request.Params.Count,
+		"page":   request.Params.Page,
+		"offset": offset,
+	})
 
 	result, err := s.SessionService.GetAll(
 		ctx,
@@ -357,6 +397,11 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"userId":      request.Body.UserID,
+		"characterId": request.Body.CharacterID,
+	})
 	if request.Params.XUserID != request.Body.UserID {
 		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
 	}
@@ -376,6 +421,7 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 }
 
 func (s Server) CompleteSession(ctx context.Context, request api.CompleteSessionRequestObject) (api.CompleteSessionResponseObject, error) {
+	clog.WithGroupField(ctx, "request", "sessionId", request.SessionId)
 	if request.Body.CompletedAt != nil {
 		err := s.SessionService.Complete(ctx, request.SessionId)
 		if err != nil {
@@ -391,6 +437,7 @@ func (s Server) CompleteSession(ctx context.Context, request api.CompleteSession
 }
 
 func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {
+	clog.WithGroupField(ctx, "request", "sessionId", request.SessionID)
 	description := ""
 	if request.Body.Description != nil {
 		description = *request.Body.Description
@@ -409,19 +456,16 @@ func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequ
 }
 
 func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSessionAggregatesRequestObject) (api.GetSessionAggregatesResponseObject, error) {
-	l := slog.With("sessionID", request.SessionId)
+	clog.WithGroupField(ctx, "request", "sessionId", request.SessionId)
 	ses, err := s.SessionService.Get(ctx, request.SessionId)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch session")
 		return nil, err
 	}
 	if len(ses.AggregateIDs) == 0 {
-		l.Error("No aggregate IDs found")
 		return nil, fmt.Errorf("no aggregate found")
 	}
 	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch aggregates")
 		return nil, err
 	}
 	uniqueIDS := make([]string, 0)
@@ -437,7 +481,6 @@ func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSession
 	}
 	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
 	if err != nil {
-		l.With("error", err.Error()).Error("Failed to fetch snapshots")
 		return nil, err
 	}
 	snapshotByID := make(map[string]api.CharacterSnapshot)
@@ -451,10 +494,9 @@ func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSession
 }
 
 func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
-
+	clog.WithGroupField(ctx, "request", "snapshotId", request.SnapshotID)
 	result, err := s.SnapshotService.Get(ctx, request.SnapshotID)
 	if err != nil {
-		slog.With("error", err.Error()).Error("Failed to fetch snapshot")
 		return nil, fmt.Errorf("failed to fetch snapshot: %w", err)
 	}
 
@@ -463,21 +505,26 @@ func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestO
 
 func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.LoginResponseObject, error) {
 	code := request.Body.Code
-	slog.Info("Login request received", "codeLen", len(code), "codeSnippet", destiny.CodeSnippet(code))
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"codeLen":     len(code),
+		"codeSnippet": destiny.CodeSnippet(code),
+	})
 
 	resp, err := s.D2AuthService.GetAccessToken(ctx, code)
 	if err != nil {
-		slog.Error("Failed to fetch access token during login", "error", err, "codeLen", len(code), "codeSnippet", destiny.CodeSnippet(code))
 		return nil, err
 	}
 
 	existingUser, err := s.UserService.GetUser(ctx, resp.MembershipID)
 	if err != nil && !errors.Is(err, user.NotFound) {
-		slog.Error("Failed to fetch existing user from database during login", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
 	if existingUser != nil {
-		slog.Info("Login successful for existing user", "userID", existingUser.ID, "membershipID", resp.MembershipID)
+		clog.WithGroupFields(ctx, "actor", clog.Fields{
+			"userId":       existingUser.ID,
+			"membershipId": resp.MembershipID,
+			"isNewUser":    false,
+		})
 		now := time.Now()
 		result := api.AuthResponse{
 			AccessToken:         resp.AccessToken,
@@ -493,15 +540,12 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return api.Login200JSONResponse(result), nil
 	}
 
-	slog.Info("Creating new user account after Bungie OAuth login", "membershipID", resp.MembershipID)
 	// TODO: Split into it's own function, when no account exists
 	bUser, err := s.D2AuthService.GetCurrentUser(ctx, resp.AccessToken)
 	if err != nil {
-		slog.Error("Failed to fetch current user profile from Bungie during login", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
 	if bUser == nil || (bUser.BungieNetUser == nil && bUser.DestinyMemberships == nil) {
-		slog.Error("Bungie user membership data was empty during login", "membershipID", resp.MembershipID)
 		return nil, fmt.Errorf("failed to fetch user data")
 	}
 
@@ -571,36 +615,27 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		u.DisplayName = m[0].DisplayName
 	}
 
-	slog.Info("Resolved user memberships during login",
-		"membershipID", resp.MembershipID,
-		"primaryMembershipID", u.PrimaryMembershipID,
-		"membershipType", membershipType,
-		"numMemberships", len(m),
-		"displayName", u.DisplayName,
-	)
+	clog.WithGroupFields(ctx, "actor", clog.Fields{
+		"membershipId":        resp.MembershipID,
+		"primaryMembershipId": u.PrimaryMembershipID,
+		"membershipType":      membershipType,
+		"numMemberships":      len(m),
+		"isNewUser":           true,
+	})
 
 	if u.PrimaryMembershipID == "" {
-		slog.Error("User has no primary membership ID or destiny memberships", "membershipID", resp.MembershipID)
 		return nil, fmt.Errorf("user has no destiny memberships linked")
 	}
 
 	id, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 	if err != nil {
-		slog.Error("Failed to parse primary membership ID", "error", err, "primaryMembershipID", u.PrimaryMembershipID, "membershipID", resp.MembershipID)
 		return nil, fmt.Errorf("invalid primary membership ID: %w", err)
 	}
 
 	chars, err := s.D2Service.GetCharacters(ctx, id, membershipType)
 	if err != nil {
-		slog.Error("Failed to fetch characters for new user during login",
-			"error", err,
-			"primaryMembershipID", u.PrimaryMembershipID,
-			"membershipType", membershipType,
-			"membershipID", resp.MembershipID,
-		)
 		return nil, err
 	}
-	slog.Info("Successfully fetched characters for new user", "primaryMembershipID", u.PrimaryMembershipID, "membershipType", membershipType, "numCharacters", len(chars))
 
 	charIDs := make([]string, 0, len(chars))
 	for _, char := range chars {
@@ -613,11 +648,10 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 
 	newUser, err := s.UserService.CreateUser(ctx, &u)
 	if err != nil {
-		slog.Error("Failed to create new user in database during login", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
 
-	slog.Info("Successfully registered and logged in new user", "userID", newUser.ID, "membershipID", resp.MembershipID, "primaryMembershipID", newUser.PrimaryMembershipID)
+	clog.WithGroupField(ctx, "actor", "userId", newUser.ID)
 	now := time.Now()
 	result := api.AuthResponse{
 		AccessToken:         resp.AccessToken,
@@ -634,18 +668,18 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 }
 
 func (s Server) RefreshToken(ctx context.Context, request api.RefreshTokenRequestObject) (api.RefreshTokenResponseObject, error) {
-	slog.Info("Refresh token request received")
-	resp, err := s.D2AuthService.RefreshAccessToken(request.Body.Code)
+	resp, err := s.D2AuthService.RefreshAccessToken(ctx, request.Body.Code)
 	if err != nil {
-		slog.Error("Failed to refresh access token", "error", err)
 		return nil, err
 	}
 	existingUser, err := s.UserService.GetUser(ctx, resp.MembershipID)
 	if err != nil {
-		slog.Error("Failed to fetch user from database during token refresh", "error", err, "membershipID", resp.MembershipID)
 		return nil, err
 	}
-	slog.Info("Token refreshed successfully for user", "userID", existingUser.ID, "membershipID", resp.MembershipID)
+	clog.WithGroupFields(ctx, "actor", clog.Fields{
+		"userId":       existingUser.ID,
+		"membershipId": resp.MembershipID,
+	})
 	now := time.Now()
 	result := api.AuthResponse{
 		AccessToken:         resp.AccessToken,
@@ -669,13 +703,13 @@ func (s Server) GetPing(context.Context, api.GetPingRequestObject) (api.GetPingR
 
 func (s Server) UpdateSnapshot(ctx context.Context, request api.UpdateSnapshotRequestObject) (api.UpdateSnapshotResponseObject, error) {
 	snapshotID := request.SnapshotID
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	clog.WithGroupField(ctx, "request", "snapshotId", snapshotID)
 	snap, err := s.SnapshotService.Get(ctx, snapshotID)
 	if err != nil {
-		slog.Error("failed to fetch snapshot", "error", err)
 		return api.UpdateSnapshot404JSONResponse{Message: "snapshot not found"}, nil
 	}
 	if snap.UserID != request.Params.XUserID {
-		slog.Error("unauthorized to update snapshot")
 		return api.UpdateSnapshot401JSONResponse{Message: "unauthorized"}, nil
 	}
 
@@ -689,19 +723,18 @@ func (s Server) UpdateSnapshot(ctx context.Context, request api.UpdateSnapshotRe
 		return nil
 	})
 	if err != nil {
-		slog.Error("failed to update snapshot", "error", err)
 		return nil, err
 	}
 
 	snap, err = s.SnapshotService.Get(ctx, snapshotID)
 	if err != nil {
-		slog.Error("failed to fetch snapshot", "error", err)
 		return nil, err
 	}
 	return api.UpdateSnapshot200JSONResponse(*snap), nil
 }
 
 func (s Server) GetSnapshotAggregates(ctx context.Context, request api.GetSnapshotAggregatesRequestObject) (api.GetSnapshotAggregatesResponseObject, error) {
+	clog.WithGroupField(ctx, "request", "snapshotId", request.SnapshotID)
 	snap, err := s.SnapshotService.Get(ctx, request.SnapshotID)
 	if err != nil {
 		return nil, err
@@ -741,17 +774,18 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		sortBy = string(*request.Params.SortBy)
 	}
 
-	slog.Info("GetSnapshots called",
-		"userID", userID,
-		"characterID", characterID,
-		"count", count,
-		"page", request.Params.Page,
-		"offset", offset,
-		"minimumGames", minimumGames,
-		"includeStats", includeStats,
-		"sortBy", sortBy,
-		"gameMode", request.Params.GameMode,
-	)
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"userId":       userID,
+		"characterId":  characterID,
+		"count":        count,
+		"offset":       offset,
+		"minimumGames": minimumGames,
+		"includeStats": includeStats,
+		"sortBy":       sortBy,
+	})
+	if request.Params.GameMode != nil {
+		clog.WithGroupField(ctx, "request", "gameMode", string(*request.Params.GameMode))
+	}
 
 	items, stats, counts, err := s.StatsService.GetSnapshotsWithMetrics(
 		ctx,
@@ -765,11 +799,8 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		offset,
 	)
 	if err != nil {
-		slog.Error("failed to fetch snapshots with metrics", "error", err)
 		return nil, fmt.Errorf("failed to fetch snapshots: %w", err)
 	}
-
-	slog.Info("GetSnapshots returning response", "numItems", len(items))
 
 	return api.GetSnapshots200JSONResponse{
 		Items: items,
@@ -783,13 +814,14 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 	membershipID := request.Params.XMembershipID
 	characterID := request.Body.CharacterID
 
-	l := slog.With("userID", userID,
-		"membershipID", membershipID,
-		"characterID", characterID)
+	clog.WithGroupFields(ctx, "actor", clog.Fields{
+		"userId":       userID,
+		"membershipId": membershipID,
+	})
+	clog.WithGroupField(ctx, "request", "characterId", characterID)
 
 	data, err := s.SnapshotService.Save(ctx, userID, membershipID, characterID)
 	if err != nil {
-		l.Error("couldn't save the users snapshot data", "error", err)
 		return nil, fmt.Errorf("failed to save snapshot: %w", err)
 	}
 	return api.CreateSnapshot201JSONResponse(*data), nil
@@ -797,6 +829,11 @@ func (s Server) CreateSnapshot(ctx context.Context, request api.CreateSnapshotRe
 
 func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequestObject) (api.GetActivitiesResponseObject, error) {
 	params := request.Params
+
+	clog.WithGroupFields(ctx, "actor", clog.Fields{
+		"userId":       params.XUserID,
+		"membershipId": params.XMembershipID,
+	})
 
 	membershipType, err := s.UserService.GetMembershipType(ctx, params.XUserID, params.XMembershipID)
 	if err != nil {
@@ -808,37 +845,39 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 		mode = *request.Params.Mode
 	}
 
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"characterId": params.CharacterID,
+		"mode":        string(mode),
+		"count":       params.Count,
+		"page":        params.Page,
+	})
+
 	history := make([]api.ActivityHistory, 0)
 	switch mode {
 	case api.AllPvP:
 		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	case api.Competitive:
 		history, err = s.D2Service.GetCompetitiveActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 
 	case api.Quickplay:
 		history, err = s.D2Service.GetQuickPlayActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	case api.IronBanner:
 		history, err = s.D2Service.GetIronBannerActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	default:
 		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
 		if err != nil {
-			slog.With("error", err.Error()).Error("Failed to fetch activity data")
 			return nil, err
 		}
 	}
@@ -872,27 +911,19 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
 	activityID := request.ActivityID
 
-	l := slog.With("activityID", activityID)
-	l.Debug("Fetching activity data")
+	clog.WithGroupField(ctx, "request", "activityId", activityID)
 	activityDetails, teams, err := s.D2Service.GetActivity(ctx, activityID)
 	if err != nil {
-		l.Error("Failed to fetch weapon data for activity", "error", err)
 		return api.GetActivity500JSONResponse{Message: "failed to fetch weapon data for activity"}, nil
 	}
 	if activityDetails == nil {
-		l.Error("no activity data")
 		return api.GetActivity500JSONResponse{Message: "no activity data"}, nil
 	}
 
 	// TODO: Come to fix this when no aggregate has been made for an activity
 	agg, err := s.AggregateService.GetAggregate(ctx, activityID)
-	if err != nil {
-		if errors.Is(err, aggregate.NotFound) {
-			l.Debug("No aggregation found for activity")
-		} else {
-			l.Error("unexpected error fetching aggregation", "error", err)
-			return api.GetActivity500JSONResponse{Message: err.Error()}, nil
-		}
+	if err != nil && !errors.Is(err, aggregate.NotFound) {
+		return api.GetActivity500JSONResponse{Message: err.Error()}, nil
 	}
 
 	entries := make([]map[string]any, 0)
@@ -921,7 +952,6 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	snapshots := make(map[string]api.CharacterSnapshot)
 	snaps, err := s.SnapshotService.GetByIDs(ctx, snapshotIDS)
 	if err != nil {
-		l.Error("failed to fetch snapshots", "error", err)
 		return api.GetActivity500JSONResponse{Message: err.Error()}, nil
 	}
 	for _, snap := range snaps {
@@ -932,7 +962,6 @@ func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestO
 	for characterID, snap := range snapshots {
 		u, err := s.UserService.GetUser(ctx, snap.UserID)
 		if err != nil {
-			l.Error("failed to fetch user by character id", "characterId", characterID, "error", err)
 			continue
 		}
 		if u == nil {
@@ -977,14 +1006,15 @@ func (s Server) BackfillAllUsersCharacterIds(ctx context.Context, request api.Ba
 	}
 	var updated int32
 	var failed int32
-	for _, u := range users {
-		if err := s.UserService.BackfillCharacters(ctx, u.ID); err != nil {
-			slog.With("userId", u.ID, "error", err.Error()).Warn("failed to backfill character ids")
+	_ = clog.LoopRollup(ctx, "userService.backfillCharacters", users, func(iterCtx context.Context, _ int, u user.User) error {
+		clog.WithGroupField(iterCtx, "user", "userId", u.ID)
+		if err := s.UserService.BackfillCharacters(iterCtx, u.ID); err != nil {
 			failed++
-			continue
+			return err
 		}
 		updated++
-	}
+		return nil
+	})
 	return api.BackfillAllUsersCharacterIds200JSONResponse{
 		Updated: updated,
 		Failed:  failed,

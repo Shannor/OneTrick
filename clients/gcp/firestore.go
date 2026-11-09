@@ -16,16 +16,16 @@ func CreateFirestore(ctx context.Context) *firestore.Client {
 
 	emulatorHost := os.Getenv("FIRESTORE_EMULATOR_HOST")
 	if emulatorHost != "" {
-		slog.Info("Connecting to Firestore emulator", "host", emulatorHost, "projectID", projectID)
+		slog.Info("Connecting to Firestore emulator", "host", emulatorHost, "projectId", projectID)
 	} else {
-		slog.Info("Connecting to Google Cloud Firestore", "projectID", projectID)
+		slog.Info("Connecting to Google Cloud Firestore", "projectId", projectID)
 	}
 
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {
-		slog.Error("Failed to create Firestore client", "projectID", projectID, "error", err)
+		slog.Error("Failed to create Firestore client", "projectId", projectID, "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Successfully initialized Firestore client", "projectID", projectID)
+	slog.Info("Successfully initialized Firestore client", "projectId", projectID)
 	return client
 }

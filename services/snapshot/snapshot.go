@@ -3,7 +3,6 @@ package snapshot
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/generator"
 	"oneTrick/ptr"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -87,11 +87,20 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 		snapshot.Hash = hash
 	}
 
+	clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+		"userId": userID,
+		"hash":   snapshot.Hash,
+	})
+
 	existingSnapshot, err := optionalGetByHash(s.DB, ctx, snapshot.Hash)
 	if err != nil {
 		return nil, err
 	}
 	if existingSnapshot != nil {
+		clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+			"snapshotId": existingSnapshot.ID,
+			"isExisting": true,
+		})
 		return s.createHistoryEntry(ctx, *existingSnapshot)
 	}
 
@@ -108,6 +117,10 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+		"snapshotId": snapshot.ID,
+		"isExisting": false,
+	})
 	return s.createHistoryEntry(ctx, snapshot)
 }
 
@@ -126,6 +139,10 @@ func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapsh
 	}
 	ref := s.DB.Collection(collection).Doc(og.ID).Collection(historyCollection).NewDoc()
 	history.ID = ref.ID
+	clog.WithGroupFields(ctx, "snapshotService.createHistoryEntry", clog.Fields{
+		"snapshotId": og.ID,
+		"historyId":  history.ID,
+	})
 	_, err := ref.Set(ctx, history)
 	if err != nil {
 		return nil, err
@@ -141,6 +158,12 @@ func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapsh
 }
 
 func (s *service) GetAllByCharacter(ctx context.Context, userID string, characterID string, count int, offset int) ([]api.CharacterSnapshot, error) {
+	clog.WithGroupFields(ctx, "snapshotService.getAllByCharacter", clog.Fields{
+		"userId":      userID,
+		"characterId": characterID,
+		"count":       count,
+		"offset":      offset,
+	})
 	query := s.DB.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID)
@@ -163,6 +186,7 @@ func (s *service) GetAllByCharacter(ctx context.Context, userID string, characte
 	// Apply offset
 	if offset > 0 {
 		if offset >= len(snapshots) {
+			clog.WithGroupField(ctx, "snapshotService.getAllByCharacter", "returnedCount", 0)
 			return []api.CharacterSnapshot{}, nil
 		}
 		snapshots = snapshots[offset:]
@@ -173,10 +197,12 @@ func (s *service) GetAllByCharacter(ctx context.Context, userID string, characte
 		snapshots = snapshots[:count]
 	}
 
+	clog.WithGroupField(ctx, "snapshotService.getAllByCharacter", "returnedCount", len(snapshots))
 	return snapshots, nil
 }
 
 func optionalGetByHash(db *firestore.Client, ctx context.Context, hash string) (*api.CharacterSnapshot, error) {
+	clog.WithGroupField(ctx, "snapshotService.getByHash", "hash", hash)
 	og := api.CharacterSnapshot{}
 	docs, err := db.Collection(collection).
 		Where("hash", "==", hash).
@@ -186,13 +212,22 @@ func optionalGetByHash(db *firestore.Client, ctx context.Context, hash string) (
 		return nil, err
 	}
 	if len(docs) == 0 {
+		clog.WithGroupField(ctx, "snapshotService.getByHash", "found", false)
 		return nil, nil
 	}
 	err = docs[0].DataTo(&og)
+	if err != nil {
+		return nil, err
+	}
+	clog.WithGroupFields(ctx, "snapshotService.getByHash", clog.Fields{
+		"found":      true,
+		"snapshotId": og.ID,
+	})
 	return &og, nil
 }
 
 func (s *service) Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error) {
+	clog.WithGroupField(ctx, "snapshotService.get", "snapshotId", snapshotID)
 	var result *api.CharacterSnapshot
 	data, err := s.DB.Collection(collection).Doc(snapshotID).Get(ctx)
 	if err != nil {
@@ -214,10 +249,12 @@ func (s *service) GetAll(ctx context.Context) ([]api.CharacterSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "snapshotService.getAll", "returnedCount", len(results))
 	return results, nil
 }
 
 func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error) {
+	clog.WithGroupField(ctx, "snapshotService.getByIds", "requestedCount", len(snapshotIDs))
 	data, err := s.DB.Collection(collection).Where("id", "in", snapshotIDs).Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -226,10 +263,12 @@ func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.Cha
 	if err != nil {
 		return nil, err
 	}
+	clog.WithGroupField(ctx, "snapshotService.getByIds", "returnedCount", len(results))
 	return results, nil
 }
 
 func (s *service) Update(ctx context.Context, snapshotID string, updateFn func(data map[string]any) error) error {
+	clog.WithGroupField(ctx, "snapshotService.update", "snapshotId", snapshotID)
 	docRef := s.DB.Collection(collection).Doc(snapshotID)
 	doc, err := docRef.Get(ctx)
 	if err != nil {
@@ -262,17 +301,7 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 		PlayerStats: performance.PlayerStats,
 		Weapons:     performance.Weapons,
 	}
-	if snapshot == nil {
-		slog.Debug("No provided snapshot to perform enrichment on")
-		return result, nil
-	}
-
-	if len(performance.Weapons) == 0 {
-		slog.Debug("No metrics provided to enrich")
-		return result, nil
-	}
-	if snapshot.Loadout == nil {
-		slog.Debug("No loadout provided to enrich")
+	if snapshot == nil || len(performance.Weapons) == 0 || snapshot.Loadout == nil {
 		return result, nil
 	}
 
@@ -301,6 +330,11 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 }
 
 func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error) {
+	clog.WithGroupFields(ctx, "snapshotService.generateSnapshot", clog.Fields{
+		"userId":       userID,
+		"membershipId": membershipID,
+		"characterId":  characterID,
+	})
 
 	membershipType, err := s.UserService.GetMembershipType(ctx, userID, membershipID)
 	if err != nil {
@@ -320,6 +354,7 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("failed to fetch timestamp for profile data: %w", err)
 	}
 
+	clog.WithGroupField(ctx, "snapshotService.generateSnapshot", "loadoutCount", len(loadout))
 	return &api.CharacterSnapshot{
 		UserID:      userID,
 		CharacterID: characterID,
@@ -329,6 +364,11 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 }
 
 func (s *service) Save(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error) {
+	clog.WithGroupFields(ctx, "snapshotService.save", clog.Fields{
+		"userId":       userID,
+		"membershipId": membershipID,
+		"characterId":  characterID,
+	})
 	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build data: %w", err)
@@ -336,14 +376,21 @@ func (s *service) Save(ctx context.Context, userID, membershipID, characterID st
 	if data == nil {
 		return nil, fmt.Errorf("failed to generate snapshot")
 	}
-	_, err = s.create(ctx, userID, *data)
+	id, err := s.create(ctx, userID, *data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot: %w", err)
+	}
+	if id != nil {
+		clog.WithGroupField(ctx, "snapshotService.save", "snapshotId", *id)
 	}
 	return data, nil
 }
 
 func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID string) (api.CharacterSnapshot, error) {
+	clog.WithGroupFields(ctx, "snapshotService.merge", clog.Fields{
+		"targetSnapshotId": targetSnapshotID,
+		"sourceSnapshotId": sourceSnapshotID,
+	})
 	resultSnapshot, err := s.Get(ctx, targetSnapshotID)
 	if err != nil {
 		return api.CharacterSnapshot{}, err
@@ -370,8 +417,12 @@ func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID 
 	if err != nil {
 		return api.CharacterSnapshot{}, err
 	}
+	clog.WithGroupFields(ctx, "snapshotService.merge", clog.Fields{
+		"targetSnapshotId":  targetSnapshotID,
+		"sourceSnapshotId":  sourceSnapshotID,
+		"updatedAggregates": len(aggs),
+	})
 	for _, agg := range aggs {
-		slog.Info("Agg ID", "aggID", agg.ID)
 		err := s.aggregateService.Update(ctx, agg.ID, func(data map[string]any) error {
 			// Atomically "replace" an element in an array by modifying the slice directly
 			// within the update transaction.
@@ -403,60 +454,65 @@ func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID 
 }
 
 func (s *service) Delete(ctx context.Context, snapshotID string, userID string) error {
-	slog.Info("Initiating snapshot deletion", "snapshotID", snapshotID, "userID", userID)
+	clog.WithGroupFields(ctx, "snapshotService.delete", clog.Fields{
+		"snapshotId": snapshotID,
+		"userId":     userID,
+	})
 	docRef := s.DB.Collection(collection).Doc(snapshotID)
 	doc, err := docRef.Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			slog.Warn("Snapshot not found for deletion", "snapshotID", snapshotID, "userID", userID)
+			clog.WithGroupField(ctx, "snapshotService.delete", "warning", "snapshot not found for deletion")
 			return NotFound
 		}
-		slog.Error("Failed to fetch snapshot document for deletion", "snapshotID", snapshotID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to get snapshot: %w", err)
 	}
 
 	var snap api.CharacterSnapshot
 	if err := doc.DataTo(&snap); err != nil {
-		slog.Error("Failed to parse snapshot data for deletion", "snapshotID", snapshotID, "error", err)
 		return fmt.Errorf("failed to parse snapshot: %w", err)
 	}
 
 	if snap.UserID != userID {
-		slog.Warn("Unauthorized attempt to delete snapshot", "snapshotID", snapshotID, "requestUserID", userID, "snapshotUserID", snap.UserID)
+		clog.WithGroupFields(ctx, "snapshotService.delete", clog.Fields{
+			"snapshotUserId": snap.UserID,
+			"warning":        "unauthorized attempt to delete snapshot",
+		})
 		return Unauthorized
 	}
 
 	// Delete subcollection history documents
 	historyDocs, err := docRef.Collection(historyCollection).Documents(ctx).GetAll()
 	if err != nil {
-		slog.Warn("Failed to fetch snapshot history subcollection for deletion", "snapshotID", snapshotID, "error", err)
+		clog.WithGroupField(ctx, "snapshotService.delete", "warning", "failed to fetch snapshot history subcollection")
 	} else {
-		slog.Info("Deleting subcollection history entries for snapshot", "snapshotID", snapshotID, "count", len(historyDocs))
 		deletedHistoryCount := 0
+		failedHistoryCount := 0
 		for _, hDoc := range historyDocs {
 			if _, err := hDoc.Ref.Delete(ctx); err != nil {
-				slog.Error("Failed to delete history document", "historyID", hDoc.Ref.ID, "snapshotID", snapshotID, "error", err)
+				failedHistoryCount++
 			} else {
 				deletedHistoryCount++
 			}
 		}
-		slog.Info("Completed history entries deletion", "snapshotID", snapshotID, "deletedCount", deletedHistoryCount)
+		clog.WithGroupFields(ctx, "snapshotService.delete", clog.Fields{
+			"historyCount":        len(historyDocs),
+			"deletedHistoryCount": deletedHistoryCount,
+			"failedHistoryCount":  failedHistoryCount,
+		})
 	}
 
 	// Remove snapshot references from aggregates
 	if err := s.aggregateService.RemoveSnapshot(ctx, snapshotID); err != nil {
-		slog.Error("Failed to remove snapshot references from aggregates", "snapshotID", snapshotID, "error", err)
 		return fmt.Errorf("failed to clean up snapshot aggregates: %w", err)
 	}
-	slog.Info("Successfully cleaned up aggregate references for snapshot", "snapshotID", snapshotID)
 
 	// Delete snapshot document
 	if _, err := docRef.Delete(ctx); err != nil {
-		slog.Error("Failed to delete snapshot document", "snapshotID", snapshotID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to delete snapshot: %w", err)
 	}
 
-	slog.Info("Successfully deleted snapshot document", "snapshotID", snapshotID, "userID", userID)
+	clog.WithGroupField(ctx, "snapshotService.delete", "deleted", true)
 	return nil
 }
 

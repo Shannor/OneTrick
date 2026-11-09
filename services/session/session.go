@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"oneTrick/api"
 	"oneTrick/generator"
 	"oneTrick/ptr"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -53,6 +53,11 @@ const (
 )
 
 func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField) (*api.Session, error) {
+	clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
+		"userId":      userID,
+		"characterId": characterID,
+		"startedById": startedBy.ID,
+	})
 	if ok, err := s.HasActive(ctx, userID, characterID); ok || err != nil {
 		return nil, fmt.Errorf("session already active")
 	}
@@ -72,10 +77,15 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 		return nil, err
 	}
 
+	clog.WithGroupField(ctx, "sessionService.start", "sessionId", result.ID)
 	return result, nil
 }
 
 func (s service) HasActive(ctx context.Context, userID string, characterID string) (bool, error) {
+	clog.WithGroupFields(ctx, "sessionService.hasActive", clog.Fields{
+		"userId":      userID,
+		"characterId": characterID,
+	})
 	query := s.db.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID).
@@ -86,10 +96,16 @@ func (s service) HasActive(ctx context.Context, userID string, characterID strin
 	if err != nil {
 		return false, err
 	}
-	return len(docs) > 0, nil
+	hasActive := len(docs) > 0
+	clog.WithGroupField(ctx, "sessionService.hasActive", "hasActive", hasActive)
+	return hasActive, nil
 }
 
 func (s service) GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error) {
+	clog.WithGroupFields(ctx, "sessionService.getActive", clog.Fields{
+		"userId":      userID,
+		"characterId": characterID,
+	})
 	query := s.db.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID).
@@ -111,10 +127,12 @@ func (s service) GetActive(ctx context.Context, userID string, characterID strin
 	if result.AggregateIDs == nil {
 		result.AggregateIDs = make([]string, 0)
 	}
+	clog.WithGroupField(ctx, "sessionService.getActive", "sessionId", result.ID)
 	return result, nil
 }
 
 func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
+	clog.WithGroupField(ctx, "sessionService.get", "sessionId", ID)
 	doc, err := s.db.Collection(collection).Doc(ID).Get(ctx)
 	if err != nil {
 		return nil, err
@@ -131,17 +149,25 @@ func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
 }
 
 func (s service) GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error) {
+	fields := clog.Fields{
+		"count":  count,
+		"offset": offset,
+	}
 	query := s.db.Collection(collection).Query
 
 	if userID != nil && *userID != "" {
 		query = query.Where("userId", "==", *userID)
+		fields["userId"] = *userID
 	}
 	if characterID != nil && *characterID != "" {
 		query = query.Where("characterId", "==", *characterID)
+		fields["characterId"] = *characterID
 	}
 	if status != nil && *status != "" {
 		query = query.Where("status", "==", *status)
+		fields["status"] = string(*status)
 	}
+	clog.WithGroupFields(ctx, "sessionService.getAll", fields)
 
 	docs, err := query.Documents(ctx).GetAll()
 	if err != nil {
@@ -167,6 +193,7 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	// Apply offset
 	if offset > 0 {
 		if offset >= len(result) {
+			clog.WithGroupField(ctx, "sessionService.getAll", "returnedCount", 0)
 			return []api.Session{}, nil
 		}
 		result = result[offset:]
@@ -181,6 +208,7 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 		result = result[:limit]
 	}
 
+	clog.WithGroupField(ctx, "sessionService.getAll", "returnedCount", len(result))
 	return result, nil
 }
 
@@ -201,8 +229,9 @@ func (s service) Update(ctx context.Context, sessionID string, name, description
 		})
 
 	}
+	clog.WithGroupField(ctx, "sessionService.update", "sessionId", sessionID)
 	if len(updates) == 0 {
-		slog.With("sessionID", sessionID).Warn("no updates to session")
+		clog.WithGroupField(ctx, "sessionService.update", "warning", "no updates to session")
 		return nil
 	}
 	_, err := ref.Update(ctx, updates)
@@ -213,6 +242,7 @@ func (s service) Update(ctx context.Context, sessionID string, name, description
 	return nil
 }
 func (s service) Complete(ctx context.Context, ID string) error {
+	clog.WithGroupField(ctx, "sessionService.complete", "sessionId", ID)
 	ref := s.db.Collection(collection).Doc(ID)
 
 	data, err := ref.Get(ctx)
@@ -239,13 +269,17 @@ func (s service) Complete(ctx context.Context, ID string) error {
 			return fmt.Errorf("failed to complete session: %w", err)
 		}
 	} else {
-		slog.With("sessionID", ID).Warn("session already completed")
+		clog.WithGroupField(ctx, "sessionService.complete", "warning", "session already completed")
 	}
 
 	return nil
 }
 
 func (s service) SetLastActivity(ctx context.Context, ID, activityID string) error {
+	clog.WithGroupFields(ctx, "sessionService.setLastActivity", clog.Fields{
+		"sessionId":  ID,
+		"activityId": activityID,
+	})
 	_, err := s.db.Collection(collection).Doc(ID).Update(ctx, []firestore.Update{
 		{
 			Path:  "lastSeenActivityId",
@@ -263,47 +297,52 @@ func (s service) SetLastActivity(ctx context.Context, ID, activityID string) err
 }
 
 func (s service) Delete(ctx context.Context, sessionID string, userID string) error {
-	slog.Info("Initiating session deletion", "sessionID", sessionID, "userID", userID)
+	clog.WithGroupFields(ctx, "sessionService.delete", clog.Fields{
+		"sessionId": sessionID,
+		"userId":    userID,
+	})
 	docRef := s.db.Collection(collection).Doc(sessionID)
 	doc, err := docRef.Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			slog.Warn("Session not found for deletion", "sessionID", sessionID, "userID", userID)
+			clog.WithGroupField(ctx, "sessionService.delete", "warning", "session not found for deletion")
 			return ErrNotFound
 		}
-		slog.Error("Failed to fetch session document for deletion", "sessionID", sessionID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 
 	var ses api.Session
 	if err := doc.DataTo(&ses); err != nil {
-		slog.Error("Failed to parse session data for deletion", "sessionID", sessionID, "error", err)
 		return fmt.Errorf("failed to parse session: %w", err)
 	}
 
 	if ses.UserID != userID {
-		slog.Warn("Unauthorized attempt to delete session", "sessionID", sessionID, "requestUserID", userID, "sessionUserID", ses.UserID)
+		clog.WithGroupFields(ctx, "sessionService.delete", clog.Fields{
+			"sessionUserId": ses.UserID,
+			"warning":       "unauthorized attempt to delete session",
+		})
 		return ErrUnauthorized
 	}
 
 	// Remove session references from aggregates
 	if err := s.aggregateService.RemoveSession(ctx, sessionID); err != nil {
-		slog.Error("Failed to remove session references from aggregates", "sessionID", sessionID, "error", err)
 		return fmt.Errorf("failed to clean up session aggregates: %w", err)
 	}
-	slog.Info("Successfully cleaned up aggregate references for session", "sessionID", sessionID)
 
 	// Delete session document
 	if _, err := docRef.Delete(ctx); err != nil {
-		slog.Error("Failed to delete session document", "sessionID", sessionID, "userID", userID, "error", err)
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
-	slog.Info("Successfully deleted session document", "sessionID", sessionID, "userID", userID)
+	clog.WithGroupField(ctx, "sessionService.delete", "deleted", true)
 	return nil
 }
 
 func (s service) AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error {
+	clog.WithGroupFields(ctx, "sessionService.addAggregateIds", clog.Fields{
+		"sessionId":      sessionID,
+		"aggregateCount": len(aggregateIDs),
+	})
 	ids := make([]any, 0)
 	for _, d := range aggregateIDs {
 		ids = append(ids, d)

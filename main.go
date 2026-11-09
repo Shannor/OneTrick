@@ -18,6 +18,7 @@ import (
 	"oneTrick/validator"
 	"os"
 
+	clog "github.com/Shannor/canonical-logger"
 	"github.com/algolia/algoliasearch-client-go/v4/algolia/search"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-contrib/cors"
@@ -31,9 +32,11 @@ func main() {
 	_ = godotenv.Load()
 	env := envvars.GetEvn()
 	if envvars.IsDev(env) {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		slog.SetDefault(slog.New(clog.NewTreeHandler(os.Stdout, &clog.ConsoleHandlerOptions{
+			Level: clog.LevelDebug,
+		})))
 	} else {
-		slog.SetDefault(slog.New(logger.NewGCPHandler(slog.LevelInfo)))
+		slog.SetDefault(slog.New(logger.NewGCPHandler(clog.LevelInfo)))
 	}
 
 	slog.Info("Starting Up", "env", string(env.Environment))
@@ -79,14 +82,15 @@ func main() {
 
 	defer firestore.Close()
 
-	r := gin.New()
-	r.Use(logger.SlogLogger())
-	r.Use(logger.SlogRecovery())
-	r.Use(cors.Default())
-
 	if envvars.IsProd(env) {
 		gin.SetMode(gin.ReleaseMode)
 	}
+
+	r := gin.New()
+	r.ContextWithFallback = true
+	r.Use(logger.CanonicalLogger())
+	r.Use(logger.SlogRecovery())
+	r.Use(cors.Default())
 
 	r.GET("/openapi", func(c *gin.Context) {
 		c.Header("Content-Type", "application/json")
@@ -103,13 +107,18 @@ func main() {
 	// that server names match. We don't know how this thing will be run.
 	swagger.Servers = nil
 	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+		ErrorHandler: logger.GinValidationErrorHandler,
 		Options: openapi3filter.Options{
 			AuthenticationFunc: validator.Authenticate,
 		},
 	}))
 
-	h := api.NewStrictHandler(server, nil)
-	api.RegisterHandlers(r, h)
+	h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+		logger.GinStrictMiddleware[api.StrictHandlerFunc],
+	})
+	api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+		ErrorHandler: logger.GinParamErrorHandler,
+	})
 	s := &http.Server{
 		Handler: r,
 		Addr:    "0.0.0.0:8080",
