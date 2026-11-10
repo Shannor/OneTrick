@@ -143,19 +143,35 @@ func (s *service) GetAggregate(ctx context.Context, activityID string) (*api.Agg
 
 func (s *service) GetAggregatesByActivity(ctx context.Context, activityIDs []string) ([]api.Aggregate, error) {
 	clog.WithGroupField(ctx, "aggregateService.getAggregatesByActivity", "requestedCount", len(activityIDs))
-	docs, err := s.DB.
-		Collection(collection).
-		Where("activityId", "in", activityIDs).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
+	if len(activityIDs) == 0 {
+		clog.WithGroupField(ctx, "aggregateService.getAggregatesByActivity", "returnedCount", 0)
+		return []api.Aggregate{}, nil
 	}
-	results, err := utils.GetAllToStructs[api.Aggregate](docs)
-	if err != nil {
-		return nil, err
+
+	var allResults []api.Aggregate
+	const batchSize = 30
+	for i := 0; i < len(activityIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(activityIDs) {
+			end = len(activityIDs)
+		}
+		batch := activityIDs[i:end]
+
+		docs, err := s.DB.
+			Collection(collection).
+			Where("activityId", "in", batch).
+			Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		results, err := utils.GetAllToStructs[api.Aggregate](docs)
+		if err != nil {
+			return nil, err
+		}
+		allResults = append(allResults, results...)
 	}
-	clog.WithGroupField(ctx, "aggregateService.getAggregatesByActivity", "returnedCount", len(results))
-	return results, nil
+	clog.WithGroupField(ctx, "aggregateService.getAggregatesByActivity", "returnedCount", len(allResults))
+	return allResults, nil
 }
 
 func (s *service) GetAggregates(ctx context.Context, IDs []string) ([]api.Aggregate, error) {

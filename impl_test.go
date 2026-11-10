@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
+	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
+	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
 	"oneTrick/services/user"
 	"testing"
@@ -340,5 +343,89 @@ func TestGetSnapshotsZeroIndexedPageOffset(t *testing.T) {
 				t.Errorf("expected offset %d, got %d", tt.expectedOffset, statsMock.capturedOffset)
 			}
 		})
+	}
+}
+
+type mockSessionGetService struct {
+	session.Service
+	ses *api.Session
+}
+
+func (m *mockSessionGetService) Get(ctx context.Context, id string) (*api.Session, error) {
+	return m.ses, nil
+}
+
+type mockAggregateGetService struct {
+	aggregate.Service
+	aggs []api.Aggregate
+}
+
+func (m *mockAggregateGetService) GetAggregates(ctx context.Context, ids []string) ([]api.Aggregate, error) {
+	return m.aggs, nil
+}
+
+type mockSnapshotGetByIDsService struct {
+	snapshot.Service
+	capturedIDs []string
+}
+
+func (m *mockSnapshotGetByIDsService) GetByIDs(ctx context.Context, ids []string) ([]api.CharacterSnapshot, error) {
+	m.capturedIDs = ids
+	res := make([]api.CharacterSnapshot, 0, len(ids))
+	for _, id := range ids {
+		res = append(res, api.CharacterSnapshot{ID: id})
+	}
+	return res, nil
+}
+
+func TestGetSessionAggregatesDeduplicatesSnapshotIDs(t *testing.T) {
+	const charID = "char-1"
+	aggIDs := make([]string, 35)
+	aggs := make([]api.Aggregate, 35)
+	for i := 0; i < 35; i++ {
+		aggIDs[i] = fmt.Sprintf("agg-%d", i)
+		snapID := "snap-a"
+		if i%2 == 1 {
+			snapID = "snap-b"
+		}
+		aggs[i] = api.Aggregate{
+			ID: aggIDs[i],
+			SnapshotLinks: map[string]api.SnapshotLink{
+				charID: {
+					CharacterID: charID,
+					SnapshotID:  ptr.Of(snapID),
+				},
+			},
+		}
+	}
+
+	snapMock := &mockSnapshotGetByIDsService{}
+	server := Server{
+		SessionService: &mockSessionGetService{
+			ses: &api.Session{
+				ID:           "ses-1",
+				CharacterID:  charID,
+				AggregateIDs: aggIDs,
+			},
+		},
+		AggregateService: &mockAggregateGetService{aggs: aggs},
+		SnapshotService:  snapMock,
+	}
+
+	resp, err := server.GetSessionAggregates(context.Background(), api.GetSessionAggregatesRequestObject{
+		SessionId: "ses-1",
+	})
+	if err != nil {
+		t.Fatalf("expected GetSessionAggregates to succeed, got: %v", err)
+	}
+	jsonResp, ok := resp.(api.GetSessionAggregates200JSONResponse)
+	if !ok {
+		t.Fatalf("expected GetSessionAggregates200JSONResponse, got: %T", resp)
+	}
+	if len(snapMock.capturedIDs) != 2 {
+		t.Fatalf("expected 2 deduplicated snapshot IDs passed to GetByIDs, got %d (%v)", len(snapMock.capturedIDs), snapMock.capturedIDs)
+	}
+	if len(jsonResp.Snapshots) != 2 {
+		t.Fatalf("expected 2 snapshots in response map, got %d", len(jsonResp.Snapshots))
 	}
 }

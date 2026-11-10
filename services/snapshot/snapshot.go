@@ -255,16 +255,45 @@ func (s *service) GetAll(ctx context.Context) ([]api.CharacterSnapshot, error) {
 
 func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error) {
 	clog.WithGroupField(ctx, "snapshotService.getByIds", "requestedCount", len(snapshotIDs))
-	data, err := s.DB.Collection(collection).Where("id", "in", snapshotIDs).Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
+	uniqueIDs := make([]string, 0, len(snapshotIDs))
+	seen := make(map[string]struct{}, len(snapshotIDs))
+	for _, id := range snapshotIDs {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
 	}
-	results, err := utils.GetAllToStructs[api.CharacterSnapshot](data)
-	if err != nil {
-		return nil, err
+	clog.WithGroupField(ctx, "snapshotService.getByIds", "uniqueCount", len(uniqueIDs))
+	if len(uniqueIDs) == 0 {
+		clog.WithGroupField(ctx, "snapshotService.getByIds", "returnedCount", 0)
+		return []api.CharacterSnapshot{}, nil
 	}
-	clog.WithGroupField(ctx, "snapshotService.getByIds", "returnedCount", len(results))
-	return results, nil
+
+	var allResults []api.CharacterSnapshot
+	const batchSize = 30
+	for i := 0; i < len(uniqueIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(uniqueIDs) {
+			end = len(uniqueIDs)
+		}
+		batch := uniqueIDs[i:end]
+
+		data, err := s.DB.Collection(collection).Where("id", "in", batch).Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		results, err := utils.GetAllToStructs[api.CharacterSnapshot](data)
+		if err != nil {
+			return nil, err
+		}
+		allResults = append(allResults, results...)
+	}
+	clog.WithGroupField(ctx, "snapshotService.getByIds", "returnedCount", len(allResults))
+	return allResults, nil
 }
 
 func (s *service) Update(ctx context.Context, snapshotID string, updateFn func(data map[string]any) error) error {

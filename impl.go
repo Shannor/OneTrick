@@ -469,14 +469,19 @@ func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSession
 		return nil, err
 	}
 	uniqueIDS := make([]string, 0)
+	seenSnapshotIDs := make(map[string]struct{})
 	for _, a := range aggregates {
 		link, ok := a.SnapshotLinks[ses.CharacterID]
 		if !ok {
 			continue
 		}
-		if link.SnapshotID == nil {
+		if link.SnapshotID == nil || *link.SnapshotID == "" {
 			continue
 		}
+		if _, exists := seenSnapshotIDs[*link.SnapshotID]; exists {
+			continue
+		}
+		seenSnapshotIDs[*link.SnapshotID] = struct{}{}
 		uniqueIDS = append(uniqueIDS, *link.SnapshotID)
 	}
 	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
