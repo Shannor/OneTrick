@@ -1,0 +1,76 @@
+get:
+  operationId: GetSimilarSnapshots
+  description: Returns active mergeable similar snapshots for a target snapshot with tier and diff metadata
+  parameters:
+    - name: snapshotId
+      in: path
+      x-go-name: snapshotID
+      required: true
+      schema:
+        type: string
+      description: The unique identifier for the target snapshot.
+    - name: gameMode
+      in: query
+      required: false
+      schema:
+        $ref: ../components/schemas/GameMode.yaml
+      description: Optional game mode filter for stats context
+    - name: includeStats
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: true
+      description: Whether to include match stats and counts for the target and similar snapshots
+    - name: tier
+      in: query
+      required: false
+      schema:
+        type: string
+        enum:
+          - all
+          - high
+        x-enum-varnames:
+          - SimilarTierFilterAll
+          - SimilarTierFilterHigh
+        default: all
+      description: Filter similar candidates to all mergeable snapshots or only high-similarity snapshots
+  responses:
+    "200":
+      description: Target snapshot and list of mergeable similar snapshots with stats and counts
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - target
+              - items
+            properties:
+              target:
+                $ref: ../components/schemas/CharacterSnapshot.yaml
+              items:
+                type: array
+                items:
+                  $ref: ../components/schemas/SimilarSnapshotItem.yaml
+              stats:
+                type: object
+                description: Map of snapshot ID to all-mode PlayerStats
+                additionalProperties:
+                  $ref: ../components/schemas/PlayerStats.yaml
+              count:
+                type: object
+                description: Map of snapshot ID to all-mode total matches played
+                additionalProperties:
+                  type: integer
+    "404":
+      description: Target snapshot not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "500":
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

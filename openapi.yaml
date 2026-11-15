@@ -406,6 +406,13 @@ paths:
               - SortByKDRatio
               - SortByMatchesPlayed
             default: created_at
+        - name: hasSimilar
+          in: query
+          required: false
+          description: When true, filters returned snapshots to those with at least one active mergeable similar snapshot
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: Returns loadouts response with optional metrics map and match counts
@@ -428,6 +435,11 @@ paths:
                   count:
                     type: object
                     description: Map of snapshot ID to total matches played
+                    additionalProperties:
+                      type: integer
+                  similarCounts:
+                    type: object
+                    description: Map of snapshot ID to count of active similar loadouts on this character
                     additionalProperties:
                       type: integer
   /snapshots/{snapshotId}:
@@ -550,7 +562,7 @@ paths:
   /snapshots/{snapshotId}/merge:
     post:
       operationId: MergeSnapshots
-      description: Merge two snapshots into a single snapshot
+      description: Merge one or more compatible source snapshots into a target snapshot
       parameters:
         - $ref: '#/components/parameters/X-User-ID'
         - name: snapshotId
@@ -559,36 +571,132 @@ paths:
           required: true
           schema:
             type: string
-          description: The unique identifier for the snapshot.
+          description: The unique identifier for the target snapshot to merge into.
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              required:
-                - sourceSnapshotId
               type: object
               properties:
                 sourceSnapshotId:
                   type: string
                   x-go-name: sourceSnapshotID
+                  description: Single source snapshot ID to merge into snapshotId (backwards-compatible)
+                sourceSnapshotIds:
+                  type: array
+                  x-go-name: sourceSnapshotIDs
+                  description: One or more source snapshot IDs to batch-merge into snapshotId
+                  items:
+                    type: string
       responses:
         '200':
-          description: Merged snapshot
+          description: Snapshots merged successfully
           content:
             application/json:
               schema:
                 type: boolean
+        '400':
+          description: Invalid or incompatible snapshots for merge
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '401':
+          description: Unauthorized user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
         '500':
           description: Error merging snapshots
           content:
             application/json:
               schema:
+                $ref: '#/components/schemas/OneTrickError'
+  /snapshots/{snapshotId}/similar:
+    get:
+      operationId: GetSimilarSnapshots
+      description: Returns active mergeable similar snapshots for a target snapshot with tier and diff metadata
+      parameters:
+        - name: snapshotId
+          in: path
+          x-go-name: snapshotID
+          required: true
+          schema:
+            type: string
+          description: The unique identifier for the target snapshot.
+        - name: gameMode
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GameMode'
+          description: Optional game mode filter for stats context
+        - name: includeStats
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+          description: Whether to include match stats and counts for the target and similar snapshots
+        - name: tier
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - all
+              - high
+            x-enum-varnames:
+              - SimilarTierFilterAll
+              - SimilarTierFilterHigh
+            default: all
+          description: Filter similar candidates to all mergeable snapshots or only high-similarity snapshots
+      responses:
+        '200':
+          description: Target snapshot and list of mergeable similar snapshots with stats and counts
+          content:
+            application/json:
+              schema:
                 type: object
                 required:
-                  - message
+                  - target
+                  - items
                 properties:
-                  message:
-                    type: string
+                  target:
+                    $ref: '#/components/schemas/CharacterSnapshot'
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SimilarSnapshotItem'
+                  stats:
+                    type: object
+                    description: Map of snapshot ID to all-mode PlayerStats
+                    additionalProperties:
+                      $ref: '#/components/schemas/PlayerStats'
+                  count:
+                    type: object
+                    description: Map of snapshot ID to all-mode total matches played
+                    additionalProperties:
+                      type: integer
+        '404':
+          description: Target snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /snapshots/{snapshotId}/aggregates:
     get:
       operationId: GetSnapshotAggregates
@@ -1880,6 +1988,27 @@ components:
             firestore: updatedAt
         loadout:
           $ref: '#/components/schemas/Loadout'
+        mergedIntoId:
+          type: string
+          x-go-name: MergedIntoID
+          description: If this snapshot was soft-merged into another snapshot, stores the target snapshot ID. Excluded from active loadout lists by default.
+          x-oapi-codegen-extra-tags:
+            firestore: mergedIntoId,omitempty
+        mergedAt:
+          type: string
+          format: date-time
+          x-go-name: MergedAt
+          description: Timestamp for when this snapshot was merged into mergedIntoId
+          x-oapi-codegen-extra-tags:
+            firestore: mergedAt,omitempty
+        mergedFromIds:
+          type: array
+          x-go-name: MergedFromIDs
+          description: List of source snapshot IDs that have been merged into this snapshot
+          items:
+            type: string
+          x-oapi-codegen-extra-tags:
+            firestore: mergedFromIds,omitempty
     StatsValuePair:
       type: object
       x-oapi-codegen-extra-tags:
@@ -1978,6 +2107,39 @@ components:
           description: User friendly description of the error
         status:
           $ref: '#/components/schemas/InternalError'
+    SimilarityTier:
+      type: string
+      description: Similarity tier relative to a target snapshot. 'high' requires matching Kinetic + Energy + Subclass + Exotic Armor; 'base' requires matching Kinetic + Energy + Subclass with differing Exotic Armor.
+      enum:
+        - high
+        - base
+      x-enum-varnames:
+        - SimilarityTierHigh
+        - SimilarityTierBase
+    SimilarSnapshotItem:
+      type: object
+      description: A candidate similar snapshot with diff metadata relative to a target snapshot
+      required:
+        - snapshot
+        - tier
+        - exoticArmorMatch
+        - powerWeaponMatch
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/CharacterSnapshot'
+        tier:
+          $ref: '#/components/schemas/SimilarityTier'
+        exoticArmorMatch:
+          type: boolean
+          description: True when both snapshots have the same Exotic armor equipped (or neither has Exotic armor)
+        powerWeaponMatch:
+          type: boolean
+          description: True when both snapshots have the same Power weapon equipped
+        statDiffs:
+          type: object
+          description: Non-zero class stat differences (candidate value minus target value) keyed by stat name or hash
+          additionalProperties:
+            type: integer
     ActivityHistory:
       type: object
       x-oapi-codegen-extra-tags:

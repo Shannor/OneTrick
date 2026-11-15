@@ -33,6 +33,8 @@ paths:
     $ref: paths/snapshots_{snapshotId}.yaml
   /snapshots/{snapshotId}/merge:
     $ref: paths/snapshots_{snapshotId}_merge.yaml
+  /snapshots/{snapshotId}/similar:
+    $ref: paths/snapshots_{snapshotId}_similar.yaml
   /snapshots/{snapshotId}/aggregates:
     $ref: paths/snapshots_{snapshotId}_aggregates.yaml
   /activities:

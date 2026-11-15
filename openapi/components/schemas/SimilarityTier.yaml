@@ -1,0 +1,11 @@
+type: string
+description: >-
+  Similarity tier relative to a target snapshot. 'high' requires matching
+  Kinetic + Energy + Subclass + Exotic Armor; 'base' requires matching
+  Kinetic + Energy + Subclass with differing Exotic Armor.
+enum:
+  - high
+  - base
+x-enum-varnames:
+  - SimilarityTierHigh
+  - SimilarityTierBase

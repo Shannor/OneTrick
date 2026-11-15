@@ -11,6 +11,7 @@ import (
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
 	"oneTrick/services/user"
+	"slices"
 	"strconv"
 	"time"
 
@@ -138,23 +139,85 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 }
 
 func (s Server) MergeSnapshots(ctx context.Context, request api.MergeSnapshotsRequestObject) (api.MergeSnapshotsResponseObject, error) {
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	clog.WithGroupField(ctx, "request", "snapshotId", request.SnapshotID)
 	if request.Body == nil {
-		return api.MergeSnapshots500JSONResponse{Message: "body cannot be empty"}, nil
+		return api.MergeSnapshots400JSONResponse{Message: "body cannot be empty"}, nil
 	}
-	clog.WithGroupField(ctx, "request", "sourceSnapshotId", request.Body.SourceSnapshotID)
 	if request.SnapshotID == "" {
-		return api.MergeSnapshots500JSONResponse{Message: "snapshotID cannot be empty"}, nil
-	}
-	if request.SnapshotID == request.Body.SourceSnapshotID {
-		return api.MergeSnapshots500JSONResponse{Message: "cannot merge snapshot with itself"}, nil
+		return api.MergeSnapshots400JSONResponse{Message: "snapshotID cannot be empty"}, nil
 	}
 
-	_, err := s.SnapshotService.Merge(ctx, request.SnapshotID, request.Body.SourceSnapshotID)
-	if err != nil {
+	sourceIDs := make([]string, 0)
+	seen := make(map[string]struct{})
+	addSourceID := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		seen[id] = struct{}{}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if request.Body.SourceSnapshotID != nil {
+		addSourceID(*request.Body.SourceSnapshotID)
+	}
+	if request.Body.SourceSnapshotIDs != nil {
+		for _, id := range *request.Body.SourceSnapshotIDs {
+			addSourceID(id)
+		}
+	}
+
+	if len(sourceIDs) == 0 {
+		return api.MergeSnapshots400JSONResponse{Message: "at least one source snapshot ID is required"}, nil
+	}
+	if slices.Contains(sourceIDs, request.SnapshotID) {
+		return api.MergeSnapshots400JSONResponse{Message: "cannot merge snapshot with itself"}, nil
+	}
+	clog.WithGroupField(ctx, "request", "sourceSnapshotIds", sourceIDs)
+
+	if _, err := s.SnapshotService.Merge(ctx, request.Params.XUserID, request.SnapshotID, sourceIDs); err != nil {
+		if errors.Is(err, snapshot.InvalidMerge) {
+			return api.MergeSnapshots400JSONResponse{Message: err.Error()}, nil
+		}
+		if errors.Is(err, snapshot.Unauthorized) {
+			return api.MergeSnapshots401JSONResponse{Message: "unauthorized"}, nil
+		}
+		if errors.Is(err, snapshot.NotFound) {
+			return api.MergeSnapshots404JSONResponse{Message: "snapshot not found"}, nil
+		}
 		return api.MergeSnapshots500JSONResponse{Message: err.Error()}, nil
 	}
 	return api.MergeSnapshots200JSONResponse(true), nil
+}
+
+func (s Server) GetSimilarSnapshots(ctx context.Context, request api.GetSimilarSnapshotsRequestObject) (api.GetSimilarSnapshotsResponseObject, error) {
+	clog.WithGroupField(ctx, "request", "snapshotId", request.SnapshotID)
+	if request.SnapshotID == "" {
+		return api.GetSimilarSnapshots404JSONResponse{Message: "snapshot not found"}, nil
+	}
+
+	target, items, stats, counts, err := s.StatsService.GetSimilarSnapshots(ctx, request.SnapshotID)
+	if err != nil {
+		if errors.Is(err, snapshot.NotFound) {
+			return api.GetSimilarSnapshots404JSONResponse{Message: "snapshot not found"}, nil
+		}
+		return api.GetSimilarSnapshots500JSONResponse{Message: err.Error()}, nil
+	}
+	if target == nil {
+		return api.GetSimilarSnapshots404JSONResponse{Message: "snapshot not found"}, nil
+	}
+	if items == nil {
+		items = []api.SimilarSnapshotItem{}
+	}
+
+	return api.GetSimilarSnapshots200JSONResponse{
+		Target: *target,
+		Items:  items,
+		Stats:  stats,
+		Count:  counts,
+	}, nil
 }
 
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {
@@ -774,6 +837,10 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 	if request.Params.IncludeStats != nil {
 		includeStats = *request.Params.IncludeStats
 	}
+	hasSimilar := false
+	if request.Params.HasSimilar != nil {
+		hasSimilar = *request.Params.HasSimilar
+	}
 	sortBy := "created_at"
 	if request.Params.SortBy != nil {
 		sortBy = string(*request.Params.SortBy)
@@ -786,13 +853,14 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		"offset":       offset,
 		"minimumGames": minimumGames,
 		"includeStats": includeStats,
+		"hasSimilar":   hasSimilar,
 		"sortBy":       sortBy,
 	})
 	if request.Params.GameMode != nil {
 		clog.WithGroupField(ctx, "request", "gameMode", string(*request.Params.GameMode))
 	}
 
-	items, stats, counts, err := s.StatsService.GetSnapshotsWithMetrics(
+	items, stats, counts, similarCounts, err := s.StatsService.GetSnapshotsWithMetrics(
 		ctx,
 		userID,
 		characterID,
@@ -800,6 +868,7 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		minimumGames,
 		sortBy,
 		includeStats,
+		hasSimilar,
 		count,
 		offset,
 	)
@@ -808,9 +877,10 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 	}
 
 	return api.GetSnapshots200JSONResponse{
-		Items: items,
-		Stats: stats,
-		Count: counts,
+		Items:         items,
+		Stats:         stats,
+		Count:         counts,
+		SimilarCounts: similarCounts,
 	}, nil
 }
 

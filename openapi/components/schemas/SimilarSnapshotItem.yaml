@@ -1,0 +1,25 @@
+type: object
+description: A candidate similar snapshot with diff metadata relative to a target snapshot
+required:
+  - snapshot
+  - tier
+  - exoticArmorMatch
+  - powerWeaponMatch
+properties:
+  snapshot:
+    $ref: ./CharacterSnapshot.yaml
+  tier:
+    $ref: ./SimilarityTier.yaml
+  exoticArmorMatch:
+    type: boolean
+    description: True when both snapshots have the same Exotic armor equipped (or neither has Exotic armor)
+  powerWeaponMatch:
+    type: boolean
+    description: True when both snapshots have the same Power weapon equipped
+  statDiffs:
+    type: object
+    description: >-
+      Non-zero class stat differences (candidate value minus target value)
+      keyed by stat name or hash
+    additionalProperties:
+      type: integer

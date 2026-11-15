@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/logger"
 	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
@@ -12,7 +15,13 @@ import (
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
 	"oneTrick/services/user"
+	"oneTrick/validator"
+	"strings"
 	"testing"
+
+	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/gin-gonic/gin"
+	ginmiddleware "github.com/oapi-codegen/gin-middleware"
 )
 
 type mockAuthService struct {
@@ -238,9 +247,16 @@ func TestGetUserSessionsEmptyCharacterID(t *testing.T) {
 
 type mockStatsService struct {
 	stats.Service
-	capturedCount    int
-	capturedOffset   int
-	capturedGameMode *api.GameMode
+	capturedCount      int
+	capturedOffset     int
+	capturedGameMode   *api.GameMode
+	capturedHasSimilar bool
+	similarCountsResp  *map[string]int
+	similarTarget      *api.CharacterSnapshot
+	similarItems       []api.SimilarSnapshotItem
+	similarStats       *map[string]api.PlayerStats
+	similarCountsMap   *map[string]int
+	similarErr         error
 }
 
 func (m *mockStatsService) GetSnapshotsWithMetrics(
@@ -251,13 +267,28 @@ func (m *mockStatsService) GetSnapshotsWithMetrics(
 	minimumGames int,
 	sortBy string,
 	includeStats bool,
+	hasSimilar bool,
 	count int,
 	offset int,
-) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, error) {
+) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error) {
 	m.capturedCount = count
 	m.capturedOffset = offset
 	m.capturedGameMode = gameMode
-	return []api.CharacterSnapshot{}, nil, nil, nil
+	m.capturedHasSimilar = hasSimilar
+	return []api.CharacterSnapshot{}, nil, nil, m.similarCountsResp, nil
+}
+
+func (m *mockStatsService) GetSimilarSnapshots(
+	ctx context.Context,
+	snapshotID string,
+) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error) {
+	if m.similarErr != nil {
+		return nil, nil, nil, nil, m.similarErr
+	}
+	if m.similarTarget != nil {
+		return m.similarTarget, m.similarItems, m.similarStats, m.similarCountsMap, nil
+	}
+	return &api.CharacterSnapshot{ID: snapshotID, Name: "Trials Hawkmoon", Loadout: api.Loadout{}}, []api.SimilarSnapshotItem{}, nil, nil, nil
 }
 
 func (m *mockStatsService) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error) {
@@ -429,3 +460,300 @@ func TestGetSessionAggregatesDeduplicatesSnapshotIDs(t *testing.T) {
 		t.Fatalf("expected 2 snapshots in response map, got %d", len(jsonResp.Snapshots))
 	}
 }
+
+type mockSnapshotMergeAndGetService struct {
+	snapshot.Service
+	snap            *api.CharacterSnapshot
+	getErr          error
+	mergeErr        error
+	capturedUserID  string
+	capturedTarget  string
+	capturedSources []string
+}
+
+func (m *mockSnapshotMergeAndGetService) Get(ctx context.Context, id string) (*api.CharacterSnapshot, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	return m.snap, nil
+}
+
+func (m *mockSnapshotMergeAndGetService) Merge(ctx context.Context, userID string, targetID string, sourceIDs []string) (api.CharacterSnapshot, error) {
+	m.capturedUserID = userID
+	m.capturedTarget = targetID
+	m.capturedSources = sourceIDs
+	if m.mergeErr != nil {
+		return api.CharacterSnapshot{}, m.mergeErr
+	}
+	return api.CharacterSnapshot{ID: targetID}, nil
+}
+
+func TestOpenAPISpecLoadsAndValidates(t *testing.T) {
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("expected embedded swagger spec to load cleanly, got: %v", err)
+	}
+	if err := swagger.Validate(context.Background()); err != nil {
+		t.Fatalf("expected bundled swagger spec to pass kin-openapi validation, got: %v", err)
+	}
+	if swagger.Paths.Find("/snapshots/{snapshotId}/similar") == nil {
+		t.Fatal("expected /snapshots/{snapshotId}/similar path in swagger spec")
+	}
+}
+
+func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
+	t.Run("rejects empty source IDs with 400", func(t *testing.T) {
+		server := Server{SnapshotService: &mockSnapshotMergeAndGetService{}}
+		resp, err := server.MergeSnapshots(context.Background(), api.MergeSnapshotsRequestObject{
+			SnapshotID: "target-1",
+			Params:     api.MergeSnapshotsParams{XUserID: "user-1"},
+			Body:       &api.MergeSnapshotsJSONRequestBody{},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := resp.(api.MergeSnapshots400JSONResponse); !ok {
+			t.Fatalf("expected MergeSnapshots400JSONResponse, got %T", resp)
+		}
+	})
+
+	t.Run("rejects self-merge in batch with 400", func(t *testing.T) {
+		server := Server{SnapshotService: &mockSnapshotMergeAndGetService{}}
+		resp, err := server.MergeSnapshots(context.Background(), api.MergeSnapshotsRequestObject{
+			SnapshotID: "target-1",
+			Params:     api.MergeSnapshotsParams{XUserID: "user-1"},
+			Body: &api.MergeSnapshotsJSONRequestBody{
+				SourceSnapshotIDs: ptr.Of([]string{"src-1", "target-1"}),
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := resp.(api.MergeSnapshots400JSONResponse); !ok {
+			t.Fatalf("expected MergeSnapshots400JSONResponse, got %T", resp)
+		}
+	})
+
+	t.Run("deduplicates single and batch sourceSnapshotIds and forwards X-User-ID", func(t *testing.T) {
+		mockSnap := &mockSnapshotMergeAndGetService{}
+		server := Server{SnapshotService: mockSnap}
+		resp, err := server.MergeSnapshots(context.Background(), api.MergeSnapshotsRequestObject{
+			SnapshotID: "target-1",
+			Params:     api.MergeSnapshotsParams{XUserID: "user-1"},
+			Body: &api.MergeSnapshotsJSONRequestBody{
+				SourceSnapshotID:  ptr.Of("src-1"),
+				SourceSnapshotIDs: ptr.Of([]string{"src-1", "src-2"}),
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := resp.(api.MergeSnapshots200JSONResponse); !ok {
+			t.Fatalf("expected MergeSnapshots200JSONResponse, got %T", resp)
+		}
+		if mockSnap.capturedUserID != "user-1" || mockSnap.capturedTarget != "target-1" {
+			t.Fatalf("unexpected user/target passed to Merge: user=%q target=%q", mockSnap.capturedUserID, mockSnap.capturedTarget)
+		}
+		if len(mockSnap.capturedSources) != 2 || mockSnap.capturedSources[0] != "src-1" || mockSnap.capturedSources[1] != "src-2" {
+			t.Fatalf("expected [src-1 src-2], got %v", mockSnap.capturedSources)
+		}
+	})
+
+	t.Run("maps InvalidMerge->400, Unauthorized->401, NotFound->404", func(t *testing.T) {
+		cases := []struct {
+			err      error
+			checkTyp func(api.MergeSnapshotsResponseObject) bool
+			label    string
+		}{
+			{
+				err:      fmt.Errorf("%w: incompatible subclass", snapshot.InvalidMerge),
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots400JSONResponse); return ok },
+				label:    "400",
+			},
+			{
+				err:      snapshot.Unauthorized,
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots401JSONResponse); return ok },
+				label:    "401",
+			},
+			{
+				err:      snapshot.NotFound,
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots404JSONResponse); return ok },
+				label:    "404",
+			},
+		}
+
+		for _, tc := range cases {
+			server := Server{SnapshotService: &mockSnapshotMergeAndGetService{mergeErr: tc.err}}
+			resp, err := server.MergeSnapshots(context.Background(), api.MergeSnapshotsRequestObject{
+				SnapshotID: "target-1",
+				Params:     api.MergeSnapshotsParams{XUserID: "user-1"},
+				Body:       &api.MergeSnapshotsJSONRequestBody{SourceSnapshotID: ptr.Of("src-1")},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error for %s: %v", tc.label, err)
+			}
+			if !tc.checkTyp(resp) {
+				t.Fatalf("expected %s response for %v, got %T", tc.label, tc.err, resp)
+			}
+		}
+	})
+}
+
+func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
+	t.Run("returns 404 when target not found", func(t *testing.T) {
+		server := Server{StatsService: &mockStatsService{similarErr: snapshot.NotFound}}
+		resp, err := server.GetSimilarSnapshots(context.Background(), api.GetSimilarSnapshotsRequestObject{
+			SnapshotID: "missing",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := resp.(api.GetSimilarSnapshots404JSONResponse); !ok {
+			t.Fatalf("expected GetSimilarSnapshots404JSONResponse, got %T", resp)
+		}
+	})
+
+	t.Run("returns 200 with target, tiered items, stats, and counts", func(t *testing.T) {
+		counts := map[string]int{"target-1": 12, "cand-1": 3}
+		statsMap := map[string]api.PlayerStats{
+			"target-1": {Kd: ptr.Of(api.StatsValuePair{Value: ptr.Of(1.50)})},
+			"cand-1":   {Kd: ptr.Of(api.StatsValuePair{Value: ptr.Of(2.00)})},
+		}
+		diffs := map[string]int{"Recovery": 10}
+		server := Server{
+			StatsService: &mockStatsService{
+				similarTarget: &api.CharacterSnapshot{ID: "target-1", Name: "Trials Hawkmoon", Loadout: api.Loadout{}},
+				similarItems: []api.SimilarSnapshotItem{
+					{
+						Snapshot:         api.CharacterSnapshot{ID: "cand-1", Name: "Offshoot", Loadout: api.Loadout{}},
+						Tier:             api.SimilarityTierHigh,
+						ExoticArmorMatch: true,
+						PowerWeaponMatch: false,
+						StatDiffs:        &diffs,
+					},
+				},
+				similarCountsMap: &counts,
+				similarStats:     &statsMap,
+			},
+		}
+		resp, err := server.GetSimilarSnapshots(context.Background(), api.GetSimilarSnapshotsRequestObject{
+			SnapshotID: "target-1",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		okResp, ok := resp.(api.GetSimilarSnapshots200JSONResponse)
+		if !ok {
+			t.Fatalf("expected GetSimilarSnapshots200JSONResponse, got %T", resp)
+		}
+		if okResp.Target.ID != "target-1" || len(okResp.Items) != 1 || okResp.Items[0].Tier != api.SimilarityTierHigh {
+			t.Fatalf("unexpected response payload: %+v", okResp)
+		}
+		if okResp.Count == nil || (*okResp.Count)["cand-1"] != 3 {
+			t.Fatalf("expected candidate count 3, got %+v", okResp.Count)
+		}
+	})
+
+	t.Run("GetSnapshots forwards hasSimilar and returns similarCounts", func(t *testing.T) {
+		simCounts := map[string]int{"snap-a": 2}
+		statsMock := &mockStatsService{similarCountsResp: &simCounts}
+		server := Server{StatsService: statsMock}
+
+		resp, err := server.GetSnapshots(context.Background(), api.GetSnapshotsRequestObject{
+			Params: api.GetSnapshotsParams{
+				UserID:      "u1",
+				CharacterID: "c1",
+				HasSimilar:  ptr.Of(true),
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !statsMock.capturedHasSimilar {
+			t.Fatal("expected hasSimilar=true to be forwarded to StatsService")
+		}
+		okResp, ok := resp.(api.GetSnapshots200JSONResponse)
+		if !ok {
+			t.Fatalf("expected GetSnapshots200JSONResponse, got %T", resp)
+		}
+		if okResp.SimilarCounts == nil || (*okResp.SimilarCounts)["snap-a"] != 2 {
+			t.Fatalf("expected similarCounts[snap-a]=2, got %+v", okResp.SimilarCounts)
+		}
+	})
+}
+
+func TestHTTPRouterOpenAPIMiddlewareEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	snapMock := &mockSnapshotMergeAndGetService{
+		snap: &api.CharacterSnapshot{ID: "target-1", Name: "Trials Hawkmoon", Loadout: api.Loadout{}},
+	}
+	statsMock := &mockStatsService{}
+	d2Mock := &mockD2Service{}
+
+	server := Server{
+		SnapshotService: snapMock,
+		StatsService:    statsMock,
+		D2Service:       d2Mock,
+	}
+
+	r := gin.New()
+	r.ContextWithFallback = true
+	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+		ErrorHandler: logger.GinValidationErrorHandler,
+		Options: openapi3filter.Options{
+			AuthenticationFunc: validator.Authenticate,
+		},
+	}))
+	h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+		logger.GinStrictMiddleware[api.StrictHandlerFunc],
+	})
+	api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+		ErrorHandler: logger.GinParamErrorHandler,
+	})
+
+	t.Run("POST /snapshots/{snapshotId}/merge validates batch body and X-User-ID header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/snapshots/target-1/merge", strings.NewReader(`{"sourceSnapshotIds":["src-1","src-2"]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-User-ID", "user-1")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("POST /snapshots/{snapshotId}/merge rejects missing X-User-ID header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/snapshots/target-1/merge", strings.NewReader(`{"sourceSnapshotId":"src-1"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code == http.StatusOK {
+			t.Fatalf("expected non-200 when required X-User-ID header is missing, got 200")
+		}
+	})
+
+	t.Run("GET /snapshots/{snapshotId}/similar allows public read", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/snapshots/target-1/similar", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("GET /snapshots accepts hasSimilar query param", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/snapshots?userId=u1&characterId=c1&hasSimilar=true", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+

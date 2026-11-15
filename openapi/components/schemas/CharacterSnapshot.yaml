@@ -70,3 +70,26 @@ properties:
       firestore: updatedAt
   loadout:
     $ref: ./Loadout.yaml
+  mergedIntoId:
+    type: string
+    x-go-name: MergedIntoID
+    description: >-
+      If this snapshot was soft-merged into another snapshot, stores the target
+      snapshot ID. Excluded from active loadout lists by default.
+    x-oapi-codegen-extra-tags:
+      firestore: "mergedIntoId,omitempty"
+  mergedAt:
+    type: string
+    format: date-time
+    x-go-name: MergedAt
+    description: Timestamp for when this snapshot was merged into mergedIntoId
+    x-oapi-codegen-extra-tags:
+      firestore: "mergedAt,omitempty"
+  mergedFromIds:
+    type: array
+    x-go-name: MergedFromIDs
+    description: List of source snapshot IDs that have been merged into this snapshot
+    items:
+      type: string
+    x-oapi-codegen-extra-tags:
+      firestore: "mergedFromIds,omitempty"
