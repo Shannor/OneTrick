@@ -278,3 +278,106 @@ func TestMatchesGameMode(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateBaseInfo_TierAndStyleFields(t *testing.T) {
+	exoticHash := uint32(1996008488)
+	ornamentHash := uint32(2555000111)
+	legendaryHash := uint32(3111222333)
+	helmetBucket := uint32(HelmetArmor)
+	chestBucket := uint32(ChestArmor)
+
+	items := map[string]ItemDefinition{
+		"1996008488": {
+			Hash: 1996008488,
+			DisplayProperties: ItemDisplayProperties{
+				Name: "One-Eyed Mask",
+				Icon: "/icons/oem.jpg",
+			},
+			ItemTypeDisplayName:        "Helmet",
+			ItemTypeAndTierDisplayName: "Exotic Helmet",
+			Inventory: Inventory{
+				TierType:     6,
+				TierTypeName: "Exotic",
+			},
+		},
+		"2555000111": {
+			Hash: 2555000111,
+			DisplayProperties: ItemDisplayProperties{
+				Name: "Jian",
+				Icon: "/icons/jian.jpg",
+			},
+			ItemTypeDisplayName:        "Helmet Ornament",
+			ItemTypeAndTierDisplayName: "Exotic Helmet Ornament",
+			Inventory: Inventory{
+				TierType:     6,
+				TierTypeName: "Exotic",
+			},
+		},
+		"3111222333": {
+			Hash: 3111222333,
+			DisplayProperties: ItemDisplayProperties{
+				Name: "Artifice Plate",
+				Icon: "/icons/plate.jpg",
+			},
+			ItemTypeDisplayName:        "Chest Armor",
+			ItemTypeAndTierDisplayName: "Legendary Chest Armor",
+			Inventory: Inventory{
+				TierType:     5,
+				TierTypeName: "Legendary",
+			},
+		},
+	}
+
+	t.Run("populates Exotic tier fields and ornament StyleBasicInfo", func(t *testing.T) {
+		instID := "6917529000000001"
+		dItem := &bungie.DestinyItem{
+			Item: &bungie.SingleComponentResponseOfDestinyItemComponent{
+				ItemComponent: &bungie.ItemComponent{
+					ItemHash:              &exoticHash,
+					BucketHash:            &helmetBucket,
+					ItemInstanceId:        &instID,
+					OverrideStyleItemHash: &ornamentHash,
+				},
+			},
+		}
+
+		got := generateBaseInfo(dItem, items, nil)
+		if got.TierType != 6 || got.TierTypeName != "Exotic" {
+			t.Fatalf("expected Exotic tierType=6, got tierType=%d tierTypeName=%q", got.TierType, got.TierTypeName)
+		}
+		if got.ItemTypeDisplayName != "Helmet" || got.ItemTypeAndTierDisplayName != "Exotic Helmet" {
+			t.Fatalf("unexpected display names: %q / %q", got.ItemTypeDisplayName, got.ItemTypeAndTierDisplayName)
+		}
+		if got.StyleBasicInfo == nil {
+			t.Fatal("expected StyleBasicInfo to be populated for OverrideStyleItemHash")
+		}
+		if got.StyleBasicInfo.ItemHash != 2555000111 || got.StyleBasicInfo.Name != "Jian" || got.StyleBasicInfo.TierType != 6 {
+			t.Fatalf("unexpected StyleBasicInfo: %+v", got.StyleBasicInfo)
+		}
+	})
+
+	t.Run("populates Legendary tier fields without ornament", func(t *testing.T) {
+		instID := "6917529000000002"
+		dItem := &bungie.DestinyItem{
+			Item: &bungie.SingleComponentResponseOfDestinyItemComponent{
+				ItemComponent: &bungie.ItemComponent{
+					ItemHash:       &legendaryHash,
+					BucketHash:     &chestBucket,
+					ItemInstanceId: &instID,
+				},
+			},
+		}
+
+		got := generateBaseInfo(dItem, items, nil)
+		if got.TierType != 5 || got.TierTypeName != "Legendary" {
+			t.Fatalf("expected Legendary tierType=5, got tierType=%d tierTypeName=%q", got.TierType, got.TierTypeName)
+		}
+		if got.ItemTypeDisplayName != "Chest Armor" || got.ItemTypeAndTierDisplayName != "Legendary Chest Armor" {
+			t.Fatalf("unexpected display names: %q / %q", got.ItemTypeDisplayName, got.ItemTypeAndTierDisplayName)
+		}
+		if got.StyleBasicInfo != nil {
+			t.Fatalf("expected nil StyleBasicInfo when no ornament is equipped, got %+v", got.StyleBasicInfo)
+		}
+	})
+}
+

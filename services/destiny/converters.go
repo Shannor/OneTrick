@@ -119,28 +119,50 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 	if c.ItemHash == nil || c.BucketHash == nil || c.ItemInstanceId == nil {
 		return api.BaseItemInfo{}
 	}
-	hash := strconv.Itoa(int(*c.ItemHash))
+	hash := strconv.FormatUint(uint64(*c.ItemHash), 10)
+	def, ok := items[hash]
 	name := ""
 	icon := ""
-	if def, ok := items[hash]; ok {
+	if ok {
 		name = def.DisplayProperties.Name
 		icon = def.DisplayProperties.Icon
 	}
 
 	base := api.BaseItemInfo{
-		BucketHash: int64(*c.BucketHash),
-		InstanceId: *c.ItemInstanceId,
-		ItemHash:   int64(*c.ItemHash),
-		Name:       name,
-		Icon:       ptr.Of(setBaseBungieURL(&icon)),
+		BucketHash:                 int64(*c.BucketHash),
+		InstanceId:                 *c.ItemInstanceId,
+		ItemHash:                   int64(*c.ItemHash),
+		Name:                       name,
+		Icon:                       ptr.Of(setBaseBungieURL(&icon)),
+		ItemTypeAndTierDisplayName: def.ItemTypeAndTierDisplayName,
+		ItemTypeDisplayName:        def.ItemTypeDisplayName,
+		TierTypeName:               def.Inventory.TierTypeName,
+		TierType:                   int32(def.Inventory.TierType),
+	}
+
+	if c.OverrideStyleItemHash != nil && *c.OverrideStyleItemHash != 0 {
+		styleHash := strconv.FormatUint(uint64(*c.OverrideStyleItemHash), 10)
+		if styleDef, ok := items[styleHash]; ok {
+			base.StyleBasicInfo = &api.BaseItemInfo{
+				BucketHash:                 int64(*c.BucketHash),
+				InstanceId:                 *c.ItemInstanceId,
+				ItemHash:                   styleDef.Hash,
+				Name:                       styleDef.DisplayProperties.Name,
+				Icon:                       ptr.Of(setBaseBungieURL(&styleDef.DisplayProperties.Icon)),
+				ItemTypeAndTierDisplayName: styleDef.ItemTypeAndTierDisplayName,
+				ItemTypeDisplayName:        styleDef.ItemTypeDisplayName,
+				TierTypeName:               styleDef.Inventory.TierTypeName,
+				TierType:                   int32(styleDef.Inventory.TierType),
+			}
+		}
 	}
 
 	if item.Instance != nil && item.Instance.ItemInstanceComponent != nil {
 		instance := *item.Instance.ItemInstanceComponent
 		if instance.DamageTypeHash != nil {
-			hash := strconv.Itoa(int(*instance.DamageTypeHash))
-			if def, ok := damages[hash]; ok {
-				dc := def.Color
+			dmgHash := strconv.FormatUint(uint64(*instance.DamageTypeHash), 10)
+			if dmgDef, ok := damages[dmgHash]; ok {
+				dc := dmgDef.Color
 
 				base.Damage = &api.DamageInfo{
 					Color: api.Color{
@@ -149,9 +171,9 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 						Green: dc.Green,
 						Red:   dc.Red,
 					},
-					DamageIcon:      def.DisplayProperties.Icon,
-					DamageType:      def.DisplayProperties.Name,
-					TransparentIcon: def.TransparentIconPath,
+					DamageIcon:      dmgDef.DisplayProperties.Icon,
+					DamageType:      dmgDef.DisplayProperties.Name,
+					TransparentIcon: dmgDef.TransparentIconPath,
 				}
 			}
 		}

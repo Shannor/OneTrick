@@ -29,7 +29,24 @@ GET http://localhost:8080/snapshots?characterId=2305843009261519028&userId=TTXWD
 GET http://localhost:8080/snapshots?characterId={{$placeholder}}&userId={{$placeholder}}&count=10&page=1
 
 ###
+GET http://localhost:8080/snapshots?characterId=2305843009261519028&userId=TTXWDT9pzDEA0XiO1iAc&page=0&count=10&minimumGames=5&includeStats=true&sortBy=matches_played&hasSimilar=true
+
+###
 GET http://localhost:8080/snapshots/{{snapshotId}}
+
+###
+GET http://localhost:8080/snapshots/EEk6X89JBzCx7bfOa1qP/similar
+
+###
+POST http://localhost:8080/snapshots/{{targetSnapshotId}}/merge
+Content-Type: application/json
+X-User-ID: {{userId}}
+
+{
+  "sourceSnapshotIds": [
+    "{{sourceSnapshotId}}"
+  ]
+}
 
 ###
 GET http://localhost:8080/activities?

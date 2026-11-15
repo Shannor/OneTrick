@@ -1,7 +1,9 @@
 package snapshot
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/generator"
@@ -16,8 +18,6 @@ import (
 
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Service defines the interface for working with character snapshots and aggregates.
@@ -27,13 +27,11 @@ type Service interface {
 	// snapshot data on success and an error if the generating or save to the DB fails
 	Save(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error)
 
-	// GetAllByCharacter retrieves all snapshots for a given user and character with pagination.
+	// GetAllByCharacter retrieves all active (non-archived) snapshots for a given user and character with pagination.
 	// Snapshots are returned in reverse chronological order based on their timestamp.
 	GetAllByCharacter(ctx context.Context, userID string, characterID string, count int, offset int) ([]api.CharacterSnapshot, error)
 
-	// Get retrieves a specific snapshot for a given user, character, and snapshot ID.
-	// Takes a context, user ID, character ID, and snapshot ID as input.
-	// Returns the requested CharacterSnapshot or an error if the snapshot is not found or cannot be retrieved.
+	// Get retrieves a specific snapshot by ID (including soft-archived snapshots).
 	Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
 
 	GetAll(ctx context.Context) ([]api.CharacterSnapshot, error)
@@ -41,8 +39,9 @@ type Service interface {
 	// GetByIDs retrieves multiple snapshots for a given list of snapshot IDs.
 	GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error)
 
-	// Merge merges two character snapshots identified by snapshotID and targetSnapshotID, storing the result in a new snapshot.
-	Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID string) (api.CharacterSnapshot, error)
+	// Merge soft-archives one or more source snapshots into targetSnapshotID after validating ownership
+	// and equipment compatibility, reassigning all linked aggregates to targetSnapshotID.
+	Merge(ctx context.Context, userID string, targetSnapshotID string, sourceSnapshotIDs []string) (api.CharacterSnapshot, error)
 
 	LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink
 	EnrichInstancePerformance(snapshot *api.CharacterSnapshot, performance api.InstancePerformance) (*api.InstancePerformance, error)
@@ -50,7 +49,7 @@ type Service interface {
 	// Update allows for updating a snapshot document's data.
 	Update(ctx context.Context, snapshotID string, updateFn func(data map[string]any) error) error
 
-	// Delete deletes a snapshot document, its subcollection history, and cleans up references in aggregates.
+	// Delete deletes a snapshot document, its subcollection history, and cleans up references in aggregates and merge links.
 	Delete(ctx context.Context, snapshotID string, userID string) error
 }
 
@@ -60,7 +59,7 @@ const (
 )
 
 type service struct {
-	DB               *firestore.Client
+	store            snapshotStore
 	UserService      user.Service
 	D2Service        destiny.Service
 	aggregateService aggregate.Service
@@ -70,17 +69,119 @@ var _ Service = (*service)(nil)
 
 func NewService(db *firestore.Client, userService user.Service, d2Service destiny.Service, aggregateService aggregate.Service) Service {
 	return &service{
-		DB:               db,
+		store:            &firestoreStore{db: db},
 		UserService:      userService,
 		D2Service:        d2Service,
 		aggregateService: aggregateService,
 	}
 }
 
-func (s *service) create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error) {
+// GenerateHash computes a deterministic SHA-256 hash string for a Loadout based on each item's
+// BaseInfo.InstanceId and sorted Perk hashes, matching OneTrick-Scripts/server-tick's generateHash.
+func GenerateHash(loadout api.Loadout) (string, error) {
+	var hashing []string
 
+	keys := make([]string, 0, len(loadout))
+	for k := range loadout {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
+	for _, key := range keys {
+		item := loadout[key]
+		hashing = append(hashing, item.ItemProperties.BaseInfo.InstanceId)
+
+		perks := slices.Clone(item.ItemProperties.Perks)
+		slices.SortFunc(perks, func(a, b api.Perk) int {
+			return cmp.Compare(a.Hash, b.Hash)
+		})
+
+		for _, perk := range perks {
+			hashing = append(hashing, fmt.Sprintf("%s-%d", item.InstanceID, perk.Hash))
+		}
+	}
+	return utils.HashMap(hashing)
+}
+
+// IsArchived reports whether a snapshot has been soft-merged into another snapshot.
+func IsArchived(snap *api.CharacterSnapshot) bool {
+	return snap != nil && snap.MergedIntoID != nil && *snap.MergedIntoID != ""
+}
+
+// EffectiveInstanceID returns the canonical Bungie item instance ID for a CharacterItem.
+// Live session snapshots written by server-tick populate the true 64-bit instance ID on
+// ItemProperties.BaseInfo.InstanceId while setting top-level InstanceID to the itemHash string,
+// whereas direct backend snapshots populate both (or top-level InstanceID).
+func EffectiveInstanceID(item api.ItemSnapshot) string {
+	hashStr := ""
+	if item.ItemHash != 0 {
+		hashStr = strconv.FormatInt(item.ItemHash, 10)
+	}
+	baseID := item.ItemProperties.BaseInfo.InstanceId
+	topID := item.InstanceID
+
+	if baseID != "" && baseID != hashStr {
+		return baseID
+	}
+	if topID != "" && topID != hashStr {
+		return topID
+	}
+	if baseID != "" {
+		return baseID
+	}
+	return topID
+}
+
+// BaseIdentityKey returns the canonical "{kineticInstanceId}:{energyInstanceId}:{subclassItemHash}"
+// grouping key when a snapshot has valid non-empty Kinetic, Energy, and Subclass items.
+func BaseIdentityKey(snap *api.CharacterSnapshot) (string, bool) {
+	if snap == nil || snap.Loadout == nil {
+		return "", false
+	}
+	kin, ok := snap.Loadout[strconv.Itoa(destiny.Kinetic)]
+	if !ok {
+		return "", false
+	}
+	kinID := EffectiveInstanceID(kin)
+	if kinID == "" {
+		return "", false
+	}
+
+	en, ok := snap.Loadout[strconv.Itoa(destiny.Energy)]
+	if !ok {
+		return "", false
+	}
+	enID := EffectiveInstanceID(en)
+	if enID == "" {
+		return "", false
+	}
+
+	sub, ok := snap.Loadout[strconv.Itoa(destiny.SubClass)]
+	if !ok || sub.ItemHash == 0 {
+		return "", false
+	}
+
+	return fmt.Sprintf("%s:%s:%d", kinID, enID, sub.ItemHash), true
+}
+
+// CanMerge reports whether two snapshots satisfy the minimum base identity required for merging:
+// non-empty matching Kinetic InstanceID, non-empty matching Energy InstanceID, and non-zero matching Subclass ItemHash.
+func CanMerge(a, b *api.CharacterSnapshot) bool {
+	keyA, okA := BaseIdentityKey(a)
+	if !okA {
+		return false
+	}
+	keyB, okB := BaseIdentityKey(b)
+	return okB && keyA == keyB
+}
+
+func snapshotCanMerge(a, b *api.CharacterSnapshot) bool {
+	return CanMerge(a, b)
+}
+
+func (s *service) create(ctx context.Context, userID string, snapshot api.CharacterSnapshot) (*string, error) {
 	if snapshot.Hash == "" {
-		hash, err := utils.HashMap(snapshot.Loadout)
+		hash, err := GenerateHash(snapshot.Loadout)
 		if err != nil {
 			return nil, err
 		}
@@ -92,11 +193,26 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 		"hash":   snapshot.Hash,
 	})
 
-	existingSnapshot, err := optionalGetByHash(s.DB, ctx, snapshot.Hash)
+	existingSnapshot, err := s.store.getByHash(ctx, snapshot.Hash)
 	if err != nil {
 		return nil, err
 	}
 	if existingSnapshot != nil {
+		if IsArchived(existingSnapshot) {
+			targetSnap, err := s.resolveAutoForwardTarget(ctx, existingSnapshot)
+			if err != nil {
+				return nil, err
+			}
+			if targetSnap != nil {
+				clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+					"snapshotId":        targetSnap.ID,
+					"autoForwardedFrom": existingSnapshot.ID,
+					"isExisting":        true,
+				})
+				return s.createHistoryEntry(ctx, *targetSnap)
+			}
+		}
+
 		clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
 			"snapshotId": existingSnapshot.ID,
 			"isExisting": true,
@@ -111,17 +227,45 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 	if snapshot.Name == "" {
 		snapshot.Name = generator.PVPName()
 	}
-	ref := s.DB.Collection(collection).NewDoc()
-	snapshot.ID = ref.ID
-	_, err = ref.Set(ctx, snapshot)
+	created, err := s.store.createSnapshotDoc(ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
 	clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
-		"snapshotId": snapshot.ID,
+		"snapshotId": created.ID,
 		"isExisting": false,
 	})
-	return s.createHistoryEntry(ctx, snapshot)
+	return s.createHistoryEntry(ctx, created)
+}
+
+func (s *service) resolveAutoForwardTarget(ctx context.Context, archived *api.CharacterSnapshot) (*api.CharacterSnapshot, error) {
+	if !IsArchived(archived) {
+		return nil, nil
+	}
+	targetID := *archived.MergedIntoID
+	targetSnap, err := s.store.getDoc(ctx, targetID)
+	if err == nil && targetSnap != nil && IsArchived(targetSnap) {
+		// Defensive 1-hop follow in case a merge chain was not yet flattened.
+		targetSnap, err = s.store.getDoc(ctx, *targetSnap.MergedIntoID)
+	}
+	if err != nil {
+		if errors.Is(err, NotFound) {
+			clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+				"archivedSnapshotId": archived.ID,
+				"missingTargetId":    targetID,
+				"warning":            "auto-forward target missing; restoring archived snapshot",
+			})
+			_ = s.store.clearMergeArchiveFields(ctx, archived.ID, time.Now())
+			archived.MergedIntoID = nil
+			archived.MergedAt = nil
+			return nil, nil
+		}
+		return nil, err
+	}
+	if targetSnap == nil || IsArchived(targetSnap) {
+		return nil, nil
+	}
+	return targetSnap, nil
 }
 
 func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapshot) (*string, error) {
@@ -137,23 +281,14 @@ func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapsh
 			PowerID:   strconv.FormatInt(og.Loadout[strconv.Itoa(destiny.Power)].ItemHash, 10),
 		},
 	}
-	ref := s.DB.Collection(collection).Doc(og.ID).Collection(historyCollection).NewDoc()
-	history.ID = ref.ID
+	historyID, err := s.store.createHistory(ctx, history, now)
+	if err != nil {
+		return nil, err
+	}
 	clog.WithGroupFields(ctx, "snapshotService.createHistoryEntry", clog.Fields{
 		"snapshotId": og.ID,
-		"historyId":  history.ID,
+		"historyId":  historyID,
 	})
-	_, err := ref.Set(ctx, history)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = s.DB.Collection(collection).Doc(og.ID).Set(ctx, map[string]interface{}{
-		"updatedAt": now,
-	}, firestore.MergeAll)
-	if err != nil {
-		return nil, err
-	}
 	return &og.ID, nil
 }
 
@@ -164,18 +299,16 @@ func (s *service) GetAllByCharacter(ctx context.Context, userID string, characte
 		"count":       count,
 		"offset":      offset,
 	})
-	query := s.DB.Collection(collection).
-		Where("userId", "==", userID).
-		Where("characterId", "==", characterID)
-
-	docs, err := query.Documents(ctx).GetAll()
+	allSnapshots, err := s.store.listByCharacter(ctx, userID, characterID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query snapshots: %w", err)
+		return nil, err
 	}
 
-	snapshots, err := utils.GetAllToStructs[api.CharacterSnapshot](docs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse snapshots: %w", err)
+	snapshots := make([]api.CharacterSnapshot, 0, len(allSnapshots))
+	for _, snap := range allSnapshots {
+		if !IsArchived(&snap) {
+			snapshots = append(snapshots, snap)
+		}
 	}
 
 	// Sort by CreatedAt descending (newest first)
@@ -201,51 +334,13 @@ func (s *service) GetAllByCharacter(ctx context.Context, userID string, characte
 	return snapshots, nil
 }
 
-func optionalGetByHash(db *firestore.Client, ctx context.Context, hash string) (*api.CharacterSnapshot, error) {
-	clog.WithGroupField(ctx, "snapshotService.getByHash", "hash", hash)
-	og := api.CharacterSnapshot{}
-	docs, err := db.Collection(collection).
-		Where("hash", "==", hash).
-		Limit(1).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
-	}
-	if len(docs) == 0 {
-		clog.WithGroupField(ctx, "snapshotService.getByHash", "found", false)
-		return nil, nil
-	}
-	err = docs[0].DataTo(&og)
-	if err != nil {
-		return nil, err
-	}
-	clog.WithGroupFields(ctx, "snapshotService.getByHash", clog.Fields{
-		"found":      true,
-		"snapshotId": og.ID,
-	})
-	return &og, nil
-}
-
 func (s *service) Get(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error) {
 	clog.WithGroupField(ctx, "snapshotService.get", "snapshotId", snapshotID)
-	var result *api.CharacterSnapshot
-	data, err := s.DB.Collection(collection).Doc(snapshotID).Get(ctx)
-	if err != nil {
-		return nil, err
-	}
-	err = data.DataTo(&result)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return s.store.getDoc(ctx, snapshotID)
 }
 
 func (s *service) GetAll(ctx context.Context) ([]api.CharacterSnapshot, error) {
-	data, err := s.DB.Collection(collection).Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
-	}
-	results, err := utils.GetAllToStructs[api.CharacterSnapshot](data)
+	results, err := s.store.listAll(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -255,42 +350,16 @@ func (s *service) GetAll(ctx context.Context) ([]api.CharacterSnapshot, error) {
 
 func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error) {
 	clog.WithGroupField(ctx, "snapshotService.getByIds", "requestedCount", len(snapshotIDs))
-	uniqueIDs := make([]string, 0, len(snapshotIDs))
-	seen := make(map[string]struct{}, len(snapshotIDs))
-	for _, id := range snapshotIDs {
-		if id == "" {
-			continue
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		uniqueIDs = append(uniqueIDs, id)
-	}
+	uniqueIDs := deduplicateNonEmpty(snapshotIDs)
 	clog.WithGroupField(ctx, "snapshotService.getByIds", "uniqueCount", len(uniqueIDs))
 	if len(uniqueIDs) == 0 {
 		clog.WithGroupField(ctx, "snapshotService.getByIds", "returnedCount", 0)
 		return []api.CharacterSnapshot{}, nil
 	}
 
-	var allResults []api.CharacterSnapshot
-	const batchSize = 30
-	for i := 0; i < len(uniqueIDs); i += batchSize {
-		end := i + batchSize
-		if end > len(uniqueIDs) {
-			end = len(uniqueIDs)
-		}
-		batch := uniqueIDs[i:end]
-
-		data, err := s.DB.Collection(collection).Where("id", "in", batch).Documents(ctx).GetAll()
-		if err != nil {
-			return nil, err
-		}
-		results, err := utils.GetAllToStructs[api.CharacterSnapshot](data)
-		if err != nil {
-			return nil, err
-		}
-		allResults = append(allResults, results...)
+	allResults, err := s.store.listByIDs(ctx, uniqueIDs)
+	if err != nil {
+		return nil, err
 	}
 	clog.WithGroupField(ctx, "snapshotService.getByIds", "returnedCount", len(allResults))
 	return allResults, nil
@@ -298,19 +367,14 @@ func (s *service) GetByIDs(ctx context.Context, snapshotIDs []string) ([]api.Cha
 
 func (s *service) Update(ctx context.Context, snapshotID string, updateFn func(data map[string]any) error) error {
 	clog.WithGroupField(ctx, "snapshotService.update", "snapshotId", snapshotID)
-	docRef := s.DB.Collection(collection).Doc(snapshotID)
-	doc, err := docRef.Get(ctx)
+	data, err := s.store.getRawDoc(ctx, snapshotID)
 	if err != nil {
 		return err
 	}
-
-	data := doc.Data()
 	if err := updateFn(data); err != nil {
 		return err
 	}
-
-	_, err = docRef.Set(ctx, data)
-	return err
+	return s.store.setRawDoc(ctx, snapshotID, data)
 }
 
 func (s *service) LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink {
@@ -341,18 +405,18 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 
 	results := make(map[string]api.WeaponInstanceMetrics)
 	for _, metric := range performance.Weapons {
-		result := api.WeaponInstanceMetrics{}
+		itemMetric := api.WeaponInstanceMetrics{}
 		if metric.ReferenceID == nil {
 			continue
 		}
-		result.ReferenceID = metric.ReferenceID
-		result.Stats = metric.Stats
+		itemMetric.ReferenceID = metric.ReferenceID
+		itemMetric.Stats = metric.Stats
 
 		properties, ok := mapping[*metric.ReferenceID]
 		if ok {
-			result.ItemProperties = &properties
+			itemMetric.ItemProperties = &properties
 		}
-		results[strconv.FormatInt(*metric.ReferenceID, 10)] = result
+		results[strconv.FormatInt(*metric.ReferenceID, 10)] = itemMetric
 	}
 	result.Weapons = results
 	return result, nil
@@ -411,75 +475,222 @@ func (s *service) Save(ctx context.Context, userID, membershipID, characterID st
 	}
 	if id != nil {
 		clog.WithGroupField(ctx, "snapshotService.save", "snapshotId", *id)
+		saved, getErr := s.Get(ctx, *id)
+		if getErr == nil && saved != nil {
+			return saved, nil
+		}
+		data.ID = *id
 	}
 	return data, nil
 }
 
-func (s *service) Merge(ctx context.Context, targetSnapshotID, sourceSnapshotID string) (api.CharacterSnapshot, error) {
-	clog.WithGroupFields(ctx, "snapshotService.merge", clog.Fields{
-		"targetSnapshotId": targetSnapshotID,
-		"sourceSnapshotId": sourceSnapshotID,
-	})
-	resultSnapshot, err := s.Get(ctx, targetSnapshotID)
-	if err != nil {
-		return api.CharacterSnapshot{}, err
+func (s *service) Merge(ctx context.Context, userID string, targetSnapshotID string, sourceSnapshotIDs []string) (api.CharacterSnapshot, error) {
+	if userID == "" {
+		return api.CharacterSnapshot{}, Unauthorized
 	}
-	sourceSnapshot, err := s.Get(ctx, sourceSnapshotID)
-	if err != nil {
-		return api.CharacterSnapshot{}, err
+	if targetSnapshotID == "" {
+		return api.CharacterSnapshot{}, fmt.Errorf("%w: target snapshot ID cannot be empty", InvalidMerge)
 	}
-
-	if resultSnapshot == nil || sourceSnapshot == nil {
-		return api.CharacterSnapshot{}, fmt.Errorf("snapshot not found")
+	uniqueSources := deduplicateNonEmpty(sourceSnapshotIDs)
+	if len(uniqueSources) == 0 {
+		return api.CharacterSnapshot{}, fmt.Errorf("%w: at least one source snapshot ID is required", InvalidMerge)
 	}
-	if resultSnapshot.CharacterID != sourceSnapshot.CharacterID {
-		return api.CharacterSnapshot{}, fmt.Errorf("snapshots must belong to the same character")
-	}
-	if resultSnapshot.UserID != sourceSnapshot.UserID {
-		return api.CharacterSnapshot{}, fmt.Errorf("snapshots must belong to the same user")
-	}
-	if !snapshotCanMerge(resultSnapshot, sourceSnapshot) {
-		return api.CharacterSnapshot{}, fmt.Errorf("snapshots cannot be merged")
+	if slices.Contains(uniqueSources, targetSnapshotID) {
+		return api.CharacterSnapshot{}, fmt.Errorf("%w: cannot merge snapshot with itself", InvalidMerge)
 	}
 
-	aggs, err := s.aggregateService.BySnapshotID(ctx, sourceSnapshotID, nil)
-	if err != nil {
-		return api.CharacterSnapshot{}, err
-	}
 	clog.WithGroupFields(ctx, "snapshotService.merge", clog.Fields{
+		"userId":            userID,
 		"targetSnapshotId":  targetSnapshotID,
-		"sourceSnapshotId":  sourceSnapshotID,
-		"updatedAggregates": len(aggs),
+		"sourceSnapshotIds": uniqueSources,
 	})
-	for _, agg := range aggs {
-		err := s.aggregateService.Update(ctx, agg.ID, func(data map[string]any) error {
-			// Atomically "replace" an element in an array by modifying the slice directly
-			// within the update transaction.
-			if snapshotIDs, ok := data["snapshotIds"].([]interface{}); ok {
-				newSnapshotIDs := make([]interface{}, 0, len(snapshotIDs))
-				for _, id := range snapshotIDs {
-					if id != sourceSnapshotID {
-						newSnapshotIDs = append(newSnapshotIDs, id)
-					}
-				}
-				newSnapshotIDs = append(newSnapshotIDs, targetSnapshotID)
-				data["snapshotIds"] = newSnapshotIDs
-			}
-			snapshotLink := agg.SnapshotLinks[resultSnapshot.CharacterID]
-			snapshotLink.SnapshotID = &targetSnapshotID
-			snapshotLink.ConfidenceSource = api.UserConfidenceSource
-			if snapshotLink.OriginalSnapshotID == nil {
-				snapshotLink.OriginalSnapshotID = &sourceSnapshotID
-			}
-			data["snapshotLinks"].(map[string]any)[resultSnapshot.CharacterID] = snapshotLink
-			return nil
-		}, true)
+
+	targetSnapshot, err := s.Get(ctx, targetSnapshotID)
+	if err != nil {
+		return api.CharacterSnapshot{}, err
+	}
+	if targetSnapshot == nil {
+		return api.CharacterSnapshot{}, NotFound
+	}
+	if targetSnapshot.UserID != userID {
+		return api.CharacterSnapshot{}, Unauthorized
+	}
+	if IsArchived(targetSnapshot) {
+		return api.CharacterSnapshot{}, fmt.Errorf("%w: target snapshot is already merged", InvalidMerge)
+	}
+
+	// Validate every source snapshot up-front before writing any aggregate or snapshot changes.
+	sourceSnapshots := make([]*api.CharacterSnapshot, 0, len(uniqueSources))
+	for _, srcID := range uniqueSources {
+		src, err := s.Get(ctx, srcID)
 		if err != nil {
 			return api.CharacterSnapshot{}, err
 		}
+		if src == nil {
+			return api.CharacterSnapshot{}, NotFound
+		}
+		if src.UserID != userID {
+			return api.CharacterSnapshot{}, Unauthorized
+		}
+		if src.CharacterID != targetSnapshot.CharacterID {
+			return api.CharacterSnapshot{}, fmt.Errorf("%w: snapshots must belong to the same character", InvalidMerge)
+		}
+		if IsArchived(src) {
+			return api.CharacterSnapshot{}, fmt.Errorf("%w: source snapshot %s is already merged", InvalidMerge, src.ID)
+		}
+		if !snapshotCanMerge(targetSnapshot, src) {
+			return api.CharacterSnapshot{}, fmt.Errorf("%w: snapshots do not share matching Kinetic, Energy, and Subclass items", InvalidMerge)
+		}
+		sourceSnapshots = append(sourceSnapshots, src)
 	}
 
-	return api.CharacterSnapshot{}, nil
+	// Reassign aggregates from each source snapshot to targetSnapshotID.
+	totalUpdatedAggregates := 0
+	for _, src := range sourceSnapshots {
+		srcID := src.ID
+		aggs, err := s.aggregateService.BySnapshotID(ctx, srcID, nil)
+		if err != nil {
+			return api.CharacterSnapshot{}, err
+		}
+		for _, agg := range aggs {
+			existingLink := agg.SnapshotLinks[targetSnapshot.CharacterID]
+			err := s.aggregateService.Update(ctx, agg.ID, func(data map[string]any) error {
+				replaceSnapshotIDInAggregateData(data, targetSnapshot.CharacterID, srcID, targetSnapshotID, existingLink)
+				return nil
+			}, true)
+			if err != nil {
+				return api.CharacterSnapshot{}, err
+			}
+			totalUpdatedAggregates++
+		}
+	}
+
+	// Soft-archive each source, flatten any 1-hop child merges, and record mergedFromIds on target.
+	now := time.Now()
+	var mergedFromSeed []string
+	if targetSnapshot.MergedFromIDs != nil {
+		mergedFromSeed = append(mergedFromSeed, *targetSnapshot.MergedFromIDs...)
+	}
+	for _, src := range sourceSnapshots {
+		mergedFromSeed = append(mergedFromSeed, src.ID)
+		if err := s.store.archiveSource(ctx, src.ID, targetSnapshotID, now); err != nil {
+			return api.CharacterSnapshot{}, err
+		}
+		if src.MergedFromIDs != nil {
+			for _, childID := range *src.MergedFromIDs {
+				if childID == "" || childID == targetSnapshotID {
+					continue
+				}
+				mergedFromSeed = append(mergedFromSeed, childID)
+				if err := s.store.repointArchivedChild(ctx, childID, targetSnapshotID, now); err != nil {
+					return api.CharacterSnapshot{}, err
+				}
+			}
+		}
+	}
+
+	mergedFromIDs := deduplicateNonEmpty(mergedFromSeed)
+	if err := s.store.updateMergedFromIDs(ctx, targetSnapshotID, mergedFromIDs, now); err != nil {
+		return api.CharacterSnapshot{}, err
+	}
+
+	clog.WithGroupFields(ctx, "snapshotService.merge", clog.Fields{
+		"targetSnapshotId":  targetSnapshotID,
+		"mergedSources":     len(sourceSnapshots),
+		"updatedAggregates": totalUpdatedAggregates,
+	})
+
+	targetSnapshot.MergedFromIDs = &mergedFromIDs
+	targetSnapshot.UpdatedAt = now
+	return *targetSnapshot, nil
+}
+
+func replaceSnapshotIDInAggregateData(
+	data map[string]any,
+	characterID string,
+	sourceSnapshotID string,
+	targetSnapshotID string,
+	existingLink api.SnapshotLink,
+) {
+	switch rawIDs := data["snapshotIds"].(type) {
+	case []any:
+		dedup := make([]any, 0, len(rawIDs)+1)
+		seenTarget := false
+		for _, raw := range rawIDs {
+			s, ok := raw.(string)
+			if !ok {
+				dedup = append(dedup, raw)
+				continue
+			}
+			if s == sourceSnapshotID {
+				continue
+			}
+			if s == targetSnapshotID {
+				if seenTarget {
+					continue
+				}
+				seenTarget = true
+			}
+			dedup = append(dedup, s)
+		}
+		if !seenTarget {
+			dedup = append(dedup, targetSnapshotID)
+		}
+		data["snapshotIds"] = dedup
+	case []string:
+		dedup := make([]string, 0, len(rawIDs)+1)
+		seenTarget := false
+		for _, s := range rawIDs {
+			if s == sourceSnapshotID {
+				continue
+			}
+			if s == targetSnapshotID {
+				if seenTarget {
+					continue
+				}
+				seenTarget = true
+			}
+			dedup = append(dedup, s)
+		}
+		if !seenTarget {
+			dedup = append(dedup, targetSnapshotID)
+		}
+		data["snapshotIds"] = dedup
+	default:
+		data["snapshotIds"] = []any{targetSnapshotID}
+	}
+
+	if existingLink.CharacterID == "" {
+		existingLink.CharacterID = characterID
+	}
+	existingLink.SnapshotID = &targetSnapshotID
+	existingLink.ConfidenceSource = api.UserConfidenceSource
+	if existingLink.OriginalSnapshotID == nil || *existingLink.OriginalSnapshotID == "" {
+		existingLink.OriginalSnapshotID = &sourceSnapshotID
+	}
+
+	linksMap, ok := data["snapshotLinks"].(map[string]any)
+	if !ok || linksMap == nil {
+		linksMap = make(map[string]any)
+	}
+	linksMap[characterID] = existingLink
+	data["snapshotLinks"] = linksMap
+}
+
+func deduplicateNonEmpty(ids []string) []string {
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
 
 func (s *service) Delete(ctx context.Context, snapshotID string, userID string) error {
@@ -487,19 +698,16 @@ func (s *service) Delete(ctx context.Context, snapshotID string, userID string) 
 		"snapshotId": snapshotID,
 		"userId":     userID,
 	})
-	docRef := s.DB.Collection(collection).Doc(snapshotID)
-	doc, err := docRef.Get(ctx)
+	snap, err := s.store.getDoc(ctx, snapshotID)
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
+		if errors.Is(err, NotFound) {
 			clog.WithGroupField(ctx, "snapshotService.delete", "warning", "snapshot not found for deletion")
 			return NotFound
 		}
 		return fmt.Errorf("failed to get snapshot: %w", err)
 	}
-
-	var snap api.CharacterSnapshot
-	if err := doc.DataTo(&snap); err != nil {
-		return fmt.Errorf("failed to parse snapshot: %w", err)
+	if snap == nil {
+		return NotFound
 	}
 
 	if snap.UserID != userID {
@@ -510,25 +718,21 @@ func (s *service) Delete(ctx context.Context, snapshotID string, userID string) 
 		return Unauthorized
 	}
 
-	// Delete subcollection history documents
-	historyDocs, err := docRef.Collection(historyCollection).Documents(ctx).GetAll()
-	if err != nil {
-		clog.WithGroupField(ctx, "snapshotService.delete", "warning", "failed to fetch snapshot history subcollection")
-	} else {
-		deletedHistoryCount := 0
-		failedHistoryCount := 0
-		for _, hDoc := range historyDocs {
-			if _, err := hDoc.Ref.Delete(ctx); err != nil {
-				failedHistoryCount++
-			} else {
-				deletedHistoryCount++
+	// If deleting a target snapshot that has archived sources, clear mergedIntoId/mergedAt on those sources
+	// so no dangling auto-forward pointers remain.
+	if snap.MergedFromIDs != nil {
+		now := time.Now()
+		for _, srcID := range *snap.MergedFromIDs {
+			if srcID == "" {
+				continue
 			}
+			_ = s.store.clearMergeArchiveFields(ctx, srcID, now)
 		}
-		clog.WithGroupFields(ctx, "snapshotService.delete", clog.Fields{
-			"historyCount":        len(historyDocs),
-			"deletedHistoryCount": deletedHistoryCount,
-			"failedHistoryCount":  failedHistoryCount,
-		})
+	}
+
+	// If deleting an archived source snapshot directly, remove its ID from its parent target's mergedFromIds.
+	if IsArchived(snap) {
+		_ = s.store.removeMergedFromID(ctx, *snap.MergedIntoID, snapshotID)
 	}
 
 	// Remove snapshot references from aggregates
@@ -536,24 +740,10 @@ func (s *service) Delete(ctx context.Context, snapshotID string, userID string) 
 		return fmt.Errorf("failed to clean up snapshot aggregates: %w", err)
 	}
 
-	// Delete snapshot document
-	if _, err := docRef.Delete(ctx); err != nil {
-		return fmt.Errorf("failed to delete snapshot: %w", err)
+	if err := s.store.deleteSnapshotAndHistory(ctx, snapshotID); err != nil {
+		return err
 	}
 
 	clog.WithGroupField(ctx, "snapshotService.delete", "deleted", true)
 	return nil
-}
-
-// snapshotCanMerge will grow to cover a more complex answer on if a snapshot can be merged.
-func snapshotCanMerge(a, b *api.CharacterSnapshot) bool {
-	kinetic := strconv.Itoa(destiny.Kinetic)
-	energy := strconv.Itoa(destiny.Energy)
-	if a.Loadout[kinetic].InstanceID != b.Loadout[kinetic].InstanceID {
-		return false
-	}
-	if a.Loadout[energy].InstanceID != b.Loadout[energy].InstanceID {
-		return false
-	}
-	return true
 }

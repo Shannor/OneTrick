@@ -68,7 +68,7 @@ func main() {
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore, aggregateService)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
-	statsService := stats.NewService(firestore, snapshotService, userService)
+	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	server := NewServer(
 		destinyService,
 		d2AuthAService,

@@ -8,6 +8,7 @@ import (
 var (
 	NotFound     = errors.New("not found")
 	Unauthorized = errors.New("unauthorized")
+	InvalidMerge = errors.New("invalid merge")
 )
 
 type History struct {

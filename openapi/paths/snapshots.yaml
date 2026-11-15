@@ -91,6 +91,13 @@ get:
           - SortByKDRatio
           - SortByMatchesPlayed
         default: created_at
+    - name: hasSimilar
+      in: query
+      required: false
+      description: When true, filters returned snapshots to those with at least one active mergeable similar snapshot
+      schema:
+        type: boolean
+        default: false
   responses:
     "200":
       description: Returns loadouts response with optional metrics map and match counts
@@ -113,5 +120,10 @@ get:
               count:
                 type: object
                 description: Map of snapshot ID to total matches played
+                additionalProperties:
+                  type: integer
+              similarCounts:
+                type: object
+                description: Map of snapshot ID to count of active similar loadouts on this character
                 additionalProperties:
                   type: integer
