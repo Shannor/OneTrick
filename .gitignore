@@ -42,4 +42,5 @@ emulator-data/
 
 profile_data.json
 manifest.json
+reports/
 /skills/system/run-workflow/SKILL.md

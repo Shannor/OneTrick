@@ -24,6 +24,9 @@ sync-app-db:
 count-prod-db:
 	go run ./scripts/count_prod_docs/main.go
 
+monitor-logs:
+	go run ./scripts/monitor_logs/main.go $(ARGS)
+
 generate:
 	npx --yes @redocly/cli@latest bundle ./openapi/openapi.yaml --output openapi.yaml
 	go generate ./...

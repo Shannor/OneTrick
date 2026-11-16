@@ -7,6 +7,7 @@ This server powers the One Trick Destiny 2 Application
 - Install dependencies: `go mod tidy`
 - Run tests: `go test ./...`
 - Run api generation: `make generate`
+- Monitor production GCP logs (errors & slow calls): `make monitor-logs` (writes reports to `reports/gcp-log-monitor-latest.md` and `.json`)
 
 ## General Instructions
 
