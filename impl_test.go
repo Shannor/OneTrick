@@ -17,7 +17,9 @@ import (
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-gonic/gin"
@@ -43,8 +45,10 @@ func (m *mockAuthService) GetCurrentUser(ctx context.Context, token string) (*bu
 
 type mockUserService struct {
 	user.Service
-	existingUser *user.User
-	createdUser  *user.User
+	existingUser      *user.User
+	createdUser       *user.User
+	updatedCharacters []api.Character
+	updateCalls       atomic.Int32
 }
 
 func (m *mockUserService) GetUser(ctx context.Context, id string) (*user.User, error) {
@@ -58,6 +62,12 @@ func (m *mockUserService) CreateUser(ctx context.Context, u *user.User) (*user.U
 	u.ID = "created-id"
 	m.createdUser = u
 	return u, nil
+}
+
+func (m *mockUserService) UpdateCharacters(ctx context.Context, userID string, characters []api.Character) error {
+	m.updateCalls.Add(1)
+	m.updatedCharacters = characters
+	return nil
 }
 
 type mockD2Service struct {
@@ -757,3 +767,107 @@ func TestHTTPRouterOpenAPIMiddlewareEndpoints(t *testing.T) {
 	})
 }
 
+func TestGetUserCharacterRefreshAndFallback(t *testing.T) {
+	t.Run("populates and persists characters synchronously when user has no characters", func(t *testing.T) {
+		uMock := &mockUserService{
+			existingUser: &user.User{
+				ID:                  "u-empty",
+				PrimaryMembershipID: "4611686018499886480",
+				Memberships:         []user.Membership{{ID: "4611686018499886480", Type: 3}},
+				Characters:          nil,
+			},
+		}
+		d2Mock := &mockD2Service{}
+		server := Server{UserService: uMock, D2Service: d2Mock}
+
+		resp, err := server.GetUser(context.Background(), api.GetUserRequestObject{UserID: "u-empty"})
+		if err != nil {
+			t.Fatalf("expected GetUser to succeed, got %v", err)
+		}
+		okResp, ok := resp.(api.GetUser200JSONResponse)
+		if !ok {
+			t.Fatalf("expected GetUser200JSONResponse, got %T", resp)
+		}
+		if len(okResp.Characters) != 1 || okResp.Characters[0].Id != "char1" {
+			t.Fatalf("expected synchronous fallback to populate response characters, got %+v", okResp.Characters)
+		}
+		if uMock.updateCalls.Load() != 1 || len(uMock.updatedCharacters) != 1 {
+			t.Fatalf("expected synchronous fallback to persist characters once, got calls=%d", uMock.updateCalls.Load())
+		}
+	})
+
+	t.Run("skips background refresh when characters were updated within 6h TTL", func(t *testing.T) {
+		uMock := &mockUserService{
+			existingUser: &user.User{
+				ID:                    "u-fresh",
+				PrimaryMembershipID:   "4611686018499886480",
+				Memberships:           []user.Membership{{ID: "4611686018499886480", Type: 3}},
+				Characters:            []api.Character{{Id: "char-existing", Class: "Hunter", Light: 2010}},
+				LastUpdatedCharacters: time.Now().Add(-2 * time.Hour),
+			},
+		}
+		d2Mock := &mockD2Service{}
+		server := Server{UserService: uMock, D2Service: d2Mock}
+
+		_, err := server.GetUser(context.Background(), api.GetUserRequestObject{UserID: "u-fresh"})
+		if err != nil {
+			t.Fatalf("expected GetUser to succeed, got %v", err)
+		}
+		time.Sleep(30 * time.Millisecond)
+		if uMock.updateCalls.Load() != 0 {
+			t.Fatalf("expected 0 background character updates within 6h TTL, got %d", uMock.updateCalls.Load())
+		}
+	})
+
+	t.Run("deduplicates concurrent in-flight background refreshes", func(t *testing.T) {
+		inFlightCharacterUpdates.Store("u-inflight", struct{}{})
+		defer inFlightCharacterUpdates.Delete("u-inflight")
+
+		uMock := &mockUserService{
+			existingUser: &user.User{
+				ID:                    "u-inflight",
+				PrimaryMembershipID:   "4611686018499886480",
+				Memberships:           []user.Membership{{ID: "4611686018499886480", Type: 3}},
+				Characters:            []api.Character{{Id: "char-existing", Class: "Warlock", Light: 2010}},
+				LastUpdatedCharacters: time.Now().Add(-12 * time.Hour),
+			},
+		}
+		d2Mock := &mockD2Service{}
+		server := Server{UserService: uMock, D2Service: d2Mock}
+
+		_, err := server.GetUser(context.Background(), api.GetUserRequestObject{UserID: "u-inflight"})
+		if err != nil {
+			t.Fatalf("expected GetUser to succeed, got %v", err)
+		}
+		time.Sleep(30 * time.Millisecond)
+		if uMock.updateCalls.Load() != 0 {
+			t.Fatalf("expected in-flight guard to suppress duplicate background update, got %d calls", uMock.updateCalls.Load())
+		}
+	})
+}
+
+func TestGetSessionAggregatesEmptySession(t *testing.T) {
+	server := Server{
+		SessionService: &mockSessionGetService{
+			ses: &api.Session{
+				ID:           "ses-empty",
+				CharacterID:  "char-1",
+				AggregateIDs: nil,
+			},
+		},
+	}
+
+	resp, err := server.GetSessionAggregates(context.Background(), api.GetSessionAggregatesRequestObject{
+		SessionId: "ses-empty",
+	})
+	if err != nil {
+		t.Fatalf("expected nil error for session with no aggregates, got %v", err)
+	}
+	okResp, ok := resp.(api.GetSessionAggregates200JSONResponse)
+	if !ok {
+		t.Fatalf("expected GetSessionAggregates200JSONResponse, got %T", resp)
+	}
+	if len(okResp.Aggregates) != 0 || len(okResp.Snapshots) != 0 {
+		t.Fatalf("expected empty aggregates and snapshots, got %+v", okResp)
+	}
+}

@@ -59,7 +59,9 @@ func main() {
 		return
 	}
 
-	manifestService := destiny.NewManifestService(firestore, string(env.Environment))
+	manifestService := destiny.NewCachedManifestService(
+		destiny.NewManifestService(firestore, string(env.Environment)),
+	)
 
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
