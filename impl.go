@@ -13,6 +13,7 @@ import (
 	"oneTrick/services/user"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	clog "github.com/Shannor/canonical-logger"
@@ -275,43 +276,33 @@ func (s Server) GetUserSessions(ctx context.Context, request api.GetUserSessions
 	return api.GetUserSessions200JSONResponse(result), nil
 }
 
+const CharacterRefreshTTL = 6 * time.Hour
+
+var inFlightCharacterUpdates sync.Map
+
+func resolvePrimaryMembership(u *user.User) (int64, int64, error) {
+	t := int64(0)
+	for _, membership := range u.Memberships {
+		if membership.ID == u.PrimaryMembershipID {
+			t = membership.Type
+			break
+		}
+	}
+	if t == 0 && len(u.Memberships) > 0 {
+		t = u.Memberships[0].Type
+	}
+	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse primary membership id: %w", err)
+	}
+	return pmId, t, nil
+}
+
 func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (api.GetUserResponseObject, error) {
 	clog.WithGroupField(ctx, "request", "userId", request.UserID)
 	u, err := s.UserService.GetUser(ctx, request.UserID)
 	if err != nil {
 		return nil, err
-	}
-	if u.LastUpdatedCharacters.Add(time.Hour).Before(time.Now()) {
-		clog.Go(ctx, "update-user-characters-bg", func(bgCtx context.Context) error {
-			clog.WithGroupFields(bgCtx, "request", clog.Fields{
-				"userId":              u.ID,
-				"primaryMembershipId": u.PrimaryMembershipID,
-			})
-			t := int64(0)
-			for _, membership := range u.Memberships {
-				if membership.ID == u.PrimaryMembershipID {
-					t = membership.Type
-					break
-				}
-			}
-			if t == 0 && len(u.Memberships) > 0 {
-				t = u.Memberships[0].Type
-			}
-			pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse primary membership id: %w", err)
-			}
-
-			characters, err := s.D2Service.GetCharacters(bgCtx, pmId, t)
-			if err != nil {
-				return err
-			}
-			if len(characters) == 0 {
-				clog.WithGroupField(bgCtx, "request", "warning", "no characters found for user")
-				return nil
-			}
-			return s.UserService.UpdateCharacters(bgCtx, u.ID, characters)
-		})
 	}
 
 	result := api.GetUser200JSONResponse{
@@ -323,25 +314,47 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 	}
 
 	if len(result.Characters) == 0 {
-		t := int64(0)
-		for _, membership := range u.Memberships {
-			if membership.ID == u.PrimaryMembershipID {
-				t = membership.Type
-				break
-			}
-		}
-		if t == 0 && len(u.Memberships) > 0 {
-			t = u.Memberships[0].Type
-		}
-		pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+		pmId, t, err := resolvePrimaryMembership(u)
 		if err != nil {
 			return result, err
 		}
 		characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+		if err != nil {
+			return result, err
+		}
 		if len(characters) > 0 {
-			result.Characters = u.Characters
+			result.Characters = characters
+			_ = s.UserService.UpdateCharacters(ctx, u.ID, characters)
+		}
+		return result, nil
+	}
+
+	if u.LastUpdatedCharacters.Add(CharacterRefreshTTL).Before(time.Now()) {
+		if _, loaded := inFlightCharacterUpdates.LoadOrStore(u.ID, struct{}{}); !loaded {
+			clog.Go(ctx, "update-user-characters-bg", func(bgCtx context.Context) error {
+				defer inFlightCharacterUpdates.Delete(u.ID)
+				clog.WithGroupFields(bgCtx, "request", clog.Fields{
+					"userId":              u.ID,
+					"primaryMembershipId": u.PrimaryMembershipID,
+				})
+				pmId, t, err := resolvePrimaryMembership(u)
+				if err != nil {
+					return err
+				}
+
+				characters, err := s.D2Service.GetCharacters(bgCtx, pmId, t)
+				if err != nil {
+					return err
+				}
+				if len(characters) == 0 {
+					clog.WithGroupField(bgCtx, "request", "warning", "no characters found for user")
+					return nil
+				}
+				return s.UserService.UpdateCharacters(bgCtx, u.ID, characters)
+			})
 		}
 	}
+
 	return result, nil
 }
 
@@ -525,7 +538,10 @@ func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSession
 		return nil, err
 	}
 	if len(ses.AggregateIDs) == 0 {
-		return nil, fmt.Errorf("no aggregate found")
+		return api.GetSessionAggregates200JSONResponse{
+			Aggregates: []api.Aggregate{},
+			Snapshots:  map[string]api.CharacterSnapshot{},
+		}, nil
 	}
 	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
 	if err != nil {

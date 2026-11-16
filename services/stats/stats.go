@@ -675,7 +675,8 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 	}
 
 	if len(ids) == 0 {
-		return nil, nil, nil, fmt.Errorf("no loadouts found")
+		clog.WithGroupField(ctx, "statsService.getBestPerformingLoadouts", "returnedCount", 0)
+		return []api.CharacterSnapshot{}, finalPlayerStats, finalCount, nil
 	}
 	loadouts, err := s.snapshotService.GetByIDs(ctx, ids)
 	if err != nil {

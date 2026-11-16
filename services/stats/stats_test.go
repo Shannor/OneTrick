@@ -651,3 +651,15 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 		}
 	}
 }
+
+func TestGetBestPerformingLoadoutsEmpty(t *testing.T) {
+	s := &service{}
+	loadouts, perfStats, counts, err := s.GetBestPerformingLoadouts(context.Background(), nil, "char-1", 3, 10)
+	if err != nil {
+		t.Fatalf("expected nil error when no loadouts found, got %v", err)
+	}
+	if len(loadouts) != 0 || len(perfStats) != 0 || len(counts) != 0 {
+		t.Fatalf("expected empty loadouts/stats/counts, got loadouts=%v stats=%v counts=%v", loadouts, perfStats, counts)
+	}
+}
+
