@@ -7,7 +7,6 @@ import (
 	"oneTrick/ptr"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
-	"oneTrick/validator"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -129,14 +128,12 @@ func (f *fakeSessionUserService) GetUser(_ context.Context, _ string) (*user.Use
 
 type fakeSessionD2Service struct {
 	destiny.Service
-	snapshots     []*api.CompRankSnapshot
-	calls         atomic.Int32
-	capturedToken *string
+	snapshots []*api.CompRankSnapshot
+	calls     atomic.Int32
 }
 
-func (f *fakeSessionD2Service) GetCompetitiveRank(_ context.Context, _ int64, _ int64, _ string, accessToken *string) (*api.CompRankSnapshot, error) {
+func (f *fakeSessionD2Service) GetCompetitiveRank(_ context.Context, _ int64, _ int64, _ string) (*api.CompRankSnapshot, error) {
 	idx := int(f.calls.Add(1)) - 1
-	f.capturedToken = accessToken
 	if idx < len(f.snapshots) {
 		return f.snapshots[idx], nil
 	}
@@ -262,16 +259,13 @@ func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testin
 		d2Service:   d2Svc,
 	}
 
-	ctx := validator.WithAccess(context.Background(), "bearer-tok-abc")
+	ctx := context.Background()
 	audit := api.AuditField{ID: "user-1", Username: "Zone 6 Weegee"}
 
 	// 1. Start session with trackComp = true
 	started, err := svc.Start(ctx, "user-1", "char-1", audit, true)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
-	}
-	if d2Svc.capturedToken == nil || *d2Svc.capturedToken != "bearer-tok-abc" {
-		t.Fatalf("expected bearer token 'bearer-tok-abc' forwarded to GetCompetitiveRank, got %v", d2Svc.capturedToken)
 	}
 	if started.CompTracking == nil || !started.CompTracking.Enabled || started.CompTracking.Start == nil {
 		t.Fatalf("expected CompTracking.Start populated, got %+v", started.CompTracking)
@@ -322,7 +316,7 @@ func TestSessionService_StartWithoutCompTrackingSkipsBungieCall(t *testing.T) {
 		d2Service: d2Svc,
 	}
 
-	started, err := svc.Start(context.Background(), "user-1", "char-1", api.AuditField{ID: "user-1", Username: "Guardian"})
+	started, err := svc.Start(context.Background(), "user-1", "char-1", api.AuditField{ID: "user-1", Username: "Guardian"}, false)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -341,4 +335,3 @@ func TestSessionService_StartWithoutCompTrackingSkipsBungieCall(t *testing.T) {
 		t.Fatal("expected FinalizeCompTracking to skip session without compTracking")
 	}
 }
-

@@ -10,7 +10,6 @@ import (
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
-	"oneTrick/validator"
 	"slices"
 	"strconv"
 	"time"
@@ -20,7 +19,7 @@ import (
 )
 
 type Service interface {
-	Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp ...bool) (*api.Session, error)
+	Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error)
 	Update(ctx context.Context, sessionID string, name, description string) error
 	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 	Get(ctx context.Context, ID string) (*api.Session, error)
@@ -80,20 +79,12 @@ func resolvePrimaryMembership(u *user.User) (int64, int64, error) {
 	return pmID, t, nil
 }
 
-func extractAccessToken(ctx context.Context) *string {
-	if access, ok := validator.FromContext(ctx); ok && access != nil && access.AccessToken != "" {
-		return &access.AccessToken
-	}
-	return nil
-}
-
-func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp ...bool) (*api.Session, error) {
-	shouldTrackComp := len(trackComp) > 0 && trackComp[0]
+func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
 	clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
 		"userId":      userID,
 		"characterId": characterID,
 		"startedById": startedBy.ID,
-		"trackComp":   shouldTrackComp,
+		"trackComp":   trackComp,
 	})
 	if ok, err := s.HasActive(ctx, userID, characterID); ok || err != nil {
 		return nil, fmt.Errorf("session already active")
@@ -108,22 +99,31 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 		StartedBy:    &startedBy,
 	}
 
-	if shouldTrackComp {
+	if trackComp {
 		compTracking := &api.CompTracking{
 			Enabled: true,
 		}
 		if s.userService != nil && s.d2Service != nil {
 			u, err := s.userService.GetUser(ctx, userID)
 			if err != nil {
-				clog.WithGroupField(ctx, "sessionService.start", "warning", "failed to fetch user for competitive tracking")
+				clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
+					"warning":       "failed to fetch user for competitive tracking",
+					"compRankError": err.Error(),
+				})
 			} else {
 				pmID, membershipType, err := resolvePrimaryMembership(u)
 				if err != nil {
-					clog.WithGroupField(ctx, "sessionService.start", "warning", "failed to resolve primary membership for competitive tracking")
+					clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
+						"warning":       "failed to resolve primary membership for competitive tracking",
+						"compRankError": err.Error(),
+					})
 				} else {
-					snap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, characterID, extractAccessToken(ctx))
+					snap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, characterID)
 					if err != nil {
-						clog.WithGroupField(ctx, "sessionService.start", "warning", "failed to fetch starting competitive rank")
+						clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
+							"warning":       "failed to fetch starting competitive rank",
+							"compRankError": err.Error(),
+						})
 					} else {
 						compTracking.Start = snap
 					}
@@ -279,7 +279,10 @@ func (s service) Complete(ctx context.Context, ID string) error {
 
 	if session.CompTracking != nil && session.CompTracking.Enabled && session.CompTracking.End == nil {
 		if _, err := s.FinalizeCompTracking(ctx, ID); err != nil {
-			clog.WithGroupField(ctx, "sessionService.complete", "warning", "failed to finalize competitive rank")
+			clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+				"warning":       "failed to finalize competitive rank",
+				"compRankError": err.Error(),
+			})
 		}
 	}
 
@@ -311,7 +314,7 @@ func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) (bo
 		return false, err
 	}
 
-	endSnap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, ses.CharacterID, extractAccessToken(ctx))
+	endSnap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, ses.CharacterID)
 	if err != nil {
 		return false, fmt.Errorf("failed to fetch ending competitive rank: %w", err)
 	}

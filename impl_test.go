@@ -576,19 +576,28 @@ func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
 			label    string
 		}{
 			{
-				err:      fmt.Errorf("%w: incompatible subclass", snapshot.InvalidMerge),
-				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots400JSONResponse); return ok },
-				label:    "400",
+				err: fmt.Errorf("%w: incompatible subclass", snapshot.InvalidMerge),
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool {
+					_, ok := r.(api.MergeSnapshots400JSONResponse)
+					return ok
+				},
+				label: "400",
 			},
 			{
-				err:      snapshot.Unauthorized,
-				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots401JSONResponse); return ok },
-				label:    "401",
+				err: snapshot.Unauthorized,
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool {
+					_, ok := r.(api.MergeSnapshots401JSONResponse)
+					return ok
+				},
+				label: "401",
 			},
 			{
-				err:      snapshot.NotFound,
-				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots404JSONResponse); return ok },
-				label:    "404",
+				err: snapshot.NotFound,
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool {
+					_, ok := r.(api.MergeSnapshots404JSONResponse)
+					return ok
+				},
+				label: "404",
 			},
 		}
 
@@ -882,8 +891,8 @@ type mockCompSessionService struct {
 	}
 }
 
-func (m *mockCompSessionService) Start(_ context.Context, userID string, characterID string, startedBy api.AuditField, trackComp ...bool) (*api.Session, error) {
-	m.capturedTrackComp = len(trackComp) > 0 && trackComp[0]
+func (m *mockCompSessionService) Start(_ context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
+	m.capturedTrackComp = trackComp
 	if m.startedSession != nil {
 		return m.startedSession, nil
 	}
@@ -1046,4 +1055,3 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		}
 	})
 }
-

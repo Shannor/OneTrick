@@ -112,7 +112,7 @@ func CompDivisionForPoints(points int, progDef *ProgressionDefinition) (string, 
 		if points >= t.minPoints {
 			if progDef != nil && t.stepIndex >= 0 && t.stepIndex < len(progDef.Steps) {
 				step := progDef.Steps[t.stepIndex]
-				if step.StepName != "" {
+				if step.StepName != "" && step.StepName != "PROMOTION" && step.StepName != "RELEGATION" {
 					icon := step.Icon
 					if icon == "" {
 						icon = t.icon
@@ -215,7 +215,7 @@ func ExtractCompetitiveRank(
 	return nil, "", fmt.Errorf("competitive rank data not available")
 }
 
-func (a *service) GetCompetitiveRank(ctx context.Context, membershipID int64, membershipType int64, characterID string, accessToken *string) (*api.CompRankSnapshot, error) {
+func (a *service) GetCompetitiveRank(ctx context.Context, membershipID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error) {
 	clog.WithGroupFields(ctx, "destinyService.getCompetitiveRank", clog.Fields{
 		"membershipId":   membershipID,
 		"membershipType": membershipType,
@@ -227,16 +227,7 @@ func (a *service) GetCompetitiveRank(ctx context.Context, membershipID int64, me
 		Components: &components,
 	}
 
-	var reqEditors []bungie.RequestEditorFn
-	if accessToken != nil && *accessToken != "" {
-		token := *accessToken
-		reqEditors = append(reqEditors, func(_ context.Context, req *http.Request) error {
-			req.Header.Set("Authorization", "Bearer "+token)
-			return nil
-		})
-	}
-
-	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params, reqEditors...)
+	resp, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params)
 	if err != nil {
 		return nil, err
 	}

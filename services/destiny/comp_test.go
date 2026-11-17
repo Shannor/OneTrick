@@ -15,26 +15,20 @@ type fakeBungieClient struct {
 	capturedMemType    int32
 	capturedMemID      int64
 	capturedComponents []int32
-	capturedAuthHeader string
 }
 
 func (f *fakeBungieClient) Destiny2GetProfileWithResponse(
-	ctx context.Context,
+	_ context.Context,
 	membershipType int32,
 	destinyMembershipId int64,
 	params *bungie.Destiny2GetProfileParams,
-	reqEditors ...bungie.RequestEditorFn,
+	_ ...bungie.RequestEditorFn,
 ) (*bungie.Destiny2GetProfileResponse, error) {
 	f.capturedMemType = membershipType
 	f.capturedMemID = destinyMembershipId
 	if params != nil && params.Components != nil {
 		f.capturedComponents = append([]int32(nil), (*params.Components)...)
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.bungie.net/Platform/Destiny2/Profile", nil)
-	for _, ed := range reqEditors {
-		_ = ed(ctx, req)
-	}
-	f.capturedAuthHeader = req.Header.Get("Authorization")
 	return f.profileResp, f.profileErr
 }
 
@@ -74,13 +68,9 @@ func TestGetCompetitiveRank_ProgressionPrimaryPath(t *testing.T) {
 		ManifestService: NewManifestService(nil, "dev"),
 	}
 
-	token := "user-oauth-token-123"
-	snap, err := svc.GetCompetitiveRank(context.Background(), 4611686018467484863, 3, charID, &token)
+	snap, err := svc.GetCompetitiveRank(context.Background(), 4611686018467484863, 3, charID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if fakeClient.capturedAuthHeader != "Bearer user-oauth-token-123" {
-		t.Fatalf("expected Authorization header 'Bearer user-oauth-token-123', got %q", fakeClient.capturedAuthHeader)
 	}
 	if len(fakeClient.capturedComponents) != 2 || fakeClient.capturedComponents[0] != CharacterProgressionsCode || fakeClient.capturedComponents[1] != MetricsCode {
 		t.Fatalf("expected components [202, 1100], got %v", fakeClient.capturedComponents)
@@ -133,12 +123,9 @@ func TestGetCompetitiveRank_PrivacyRestrictedMetricFallback(t *testing.T) {
 		ManifestService: NewManifestService(nil, "dev"),
 	}
 
-	snap, err := svc.GetCompetitiveRank(context.Background(), 4611686018467484863, 3, charID, nil)
+	snap, err := svc.GetCompetitiveRank(context.Background(), 4611686018467484863, 3, charID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if fakeClient.capturedAuthHeader != "" {
-		t.Fatalf("expected empty Authorization header when token is nil, got %q", fakeClient.capturedAuthHeader)
 	}
 	if snap.Points != 7800 {
 		t.Fatalf("expected Points=7800, got %d", snap.Points)
@@ -151,6 +138,17 @@ func TestGetCompetitiveRank_PrivacyRestrictedMetricFallback(t *testing.T) {
 	}
 	if snap.Icon == nil || *snap.Icon != compIconAdept {
 		t.Fatalf("expected Icon=%q, got %v", compIconAdept, snap.Icon)
+	}
+}
+
+func TestCompDivisionForPoints_IgnoresShiftedPromotionAndRelegationSteps(t *testing.T) {
+	shiftedDef := DefaultCompProgressionDefinition()
+	// Simulate a future manifest layout shift where stepIndex 21 points to PROMOTION
+	shiftedDef.Steps[21] = ProgressionStepDefinition{StepName: "PROMOTION", Icon: compIconGold}
+
+	div, icon := CompDivisionForPoints(5820, shiftedDef)
+	if div != "Platinum III" || icon != compIconPlatinum {
+		t.Fatalf("expected fallback to 'Platinum III' (%q) when manifest stepIndex is PROMOTION, got %q (%q)", compIconPlatinum, div, icon)
 	}
 }
 
@@ -218,7 +216,7 @@ func TestGetCompetitiveRank_UntestedAndPromotionAndAscendantZeroSteps(t *testing
 				ManifestService: NewManifestService(nil, "dev"),
 			}
 
-			snap, err := svc.GetCompetitiveRank(context.Background(), 12345, 3, charID, nil)
+			snap, err := svc.GetCompetitiveRank(context.Background(), 12345, 3, charID)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

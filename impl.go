@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"oneTrick/api"
@@ -518,7 +519,8 @@ func (s Server) CompleteSession(ctx context.Context, request api.CompleteSession
 }
 
 func (s Server) FinalizeSessionsComp(ctx context.Context, request api.FinalizeSessionsCompRequestObject) (api.FinalizeSessionsCompResponseObject, error) {
-	if request.Params.XInternalAPIKey == nil || *request.Params.XInternalAPIKey == "" || s.InternalAPIKey == "" || *request.Params.XInternalAPIKey != s.InternalAPIKey {
+	if request.Params.XInternalAPIKey == nil || *request.Params.XInternalAPIKey == "" || s.InternalAPIKey == "" ||
+		subtle.ConstantTimeCompare([]byte(*request.Params.XInternalAPIKey), []byte(s.InternalAPIKey)) != 1 {
 		return api.FinalizeSessionsComp401JSONResponse{Message: "unauthorized"}, nil
 	}
 	if request.Body == nil {

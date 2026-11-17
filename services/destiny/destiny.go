@@ -30,7 +30,7 @@ type Service interface {
 	GetActivity(ctx context.Context, activityID string) (*bungie.PostGameCarnageReportData, []api.Team, error)
 	GetPerformances(ctx context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error)
 	GetEnrichedActivity(ctx context.Context, activityID string, characterIDs []string) (*EnrichedActivity, error)
-	GetCompetitiveRank(ctx context.Context, membershipID int64, membershipType int64, characterID string, accessToken *string) (*api.CompRankSnapshot, error)
+	GetCompetitiveRank(ctx context.Context, membershipID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
 	Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error)
 }
 
