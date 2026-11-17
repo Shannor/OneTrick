@@ -119,11 +119,11 @@ type fakeSessionUserService struct {
 	u *user.User
 }
 
-func (f *fakeSessionUserService) GetUser(_ context.Context, _ string) (*user.User, error) {
+func (f *fakeSessionUserService) GetPrimaryMembership(_ context.Context, _ string) (int64, int64, error) {
 	if f.u == nil {
-		return nil, user.NotFound
+		return 0, 0, user.NotFound
 	}
-	return f.u, nil
+	return f.u.PrimaryMembership()
 }
 
 type fakeSessionD2Service struct {
@@ -296,12 +296,8 @@ func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testin
 	}
 
 	// 3. Calling FinalizeCompTracking again is idempotent (skipped, no extra Bungie call)
-	updated, err := svc.FinalizeCompTracking(context.Background(), started.ID)
-	if err != nil {
+	if err := svc.FinalizeCompTracking(context.Background(), started.ID); err != nil {
 		t.Fatalf("FinalizeCompTracking failed: %v", err)
-	}
-	if updated {
-		t.Fatal("expected FinalizeCompTracking to return updated=false when already finalized")
 	}
 	if d2Svc.calls.Load() != 2 {
 		t.Fatalf("expected no additional GetCompetitiveRank calls on idempotent finalize, got %d", d2Svc.calls.Load())
@@ -327,11 +323,10 @@ func TestSessionService_StartWithoutCompTrackingSkipsBungieCall(t *testing.T) {
 		t.Fatalf("expected 0 GetCompetitiveRank calls when trackComp is false, got %d", d2Svc.calls.Load())
 	}
 
-	updated, err := svc.FinalizeCompTracking(context.Background(), started.ID)
-	if err != nil {
+	if err := svc.FinalizeCompTracking(context.Background(), started.ID); err != nil {
 		t.Fatalf("FinalizeCompTracking failed: %v", err)
 	}
-	if updated {
-		t.Fatal("expected FinalizeCompTracking to skip session without compTracking")
+	if d2Svc.calls.Load() != 0 {
+		t.Fatalf("expected 0 GetCompetitiveRank calls when finalizing session without compTracking, got %d", d2Svc.calls.Load())
 	}
 }

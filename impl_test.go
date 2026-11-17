@@ -885,10 +885,8 @@ type mockCompSessionService struct {
 	session.Service
 	capturedTrackComp bool
 	startedSession    *api.Session
-	finalizeResults   map[string]struct {
-		updated bool
-		err     error
-	}
+	finalizeErrors    map[string]error
+	finalizedIDs      []string
 }
 
 func (m *mockCompSessionService) Start(_ context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
@@ -906,11 +904,12 @@ func (m *mockCompSessionService) Start(_ context.Context, userID string, charact
 	}, nil
 }
 
-func (m *mockCompSessionService) FinalizeCompTracking(_ context.Context, sessionID string) (bool, error) {
-	if res, ok := m.finalizeResults[sessionID]; ok {
-		return res.updated, res.err
+func (m *mockCompSessionService) FinalizeCompTracking(_ context.Context, sessionID string) error {
+	m.finalizedIDs = append(m.finalizedIDs, sessionID)
+	if err, ok := m.finalizeErrors[sessionID]; ok {
+		return err
 	}
-	return false, nil
+	return nil
 }
 
 func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
@@ -984,7 +983,7 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		}
 	})
 
-	t.Run("POST /internal/sessions/finalize-comp enforces X-Internal-API-Key and returns batch rollup counts", func(t *testing.T) {
+	t.Run("POST /internal/sessions/finalize-comp enforces X-Internal-API-Key and returns 204", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
 		swagger, err := api.GetSwagger()
 		if err != nil {
@@ -993,13 +992,8 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		swagger.Servers = nil
 
 		sesMock := &mockCompSessionService{
-			finalizeResults: map[string]struct {
-				updated bool
-				err     error
-			}{
-				"ses-updated": {updated: true, err: nil},
-				"ses-skipped": {updated: false, err: nil},
-				"ses-failed":  {updated: false, err: fmt.Errorf("bungie timeout")},
+			finalizeErrors: map[string]error{
+				"ses-failed": fmt.Errorf("bungie timeout"),
 			},
 		}
 		server := Server{
@@ -1041,17 +1035,17 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 			t.Fatalf("expected 401 when X-Internal-API-Key is invalid, got %d: %s", wBadKey.Code, wBadKey.Body.String())
 		}
 
-		// Valid key -> 200 with updated=1, skipped=1, failed=1
-		reqOK := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","ses-skipped","ses-failed"]}`))
+		// Valid key -> 204 No Content even when individual iterations fail (partial failures captured in clog.LoopRollup)
+		reqOK := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","","ses-skipped","ses-failed"]}`))
 		reqOK.Header.Set("Content-Type", "application/json")
 		reqOK.Header.Set("X-Internal-API-Key", "secret-internal-key")
 		wOK := httptest.NewRecorder()
 		r.ServeHTTP(wOK, reqOK)
-		if wOK.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK, got %d: %s", wOK.Code, wOK.Body.String())
+		if wOK.Code != http.StatusNoContent {
+			t.Fatalf("expected 204 No Content, got %d: %s", wOK.Code, wOK.Body.String())
 		}
-		if !strings.Contains(wOK.Body.String(), `"updated":1`) || !strings.Contains(wOK.Body.String(), `"skipped":1`) || !strings.Contains(wOK.Body.String(), `"failed":1`) {
-			t.Fatalf("expected rollup counts {updated:1, skipped:1, failed:1}, got %s", wOK.Body.String())
+		if len(sesMock.finalizedIDs) != 3 {
+			t.Fatalf("expected 3 non-empty session IDs forwarded to FinalizeCompTracking, got %v", sesMock.finalizedIDs)
 		}
 	})
 }

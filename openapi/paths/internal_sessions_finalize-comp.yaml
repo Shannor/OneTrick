@@ -23,26 +23,8 @@ post:
               items:
                 type: string
   responses:
-    "200":
-      description: Summary of finalized Competitive tracking sessions
-      content:
-        application/json:
-          schema:
-            type: object
-            required:
-              - updated
-              - skipped
-              - failed
-            properties:
-              updated:
-                type: integer
-                format: int32
-              skipped:
-                type: integer
-                format: int32
-              failed:
-                type: integer
-                format: int32
+    "204":
+      description: Competitive session tracking finalized
     "400":
       description: Invalid request body
       content:

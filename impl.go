@@ -284,24 +284,6 @@ const CharacterRefreshTTL = 6 * time.Hour
 
 var inFlightCharacterUpdates sync.Map
 
-func resolvePrimaryMembership(u *user.User) (int64, int64, error) {
-	t := int64(0)
-	for _, membership := range u.Memberships {
-		if membership.ID == u.PrimaryMembershipID {
-			t = membership.Type
-			break
-		}
-	}
-	if t == 0 && len(u.Memberships) > 0 {
-		t = u.Memberships[0].Type
-	}
-	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to parse primary membership id: %w", err)
-	}
-	return pmId, t, nil
-}
-
 func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (api.GetUserResponseObject, error) {
 	clog.WithGroupField(ctx, "request", "userId", request.UserID)
 	u, err := s.UserService.GetUser(ctx, request.UserID)
@@ -318,7 +300,7 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 	}
 
 	if len(result.Characters) == 0 {
-		pmId, t, err := resolvePrimaryMembership(u)
+		pmId, t, err := u.PrimaryMembership()
 		if err != nil {
 			return result, err
 		}
@@ -341,7 +323,7 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 					"userId":              u.ID,
 					"primaryMembershipId": u.PrimaryMembershipID,
 				})
-				pmId, t, err := resolvePrimaryMembership(u)
+				pmId, t, err := u.PrimaryMembership()
 				if err != nil {
 					return err
 				}
@@ -527,43 +509,14 @@ func (s Server) FinalizeSessionsComp(ctx context.Context, request api.FinalizeSe
 		return api.FinalizeSessionsComp400JSONResponse{Message: "body cannot be empty"}, nil
 	}
 
-	sessionIDs := request.Body.SessionIDs
-	clog.WithGroupField(ctx, "request", "sessionCount", len(sessionIDs))
-
-	var updated int32
-	var skipped int32
-	var failed int32
-
-	_ = clog.LoopRollup(ctx, "sessionService.finalizeCompBatch", sessionIDs, func(iterCtx context.Context, _ int, sessionID string) error {
-		clog.WithGroupField(iterCtx, "session", "sessionId", sessionID)
+	_ = clog.LoopRollup(ctx, "sessionService.finalizeCompBatch", request.Body.SessionIDs, func(iterCtx context.Context, _ int, sessionID string) error {
 		if sessionID == "" {
-			skipped++
 			return nil
 		}
-		didUpdate, err := s.SessionService.FinalizeCompTracking(iterCtx, sessionID)
-		if err != nil {
-			failed++
-			return err
-		}
-		if didUpdate {
-			updated++
-		} else {
-			skipped++
-		}
-		return nil
+		return s.SessionService.FinalizeCompTracking(iterCtx, sessionID)
 	})
 
-	clog.WithGroupFields(ctx, "request", clog.Fields{
-		"updated": updated,
-		"skipped": skipped,
-		"failed":  failed,
-	})
-
-	return api.FinalizeSessionsComp200JSONResponse{
-		Updated: updated,
-		Skipped: skipped,
-		Failed:  failed,
-	}, nil
+	return api.FinalizeSessionsComp204Response{}, nil
 }
 
 func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {

@@ -11,7 +11,6 @@ import (
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"slices"
-	"strconv"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -26,7 +25,7 @@ type Service interface {
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
 	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error)
 	Complete(ctx context.Context, ID string) error
-	FinalizeCompTracking(ctx context.Context, sessionID string) (bool, error)
+	FinalizeCompTracking(ctx context.Context, sessionID string) error
 	SetLastActivity(ctx context.Context, ID, activityID string) error
 	Delete(ctx context.Context, sessionID string, userID string) error
 }
@@ -58,27 +57,6 @@ const (
 	collection = "sessions"
 )
 
-func resolvePrimaryMembership(u *user.User) (int64, int64, error) {
-	if u == nil {
-		return 0, 0, fmt.Errorf("user is nil")
-	}
-	t := int64(0)
-	for _, membership := range u.Memberships {
-		if membership.ID == u.PrimaryMembershipID {
-			t = membership.Type
-			break
-		}
-	}
-	if t == 0 && len(u.Memberships) > 0 {
-		t = u.Memberships[0].Type
-	}
-	pmID, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to parse primary membership id: %w", err)
-	}
-	return pmID, t, nil
-}
-
 func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
 	clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
 		"userId":      userID,
@@ -104,29 +82,21 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 			Enabled: true,
 		}
 		if s.userService != nil && s.d2Service != nil {
-			u, err := s.userService.GetUser(ctx, userID)
+			pmID, membershipType, err := s.userService.GetPrimaryMembership(ctx, userID)
 			if err != nil {
 				clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
-					"warning":       "failed to fetch user for competitive tracking",
+					"warning":       "failed to resolve primary membership for competitive tracking",
 					"compRankError": err.Error(),
 				})
 			} else {
-				pmID, membershipType, err := resolvePrimaryMembership(u)
+				snap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, characterID)
 				if err != nil {
 					clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
-						"warning":       "failed to resolve primary membership for competitive tracking",
+						"warning":       "failed to fetch starting competitive rank",
 						"compRankError": err.Error(),
 					})
 				} else {
-					snap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, characterID)
-					if err != nil {
-						clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
-							"warning":       "failed to fetch starting competitive rank",
-							"compRankError": err.Error(),
-						})
-					} else {
-						compTracking.Start = snap
-					}
+					compTracking.Start = snap
 				}
 			}
 		}
@@ -278,7 +248,7 @@ func (s service) Complete(ctx context.Context, ID string) error {
 	}
 
 	if session.CompTracking != nil && session.CompTracking.Enabled && session.CompTracking.End == nil {
-		if _, err := s.FinalizeCompTracking(ctx, ID); err != nil {
+		if err := s.FinalizeCompTracking(ctx, ID); err != nil {
 			clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
 				"warning":       "failed to finalize competitive rank",
 				"compRankError": err.Error(),
@@ -289,34 +259,31 @@ func (s service) Complete(ctx context.Context, ID string) error {
 	return nil
 }
 
-func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) (bool, error) {
+func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) error {
 	clog.WithGroupField(ctx, "sessionService.finalizeCompTracking", "sessionId", sessionID)
 	ses, err := s.store.getDoc(ctx, sessionID)
 	if err != nil {
-		return false, fmt.Errorf("failed to get session: %w", err)
+		return fmt.Errorf("failed to get session: %w", err)
 	}
+	clog.WithGroupField(ctx, "sessionService.finalizeCompTracking", "userId", ses.UserID)
 
 	if ses.CompTracking == nil || !ses.CompTracking.Enabled || ses.CompTracking.End != nil {
 		clog.WithGroupField(ctx, "sessionService.finalizeCompTracking", "skipped", true)
-		return false, nil
+		return nil
 	}
 
 	if s.userService == nil || s.d2Service == nil {
-		return false, fmt.Errorf("competitive rank services not configured")
+		return fmt.Errorf("competitive rank services not configured")
 	}
 
-	u, err := s.userService.GetUser(ctx, ses.UserID)
+	pmID, membershipType, err := s.userService.GetPrimaryMembership(ctx, ses.UserID)
 	if err != nil {
-		return false, fmt.Errorf("failed to fetch user: %w", err)
-	}
-	pmID, membershipType, err := resolvePrimaryMembership(u)
-	if err != nil {
-		return false, err
+		return err
 	}
 
 	endSnap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, ses.CharacterID)
 	if err != nil {
-		return false, fmt.Errorf("failed to fetch ending competitive rank: %w", err)
+		return fmt.Errorf("failed to fetch ending competitive rank: %w", err)
 	}
 
 	var pointDelta *int
@@ -326,7 +293,7 @@ func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) (bo
 	}
 
 	if err := s.store.updateCompTrackingEnd(ctx, sessionID, endSnap, pointDelta); err != nil {
-		return false, fmt.Errorf("failed to persist competitive rank end: %w", err)
+		return fmt.Errorf("failed to persist competitive rank end: %w", err)
 	}
 
 	fields := clog.Fields{
@@ -337,7 +304,7 @@ func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) (bo
 		fields["pointDelta"] = *pointDelta
 	}
 	clog.WithGroupFields(ctx, "sessionService.finalizeCompTracking", fields)
-	return true, nil
+	return nil
 }
 
 func (s service) SetLastActivity(ctx context.Context, ID, activityID string) error {
