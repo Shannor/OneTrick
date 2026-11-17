@@ -15,6 +15,7 @@ type spyManifestService struct {
 	itemCalls         atomic.Int32
 	activityCalls     atomic.Int32
 	activityModeCalls atomic.Int32
+	progressionCalls  atomic.Int32
 }
 
 func (s *spyManifestService) GetClasses(_ context.Context) (map[string]ClassDefinition, error) {
@@ -50,6 +51,11 @@ func (s *spyManifestService) GetActivity(_ context.Context, hash int64) (*Activi
 func (s *spyManifestService) GetActivityMode(_ context.Context, hash int64) (*ActivityModeDefinition, error) {
 	s.activityModeCalls.Add(1)
 	return &ActivityModeDefinition{Hash: hash}, nil
+}
+
+func (s *spyManifestService) GetProgression(_ context.Context, hash int64) (*ProgressionDefinition, error) {
+	s.progressionCalls.Add(1)
+	return &ProgressionDefinition{Hash: hash, Steps: DefaultCompProgressionDefinition().Steps}, nil
 }
 
 func TestCachedManifestServiceWrapper(t *testing.T) {
@@ -89,6 +95,10 @@ func TestCachedManifestServiceWrapper(t *testing.T) {
 		if err != nil || act == nil || act.Hash != 2002 {
 			t.Fatalf("expected activity 2002, got %+v err=%v", act, err)
 		}
+		prog, err := svc.GetProgression(ctx, CompProgressionHashInt64)
+		if err != nil || prog == nil || prog.Hash != CompProgressionHashInt64 {
+			t.Fatalf("expected progression %d, got %+v err=%v", CompProgressionHashInt64, prog, err)
+		}
 	}
 	if spy.recordCalls.Load() != 1 {
 		t.Fatalf("expected inner GetRecord called once for hash 3464275895, got %d", spy.recordCalls.Load())
@@ -98,6 +108,9 @@ func TestCachedManifestServiceWrapper(t *testing.T) {
 	}
 	if spy.activityCalls.Load() != 1 {
 		t.Fatalf("expected inner GetActivity called once for hash 2002, got %d", spy.activityCalls.Load())
+	}
+	if spy.progressionCalls.Load() != 1 {
+		t.Fatalf("expected inner GetProgression called once for hash %d, got %d", CompProgressionHashInt64, spy.progressionCalls.Load())
 	}
 
 	// 3. Once GetActivityModes is cached, GetActivityMode(84) resolves from the collection cache without calling inner GetActivityMode
@@ -112,3 +125,4 @@ func TestCachedManifestServiceWrapper(t *testing.T) {
 		t.Fatalf("expected GetActivityMode(84) to resolve from cached activityModes without calling inner GetActivityMode, got %d calls", spy.activityModeCalls.Load())
 	}
 }
+

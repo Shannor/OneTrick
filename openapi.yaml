@@ -243,6 +243,8 @@ paths:
                 userId:
                   type: string
                   x-go-name: userID
+                trackComp:
+                  type: boolean
       operationId: StartUserSession
       description: Create a new session
       responses:
@@ -855,6 +857,8 @@ paths:
                 userId:
                   type: string
                   x-go-name: userID
+                trackComp:
+                  type: boolean
       operationId: StartSession
       description: Create a new session
       responses:
@@ -1076,6 +1080,76 @@ paths:
                     type: object
                     additionalProperties:
                       $ref: '#/components/schemas/CharacterSnapshot'
+  /internal/sessions/finalize-comp:
+    post:
+      operationId: FinalizeSessionsComp
+      description: Finalize Competitive rank and score delta for one or more sessions
+      parameters:
+        - name: X-Internal-API-Key
+          in: header
+          required: false
+          x-go-name: XInternalAPIKey
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sessionIds
+              properties:
+                sessionIds:
+                  type: array
+                  x-go-name: sessionIDs
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Summary of finalized Competitive tracking sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - updated
+                  - skipped
+                  - failed
+                properties:
+                  updated:
+                    type: integer
+                    format: int32
+                  skipped:
+                    type: integer
+                    format: int32
+                  failed:
+                    type: integer
+                    format: int32
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '401':
+          description: Missing or invalid internal API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Error finalizing Competitive sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /metrics/best-performing-loadouts:
     get:
       operationId: GetBestPerformingLoadouts
@@ -1540,6 +1614,57 @@ components:
             $ref: '#/components/schemas/SessionWeaponSummary'
           x-oapi-codegen-extra-tags:
             firestore: topWeapons
+    CompRankSnapshot:
+      type: object
+      required:
+        - points
+      properties:
+        points:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: points
+        stepIndex:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: stepIndex
+        divisionName:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: divisionName
+        icon:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: icon
+        recordedAt:
+          type: string
+          format: date-time
+          x-oapi-codegen-extra-tags:
+            firestore: recordedAt
+    CompTracking:
+      x-oapi-codegen-extra-tags:
+        firestore: compTracking
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+          x-oapi-codegen-extra-tags:
+            firestore: enabled
+        start:
+          allOf:
+            - $ref: '#/components/schemas/CompRankSnapshot'
+          x-oapi-codegen-extra-tags:
+            firestore: start
+        end:
+          allOf:
+            - $ref: '#/components/schemas/CompRankSnapshot'
+          x-oapi-codegen-extra-tags:
+            firestore: end
+        pointDelta:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: pointDelta
     Session:
       x-oapi-codegen-extra-tags:
         firestore: session
@@ -1630,6 +1755,10 @@ components:
           $ref: '#/components/schemas/SessionSummary'
           x-oapi-codegen-extra-tags:
             firestore: summary
+        compTracking:
+          $ref: '#/components/schemas/CompTracking'
+          x-oapi-codegen-extra-tags:
+            firestore: compTracking
     GameMode:
       type: string
       enum:

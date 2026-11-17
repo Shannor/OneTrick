@@ -1,12 +1,150 @@
 package session
 
 import (
+	"context"
+	"fmt"
 	"oneTrick/api"
 	"oneTrick/ptr"
+	"oneTrick/services/destiny"
+	"oneTrick/services/user"
+	"oneTrick/validator"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"cloud.google.com/go/firestore"
 )
+
+type memorySessionStore struct {
+	docs map[string]*api.Session
+	seq  int
+}
+
+func newMemorySessionStore() *memorySessionStore {
+	return &memorySessionStore{
+		docs: make(map[string]*api.Session),
+	}
+}
+
+func (m *memorySessionStore) hasActive(_ context.Context, userID, characterID string) (bool, error) {
+	for _, s := range m.docs {
+		if s.UserID == userID && s.CharacterID == characterID && s.Status != nil && *s.Status == api.SessionPending {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *memorySessionStore) createDoc(_ context.Context, ses *api.Session) (*api.Session, error) {
+	m.seq++
+	ses.ID = fmt.Sprintf("ses-%d", m.seq)
+	cp := *ses
+	m.docs[ses.ID] = &cp
+	return &cp, nil
+}
+
+func (m *memorySessionStore) getActiveDoc(_ context.Context, userID, characterID string) (*api.Session, error) {
+	for _, s := range m.docs {
+		if s.UserID == userID && s.CharacterID == characterID && s.Status != nil && *s.Status == api.SessionPending {
+			cp := *s
+			return &cp, nil
+		}
+	}
+	return nil, fmt.Errorf("no active session found")
+}
+
+func (m *memorySessionStore) getDoc(_ context.Context, sessionID string) (*api.Session, error) {
+	s, ok := m.docs[sessionID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *s
+	if s.CompTracking != nil {
+		ctCopy := *s.CompTracking
+		cp.CompTracking = &ctCopy
+	}
+	return &cp, nil
+}
+
+func (m *memorySessionStore) listDocs(_ context.Context, _, _ *string, _ *api.SessionStatus) ([]api.Session, error) {
+	out := make([]api.Session, 0, len(m.docs))
+	for _, s := range m.docs {
+		out = append(out, *s)
+	}
+	return out, nil
+}
+
+func (m *memorySessionStore) updateFields(_ context.Context, _ string, _ []firestore.Update) error {
+	return nil
+}
+
+func (m *memorySessionStore) completeDoc(_ context.Context, sessionID string, completedAt time.Time) error {
+	s, ok := m.docs[sessionID]
+	if !ok {
+		return ErrNotFound
+	}
+	s.CompletedAt = &completedAt
+	s.Status = ptr.Of(api.SessionComplete)
+	return nil
+}
+
+func (m *memorySessionStore) updateCompTrackingEnd(_ context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error {
+	s, ok := m.docs[sessionID]
+	if !ok {
+		return ErrNotFound
+	}
+	if s.CompTracking == nil {
+		s.CompTracking = &api.CompTracking{Enabled: true}
+	}
+	s.CompTracking.End = end
+	s.CompTracking.PointDelta = pointDelta
+	return nil
+}
+
+func (m *memorySessionStore) setLastActivity(_ context.Context, _, _ string, _ time.Time) error {
+	return nil
+}
+
+func (m *memorySessionStore) deleteDoc(_ context.Context, sessionID string) error {
+	delete(m.docs, sessionID)
+	return nil
+}
+
+func (m *memorySessionStore) addAggregateIDs(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+
+type fakeSessionUserService struct {
+	user.Service
+	u *user.User
+}
+
+func (f *fakeSessionUserService) GetUser(_ context.Context, _ string) (*user.User, error) {
+	if f.u == nil {
+		return nil, user.NotFound
+	}
+	return f.u, nil
+}
+
+type fakeSessionD2Service struct {
+	destiny.Service
+	snapshots     []*api.CompRankSnapshot
+	calls         atomic.Int32
+	capturedToken *string
+}
+
+func (f *fakeSessionD2Service) GetCompetitiveRank(_ context.Context, _ int64, _ int64, _ string, accessToken *string) (*api.CompRankSnapshot, error) {
+	idx := int(f.calls.Add(1)) - 1
+	f.capturedToken = accessToken
+	if idx < len(f.snapshots) {
+		return f.snapshots[idx], nil
+	}
+	if len(f.snapshots) > 0 {
+		return f.snapshots[len(f.snapshots)-1], nil
+	}
+	return nil, fmt.Errorf("no snapshot configured")
+}
 
 func TestSessionSorting(t *testing.T) {
 	now := time.Now()
@@ -89,3 +227,118 @@ func TestSessionWithSummary(t *testing.T) {
 		t.Errorf("expected top weapon 'Igneous Hammer'")
 	}
 }
+
+func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testing.T) {
+	store := newMemorySessionStore()
+	uSvc := &fakeSessionUserService{
+		u: &user.User{
+			ID:                  "user-1",
+			PrimaryMembershipID: "4611686018467484863",
+			Memberships:         []user.Membership{{ID: "4611686018467484863", Type: 3}},
+		},
+	}
+	d2Svc := &fakeSessionD2Service{
+		snapshots: []*api.CompRankSnapshot{
+			{
+				Points:       5820,
+				StepIndex:    ptr.Of(21),
+				DivisionName: ptr.Of("Platinum III"),
+				Icon:         ptr.Of("/icons/plat.png"),
+				RecordedAt:   ptr.Of(time.Now().UTC()),
+			},
+			{
+				Points:       6045,
+				StepIndex:    ptr.Of(22),
+				DivisionName: ptr.Of("Platinum II"),
+				Icon:         ptr.Of("/icons/plat.png"),
+				RecordedAt:   ptr.Of(time.Now().UTC()),
+			},
+		},
+	}
+
+	svc := &service{
+		store:       store,
+		userService: uSvc,
+		d2Service:   d2Svc,
+	}
+
+	ctx := validator.WithAccess(context.Background(), "bearer-tok-abc")
+	audit := api.AuditField{ID: "user-1", Username: "Zone 6 Weegee"}
+
+	// 1. Start session with trackComp = true
+	started, err := svc.Start(ctx, "user-1", "char-1", audit, true)
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if d2Svc.capturedToken == nil || *d2Svc.capturedToken != "bearer-tok-abc" {
+		t.Fatalf("expected bearer token 'bearer-tok-abc' forwarded to GetCompetitiveRank, got %v", d2Svc.capturedToken)
+	}
+	if started.CompTracking == nil || !started.CompTracking.Enabled || started.CompTracking.Start == nil {
+		t.Fatalf("expected CompTracking.Start populated, got %+v", started.CompTracking)
+	}
+	if started.CompTracking.Start.Points != 5820 || *started.CompTracking.Start.DivisionName != "Platinum III" {
+		t.Fatalf("unexpected CompTracking.Start: %+v", started.CompTracking.Start)
+	}
+
+	// 2. Complete session populates compTracking.end and compTracking.pointDelta
+	if err := svc.Complete(ctx, started.ID); err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+	completed, err := svc.Get(ctx, started.ID)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if completed.CompTracking == nil || completed.CompTracking.End == nil || completed.CompTracking.PointDelta == nil {
+		t.Fatalf("expected CompTracking.End and PointDelta populated, got %+v", completed.CompTracking)
+	}
+	if completed.CompTracking.End.Points != 6045 {
+		t.Fatalf("expected End.Points=6045, got %d", completed.CompTracking.End.Points)
+	}
+	if *completed.CompTracking.PointDelta != 225 {
+		t.Fatalf("expected PointDelta=225, got %d", *completed.CompTracking.PointDelta)
+	}
+	if d2Svc.calls.Load() != 2 {
+		t.Fatalf("expected 2 GetCompetitiveRank calls (start + end), got %d", d2Svc.calls.Load())
+	}
+
+	// 3. Calling FinalizeCompTracking again is idempotent (skipped, no extra Bungie call)
+	updated, err := svc.FinalizeCompTracking(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("FinalizeCompTracking failed: %v", err)
+	}
+	if updated {
+		t.Fatal("expected FinalizeCompTracking to return updated=false when already finalized")
+	}
+	if d2Svc.calls.Load() != 2 {
+		t.Fatalf("expected no additional GetCompetitiveRank calls on idempotent finalize, got %d", d2Svc.calls.Load())
+	}
+}
+
+func TestSessionService_StartWithoutCompTrackingSkipsBungieCall(t *testing.T) {
+	store := newMemorySessionStore()
+	d2Svc := &fakeSessionD2Service{}
+	svc := &service{
+		store:     store,
+		d2Service: d2Svc,
+	}
+
+	started, err := svc.Start(context.Background(), "user-1", "char-1", api.AuditField{ID: "user-1", Username: "Guardian"})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if started.CompTracking != nil {
+		t.Fatalf("expected nil CompTracking when trackComp is omitted/false, got %+v", started.CompTracking)
+	}
+	if d2Svc.calls.Load() != 0 {
+		t.Fatalf("expected 0 GetCompetitiveRank calls when trackComp is false, got %d", d2Svc.calls.Load())
+	}
+
+	updated, err := svc.FinalizeCompTracking(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("FinalizeCompTracking failed: %v", err)
+	}
+	if updated {
+		t.Fatal("expected FinalizeCompTracking to skip session without compTracking")
+	}
+}
+

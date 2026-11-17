@@ -87,3 +87,7 @@ properties:
     $ref: ./SessionSummary.yaml
     x-oapi-codegen-extra-tags:
       firestore: summary
+  compTracking:
+    $ref: ./CompTracking.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: compTracking

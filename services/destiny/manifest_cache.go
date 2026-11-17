@@ -108,6 +108,7 @@ type cachedManifestService struct {
 	activitiesByHash    hashCache[ActivityDefinition]
 	activityModesByHash hashCache[ActivityModeDefinition]
 	recordsByHash       hashCache[RecordDefinition]
+	progressionsByHash  hashCache[ProgressionDefinition]
 }
 
 // NewCachedManifestService wraps an existing ManifestService with in-memory caching.
@@ -179,3 +180,8 @@ func (c *cachedManifestService) GetActivityMode(ctx context.Context, hash int64)
 func (c *cachedManifestService) GetRecord(ctx context.Context, hash int64) (*RecordDefinition, error) {
 	return c.recordsByHash.getOrLoad(ctx, "manifestService.getRecord", hash, c.ManifestService.GetRecord)
 }
+
+func (c *cachedManifestService) GetProgression(ctx context.Context, hash int64) (*ProgressionDefinition, error) {
+	return c.progressionsByHash.getOrLoad(ctx, "manifestService.getProgression", hash, c.ManifestService.GetProgression)
+}
+

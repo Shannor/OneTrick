@@ -19,9 +19,26 @@ type Access struct {
 	AccessToken string
 }
 
+func WithAccess(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, string(accessToken), &Access{AccessToken: token})
+}
+
 func FromContext(ctx context.Context) (*Access, bool) {
-	t, ok := ctx.Value(string(accessToken)).(*Access)
-	return t, ok
+	if ctx == nil {
+		return nil, false
+	}
+	if t, ok := ctx.Value(string(accessToken)).(*Access); ok && t != nil {
+		return t, true
+	}
+	if t, ok := ctx.Value(accessToken).(*Access); ok && t != nil {
+		return t, true
+	}
+	if gCtx := middleware.GetGinContext(ctx); gCtx != nil && gCtx.Request != nil {
+		if jws, err := GetJWSFromRequest(gCtx.Request); err == nil && jws != "" {
+			return &Access{AccessToken: jws}, true
+		}
+	}
+	return nil, false
 }
 
 var (

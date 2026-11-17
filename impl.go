@@ -32,6 +32,7 @@ type Server struct {
 	AggregateService  aggregate.Service
 	SessionService    session.Service
 	StatsService      stats.Service
+	InternalAPIKey    string
 }
 
 func NewServer(
@@ -222,10 +223,12 @@ func (s Server) GetSimilarSnapshots(ctx context.Context, request api.GetSimilarS
 }
 
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {
+	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	clog.WithGroupFields(ctx, "request", clog.Fields{
 		"userId":      request.UserID,
 		"characterId": request.Body.CharacterID,
+		"trackComp":   trackComp,
 	})
 	if request.Params.XUserID != request.UserID {
 		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
@@ -239,7 +242,7 @@ func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessi
 		ID:       u.ID,
 		Username: u.DisplayName,
 	}
-	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy)
+	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy, trackComp)
 	if err != nil {
 		return api.StartUserSession400JSONResponse{Message: err.Error()}, nil
 	}
@@ -473,10 +476,12 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
+	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	clog.WithGroupFields(ctx, "request", clog.Fields{
 		"userId":      request.Body.UserID,
 		"characterId": request.Body.CharacterID,
+		"trackComp":   trackComp,
 	})
 	if request.Params.XUserID != request.Body.UserID {
 		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
@@ -489,7 +494,7 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 		ID:       u.ID,
 		Username: u.DisplayName,
 	}
-	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy)
+	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy, trackComp)
 	if err != nil {
 		return api.StartSession400JSONResponse{Message: err.Error()}, nil
 	}
@@ -510,6 +515,53 @@ func (s Server) CompleteSession(ctx context.Context, request api.CompleteSession
 		return nil, err
 	}
 	return api.CompleteSession200JSONResponse(*ses), nil
+}
+
+func (s Server) FinalizeSessionsComp(ctx context.Context, request api.FinalizeSessionsCompRequestObject) (api.FinalizeSessionsCompResponseObject, error) {
+	if request.Params.XInternalAPIKey == nil || *request.Params.XInternalAPIKey == "" || s.InternalAPIKey == "" || *request.Params.XInternalAPIKey != s.InternalAPIKey {
+		return api.FinalizeSessionsComp401JSONResponse{Message: "unauthorized"}, nil
+	}
+	if request.Body == nil {
+		return api.FinalizeSessionsComp400JSONResponse{Message: "body cannot be empty"}, nil
+	}
+
+	sessionIDs := request.Body.SessionIDs
+	clog.WithGroupField(ctx, "request", "sessionCount", len(sessionIDs))
+
+	var updated int32
+	var skipped int32
+	var failed int32
+
+	_ = clog.LoopRollup(ctx, "sessionService.finalizeCompBatch", sessionIDs, func(iterCtx context.Context, _ int, sessionID string) error {
+		clog.WithGroupField(iterCtx, "session", "sessionId", sessionID)
+		if sessionID == "" {
+			skipped++
+			return nil
+		}
+		didUpdate, err := s.SessionService.FinalizeCompTracking(iterCtx, sessionID)
+		if err != nil {
+			failed++
+			return err
+		}
+		if didUpdate {
+			updated++
+		} else {
+			skipped++
+		}
+		return nil
+	})
+
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"updated": updated,
+		"skipped": skipped,
+		"failed":  failed,
+	})
+
+	return api.FinalizeSessionsComp200JSONResponse{
+		Updated: updated,
+		Skipped: skipped,
+		Failed:  failed,
+	}, nil
 }
 
 func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {

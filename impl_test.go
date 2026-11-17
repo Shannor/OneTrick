@@ -871,3 +871,179 @@ func TestGetSessionAggregatesEmptySession(t *testing.T) {
 		t.Fatalf("expected empty aggregates and snapshots, got %+v", okResp)
 	}
 }
+
+type mockCompSessionService struct {
+	session.Service
+	capturedTrackComp bool
+	startedSession    *api.Session
+	finalizeResults   map[string]struct {
+		updated bool
+		err     error
+	}
+}
+
+func (m *mockCompSessionService) Start(_ context.Context, userID string, characterID string, startedBy api.AuditField, trackComp ...bool) (*api.Session, error) {
+	m.capturedTrackComp = len(trackComp) > 0 && trackComp[0]
+	if m.startedSession != nil {
+		return m.startedSession, nil
+	}
+	return &api.Session{
+		ID:           "ses-comp-1",
+		UserID:       userID,
+		CharacterID:  characterID,
+		StartedAt:    time.Now(),
+		AggregateIDs: []string{},
+		StartedBy:    &startedBy,
+	}, nil
+}
+
+func (m *mockCompSessionService) FinalizeCompTracking(_ context.Context, sessionID string) (bool, error) {
+	if res, ok := m.finalizeResults[sessionID]; ok {
+		return res.updated, res.err
+	}
+	return false, nil
+}
+
+func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
+	uMock := &mockUserService{
+		existingUser: &user.User{
+			ID:          "user-1",
+			DisplayName: "Zone 6 Weegee",
+		},
+	}
+
+	t.Run("StartSession and StartUserSession forward trackComp=true", func(t *testing.T) {
+		sesMock := &mockCompSessionService{
+			startedSession: &api.Session{
+				ID:           "ses-1",
+				UserID:       "user-1",
+				CharacterID:  "char-1",
+				StartedAt:    time.Now(),
+				AggregateIDs: []string{},
+				CompTracking: &api.CompTracking{
+					Enabled: true,
+					Start: &api.CompRankSnapshot{
+						Points:       5820,
+						DivisionName: ptr.Of("Platinum III"),
+					},
+				},
+			},
+		}
+		server := Server{
+			UserService:    uMock,
+			SessionService: sesMock,
+		}
+
+		resp, err := server.StartSession(context.Background(), api.StartSessionRequestObject{
+			Params: api.StartSessionParams{XUserID: "user-1", XMembershipID: "4611686018467484863"},
+			Body: &api.StartSessionJSONRequestBody{
+				UserID:      "user-1",
+				CharacterID: "char-1",
+				TrackComp:   ptr.Of(true),
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+		if !sesMock.capturedTrackComp {
+			t.Fatal("expected trackComp=true to be forwarded to SessionService.Start")
+		}
+		created, ok := resp.(api.StartSession201JSONResponse)
+		if !ok || created.CompTracking == nil || !created.CompTracking.Enabled {
+			t.Fatalf("expected 201 with CompTracking.Enabled=true, got %+v", resp)
+		}
+
+		sesMock.capturedTrackComp = false
+		uResp, err := server.StartUserSession(context.Background(), api.StartUserSessionRequestObject{
+			UserID: "user-1",
+			Params: api.StartUserSessionParams{XUserID: "user-1", XMembershipID: "4611686018467484863"},
+			Body: &api.StartUserSessionJSONRequestBody{
+				UserID:      "user-1",
+				CharacterID: "char-1",
+				TrackComp:   ptr.Of(true),
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartUserSession failed: %v", err)
+		}
+		if !sesMock.capturedTrackComp {
+			t.Fatal("expected trackComp=true to be forwarded in StartUserSession")
+		}
+		uCreated, ok := uResp.(api.StartUserSession201JSONResponse)
+		if !ok || uCreated.CompTracking == nil || !uCreated.CompTracking.Enabled {
+			t.Fatalf("expected 201 with CompTracking.Enabled=true, got %+v", uResp)
+		}
+	})
+
+	t.Run("POST /internal/sessions/finalize-comp enforces X-Internal-API-Key and returns batch rollup counts", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		swagger, err := api.GetSwagger()
+		if err != nil {
+			t.Fatalf("GetSwagger failed: %v", err)
+		}
+		swagger.Servers = nil
+
+		sesMock := &mockCompSessionService{
+			finalizeResults: map[string]struct {
+				updated bool
+				err     error
+			}{
+				"ses-updated": {updated: true, err: nil},
+				"ses-skipped": {updated: false, err: nil},
+				"ses-failed":  {updated: false, err: fmt.Errorf("bungie timeout")},
+			},
+		}
+		server := Server{
+			SessionService: sesMock,
+			InternalAPIKey: "secret-internal-key",
+		}
+
+		r := gin.New()
+		r.ContextWithFallback = true
+		r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+			ErrorHandler: logger.GinValidationErrorHandler,
+			Options: openapi3filter.Options{
+				AuthenticationFunc: validator.Authenticate,
+			},
+		}))
+		h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+			logger.GinStrictMiddleware[api.StrictHandlerFunc],
+		})
+		api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+			ErrorHandler: logger.GinParamErrorHandler,
+		})
+
+		// Missing key -> 401
+		reqNoKey := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated"]}`))
+		reqNoKey.Header.Set("Content-Type", "application/json")
+		wNoKey := httptest.NewRecorder()
+		r.ServeHTTP(wNoKey, reqNoKey)
+		if wNoKey.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when X-Internal-API-Key is missing, got %d: %s", wNoKey.Code, wNoKey.Body.String())
+		}
+
+		// Wrong key -> 401
+		reqBadKey := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated"]}`))
+		reqBadKey.Header.Set("Content-Type", "application/json")
+		reqBadKey.Header.Set("X-Internal-API-Key", "wrong-key")
+		wBadKey := httptest.NewRecorder()
+		r.ServeHTTP(wBadKey, reqBadKey)
+		if wBadKey.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when X-Internal-API-Key is invalid, got %d: %s", wBadKey.Code, wBadKey.Body.String())
+		}
+
+		// Valid key -> 200 with updated=1, skipped=1, failed=1
+		reqOK := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","ses-skipped","ses-failed"]}`))
+		reqOK.Header.Set("Content-Type", "application/json")
+		reqOK.Header.Set("X-Internal-API-Key", "secret-internal-key")
+		wOK := httptest.NewRecorder()
+		r.ServeHTTP(wOK, reqOK)
+		if wOK.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", wOK.Code, wOK.Body.String())
+		}
+		if !strings.Contains(wOK.Body.String(), `"updated":1`) || !strings.Contains(wOK.Body.String(), `"skipped":1`) || !strings.Contains(wOK.Body.String(), `"failed":1`) {
+			t.Fatalf("expected rollup counts {updated:1, skipped:1, failed:1}, got %s", wOK.Body.String())
+		}
+	})
+}
+
