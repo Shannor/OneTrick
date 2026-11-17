@@ -15,6 +15,7 @@ type spyManifestService struct {
 	itemCalls         atomic.Int32
 	activityCalls     atomic.Int32
 	activityModeCalls atomic.Int32
+	progressionsCalls atomic.Int32
 	progressionCalls  atomic.Int32
 }
 
@@ -31,6 +32,13 @@ func (s *spyManifestService) GetRaces(_ context.Context) (map[string]RaceDefinit
 func (s *spyManifestService) GetActivityModes(_ context.Context) (map[string]ActivityModeDefinition, error) {
 	s.modesCalls.Add(1)
 	return map[string]ActivityModeDefinition{"84": {Hash: 84}}, nil
+}
+
+func (s *spyManifestService) GetProgressions(_ context.Context) (map[string]ProgressionDefinition, error) {
+	s.progressionsCalls.Add(1)
+	return map[string]ProgressionDefinition{
+		"2083746873": {Hash: 2083746873, Steps: []ProgressionStepDefinition{{StepName: "GUARDIAN I", ProgressTotal: 50}}},
+	}, nil
 }
 
 func (s *spyManifestService) GetRecord(_ context.Context, hash int64) (*RecordDefinition, error) {
@@ -55,7 +63,7 @@ func (s *spyManifestService) GetActivityMode(_ context.Context, hash int64) (*Ac
 
 func (s *spyManifestService) GetProgression(_ context.Context, hash int64) (*ProgressionDefinition, error) {
 	s.progressionCalls.Add(1)
-	return &ProgressionDefinition{Hash: hash, Steps: DefaultCompProgressionDefinition().Steps}, nil
+	return &ProgressionDefinition{Hash: hash, Steps: []ProgressionStepDefinition{{StepName: "Copper III", ProgressTotal: 374}}}, nil
 }
 
 func TestCachedManifestServiceWrapper(t *testing.T) {
@@ -113,7 +121,7 @@ func TestCachedManifestServiceWrapper(t *testing.T) {
 		t.Fatalf("expected inner GetProgression called once for hash %d, got %d", CompProgressionHashInt64, spy.progressionCalls.Load())
 	}
 
-	// 3. Once GetActivityModes is cached, GetActivityMode(84) resolves from the collection cache without calling inner GetActivityMode
+	// 3. Once GetActivityModes / GetProgressions are cached, hash lookups resolve from the collection cache without calling inner single-doc methods
 	if _, err := svc.GetActivityModes(ctx); err != nil {
 		t.Fatalf("GetActivityModes failed: %v", err)
 	}
@@ -124,5 +132,15 @@ func TestCachedManifestServiceWrapper(t *testing.T) {
 	if spy.activityModeCalls.Load() != 0 {
 		t.Fatalf("expected GetActivityMode(84) to resolve from cached activityModes without calling inner GetActivityMode, got %d calls", spy.activityModeCalls.Load())
 	}
-}
 
+	if _, err := svc.GetProgressions(ctx); err != nil {
+		t.Fatalf("GetProgressions failed: %v", err)
+	}
+	crucibleProg, err := svc.GetProgression(ctx, 2083746873)
+	if err != nil || crucibleProg == nil || crucibleProg.Hash != 2083746873 {
+		t.Fatalf("expected progression 2083746873, got %+v err=%v", crucibleProg, err)
+	}
+	if spy.progressionCalls.Load() != 1 {
+		t.Fatalf("expected GetProgression(2083746873) to resolve from cached progressions without additional inner GetProgression call, got %d calls", spy.progressionCalls.Load())
+	}
+}

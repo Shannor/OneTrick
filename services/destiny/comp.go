@@ -12,120 +12,6 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 )
 
-const (
-	compIconUntested  = "/common/destiny2_content/icons/646cc5780b406e6565008dde5f4fd60e.png"
-	compIconCopper    = "/common/destiny2_content/icons/3cb3f1c32d988eb2728cea3129827baa.png"
-	compIconBronze    = "/common/destiny2_content/icons/a0fa7eb347a499409ef7b41f4e95faeb.png"
-	compIconSilver    = "/common/destiny2_content/icons/a2fda602ff4b68973fb433d0368af7a3.png"
-	compIconGold      = "/common/destiny2_content/icons/e654eadefa60635fa2e1c741675866cd.png"
-	compIconPlatinum  = "/common/destiny2_content/icons/2756e440c14fc72ef870df75c0d9d5d9.png"
-	compIconAdept     = "/common/destiny2_content/icons/e86307d8ae6e32b7cd9ea2cffc4d9de1.png"
-	compIconAscendant = "/common/destiny2_content/icons/2341581763d68250bc2e3b95e4cd2b02.png"
-)
-
-type compThreshold struct {
-	minPoints    int
-	stepIndex    int
-	divisionName string
-	icon         string
-}
-
-var compPointThresholds = []compThreshold{
-	{minPoints: 10000, stepIndex: 35, divisionName: "Ascendant 0", icon: compIconAscendant},
-	{minPoints: 9750, stepIndex: 33, divisionName: "Ascendant I", icon: compIconAscendant},
-	{minPoints: 9250, stepIndex: 32, divisionName: "Ascendant II", icon: compIconAscendant},
-	{minPoints: 8750, stepIndex: 31, divisionName: "Ascendant III", icon: compIconAscendant},
-	{minPoints: 8250, stepIndex: 28, divisionName: "Adept I", icon: compIconAdept},
-	{minPoints: 7750, stepIndex: 27, divisionName: "Adept II", icon: compIconAdept},
-	{minPoints: 7250, stepIndex: 26, divisionName: "Adept III", icon: compIconAdept},
-	{minPoints: 6750, stepIndex: 23, divisionName: "Platinum I", icon: compIconPlatinum},
-	{minPoints: 6250, stepIndex: 22, divisionName: "Platinum II", icon: compIconPlatinum},
-	{minPoints: 5750, stepIndex: 21, divisionName: "Platinum III", icon: compIconPlatinum},
-	{minPoints: 5250, stepIndex: 18, divisionName: "Gold I", icon: compIconGold},
-	{minPoints: 4750, stepIndex: 17, divisionName: "Gold II", icon: compIconGold},
-	{minPoints: 4250, stepIndex: 16, divisionName: "Gold III", icon: compIconGold},
-	{minPoints: 3750, stepIndex: 13, divisionName: "Silver I", icon: compIconSilver},
-	{minPoints: 3250, stepIndex: 12, divisionName: "Silver II", icon: compIconSilver},
-	{minPoints: 2750, stepIndex: 11, divisionName: "Silver III", icon: compIconSilver},
-	{minPoints: 2250, stepIndex: 8, divisionName: "Bronze I", icon: compIconBronze},
-	{minPoints: 1750, stepIndex: 7, divisionName: "Bronze II", icon: compIconBronze},
-	{minPoints: 1250, stepIndex: 6, divisionName: "Bronze III", icon: compIconBronze},
-	{minPoints: 750, stepIndex: 3, divisionName: "Copper I", icon: compIconCopper},
-	{minPoints: 250, stepIndex: 2, divisionName: "Copper II", icon: compIconCopper},
-	{minPoints: 0, stepIndex: 1, divisionName: "Copper III", icon: compIconCopper},
-}
-
-// DefaultCompProgressionDefinition returns the DestinyProgressionDefinition (3696598664)
-// Competitive Division steps so Competitive rank lookups always have step names and badge icons.
-func DefaultCompProgressionDefinition() *ProgressionDefinition {
-	return &ProgressionDefinition{
-		Hash: CompProgressionHashInt64,
-		DisplayProperties: ModeDisplayProperties{
-			Name:    "Competitive Division",
-			Icon:    compIconUntested,
-			HasIcon: true,
-		},
-		Steps: []ProgressionStepDefinition{
-			{StepName: "Untested", ProgressTotal: 1, Icon: compIconUntested},
-			{StepName: "Copper III", ProgressTotal: 374, Icon: compIconCopper},
-			{StepName: "Copper II", ProgressTotal: 375, Icon: compIconCopper},
-			{StepName: "Copper I", ProgressTotal: 500, Icon: compIconCopper},
-			{StepName: "PROMOTION", ProgressTotal: 0, Icon: compIconCopper},
-			{StepName: "RELEGATION", ProgressTotal: 0, Icon: compIconBronze},
-			{StepName: "Bronze III", ProgressTotal: 500, Icon: compIconBronze},
-			{StepName: "Bronze II", ProgressTotal: 500, Icon: compIconBronze},
-			{StepName: "Bronze I", ProgressTotal: 500, Icon: compIconBronze},
-			{StepName: "PROMOTION", ProgressTotal: 0, Icon: compIconBronze},
-			{StepName: "RELEGATION", ProgressTotal: 0, Icon: compIconSilver},
-			{StepName: "Silver III", ProgressTotal: 500, Icon: compIconSilver},
-			{StepName: "Silver II", ProgressTotal: 500, Icon: compIconSilver},
-			{StepName: "Silver I", ProgressTotal: 500, Icon: compIconSilver},
-			{StepName: "PROMOTION", ProgressTotal: 0, Icon: compIconSilver},
-			{StepName: "RELEGATION", ProgressTotal: 0, Icon: compIconGold},
-			{StepName: "Gold III", ProgressTotal: 500, Icon: compIconGold},
-			{StepName: "Gold II", ProgressTotal: 500, Icon: compIconGold},
-			{StepName: "Gold I", ProgressTotal: 500, Icon: compIconGold},
-			{StepName: "PROMOTION", ProgressTotal: 0, Icon: compIconGold},
-			{StepName: "RELEGATION", ProgressTotal: 0, Icon: compIconPlatinum},
-			{StepName: "Platinum III", ProgressTotal: 500, Icon: compIconPlatinum},
-			{StepName: "Platinum II", ProgressTotal: 500, Icon: compIconPlatinum},
-			{StepName: "Platinum I", ProgressTotal: 499, Icon: compIconPlatinum},
-			{StepName: "PROMOTION", ProgressTotal: 1, Icon: compIconPlatinum},
-			{StepName: "RELEGATION", ProgressTotal: 1, Icon: compIconAdept},
-			{StepName: "Adept III", ProgressTotal: 499, Icon: compIconAdept},
-			{StepName: "Adept II", ProgressTotal: 500, Icon: compIconAdept},
-			{StepName: "Adept I", ProgressTotal: 499, Icon: compIconAdept},
-			{StepName: "PROMOTION", ProgressTotal: 1, Icon: compIconAdept},
-			{StepName: "RELEGATION", ProgressTotal: 1, Icon: compIconAscendant},
-			{StepName: "Ascendant III", ProgressTotal: 499, Icon: compIconAscendant},
-			{StepName: "Ascendant II", ProgressTotal: 375, Icon: compIconAscendant},
-			{StepName: "Ascendant I", ProgressTotal: 375, Icon: compIconAscendant},
-			{StepName: "Ascendant I", ProgressTotal: 1, Icon: compIconAscendant},
-			{StepName: "Ascendant 0", ProgressTotal: 4999, Icon: compIconAscendant},
-		},
-	}
-}
-
-// CompDivisionForPoints resolves a Competitive Division name and badge icon from numerical points.
-func CompDivisionForPoints(points int, progDef *ProgressionDefinition) (string, string) {
-	for _, t := range compPointThresholds {
-		if points >= t.minPoints {
-			if progDef != nil && t.stepIndex >= 0 && t.stepIndex < len(progDef.Steps) {
-				step := progDef.Steps[t.stepIndex]
-				if step.StepName != "" && step.StepName != "PROMOTION" && step.StepName != "RELEGATION" {
-					icon := step.Icon
-					if icon == "" {
-						icon = t.icon
-					}
-					return step.StepName, icon
-				}
-			}
-			return t.divisionName, t.icon
-		}
-	}
-	return "Copper III", compIconCopper
-}
-
 // ExtractCompetitiveRank extracts a CompRankSnapshot from a Bungie profile response,
 // preferring CharacterProgressions["3696598664"] and falling back to Metrics["268448617"]
 // when CharacterProgressions.Data is omitted due to player privacy settings.
@@ -137,9 +23,6 @@ func ExtractCompetitiveRank(
 ) (*api.CompRankSnapshot, string, error) {
 	if profile == nil {
 		return nil, "", fmt.Errorf("profile response is nil")
-	}
-	if progDef == nil {
-		progDef = DefaultCompProgressionDefinition()
 	}
 
 	// 1. Primary Rich Source: CharacterProgressions (Component 202) -> Progression Hash 3696598664
@@ -173,24 +56,35 @@ func ExtractCompetitiveRank(
 			}
 
 			var stepIndexPtr *int
-			var divisionName, icon string
+			var divisionNamePtr, iconPtr *string
 			if matchedProg.StepIndex != nil {
 				idx := int(*matchedProg.StepIndex)
 				stepIndexPtr = &idx
-				if idx >= 0 && idx < len(progDef.Steps) {
-					divisionName = progDef.Steps[idx].StepName
-					icon = progDef.Steps[idx].Icon
+				if progDef != nil && idx >= 0 && idx < len(progDef.Steps) {
+					if progDef.Steps[idx].StepName != "" {
+						divisionNamePtr = ptr.Of(progDef.Steps[idx].StepName)
+					}
+					if progDef.Steps[idx].Icon != "" {
+						iconPtr = ptr.Of(progDef.Steps[idx].Icon)
+					}
 				}
 			}
-			if divisionName == "" {
-				divisionName, icon = CompDivisionForPoints(points, progDef)
+			if divisionNamePtr == nil {
+				if step := progDef.StepForPoints(points); step != nil {
+					if step.StepName != "" {
+						divisionNamePtr = ptr.Of(step.StepName)
+					}
+					if step.Icon != "" {
+						iconPtr = ptr.Of(step.Icon)
+					}
+				}
 			}
 
 			return &api.CompRankSnapshot{
 				Points:       points,
 				StepIndex:    stepIndexPtr,
-				DivisionName: ptr.Of(divisionName),
-				Icon:         ptr.Of(icon),
+				DivisionName: divisionNamePtr,
+				Icon:         iconPtr,
 				RecordedAt:   ptr.Of(recordedAt),
 			}, "characterProgressions", nil
 		}
@@ -201,11 +95,19 @@ func ExtractCompetitiveRank(
 		if metric, ok := (*profile.Metrics.Data.Metrics)[CompMetricHash]; ok {
 			if metric.ObjectiveProgress != nil && metric.ObjectiveProgress.Progress != nil {
 				points := int(*metric.ObjectiveProgress.Progress)
-				divisionName, icon := CompDivisionForPoints(points, progDef)
+				var divisionNamePtr, iconPtr *string
+				if step := progDef.StepForPoints(points); step != nil {
+					if step.StepName != "" {
+						divisionNamePtr = ptr.Of(step.StepName)
+					}
+					if step.Icon != "" {
+						iconPtr = ptr.Of(step.Icon)
+					}
+				}
 				return &api.CompRankSnapshot{
 					Points:       points,
-					DivisionName: ptr.Of(divisionName),
-					Icon:         ptr.Of(icon),
+					DivisionName: divisionNamePtr,
+					Icon:         iconPtr,
 					RecordedAt:   ptr.Of(recordedAt),
 				}, "metrics", nil
 			}
@@ -245,12 +147,11 @@ func (a *service) GetCompetitiveRank(ctx context.Context, membershipID int64, me
 	var progDef *ProgressionDefinition
 	if a.ManifestService != nil {
 		def, err := a.ManifestService.GetProgression(ctx, CompProgressionHashInt64)
-		if err == nil && def != nil {
+		if err != nil {
+			clog.WithGroupField(ctx, "destinyService.getCompetitiveRank", "manifestWarning", err.Error())
+		} else {
 			progDef = def
 		}
-	}
-	if progDef == nil {
-		progDef = DefaultCompProgressionDefinition()
 	}
 
 	snapshot, source, err := ExtractCompetitiveRank(resp.JSON200.Response, characterID, progDef, time.Now().UTC())

@@ -590,6 +590,66 @@ type ProgressionDefinition struct {
 	Blacklisted       bool                        `json:"blacklisted" firestore:"blacklisted"`
 }
 
+func isTransitionalProgressionStep(name string) bool {
+	return name == "PROMOTION" || name == "RELEGATION"
+}
+
+// StepForPoints resolves the rank/division step corresponding to a cumulative point total
+// using the manifest step totals. Transitional series steps ("PROMOTION" / "RELEGATION")
+// are mapped to their adjacent division when an explicit stepIndex is unavailable.
+func (p *ProgressionDefinition) StepForPoints(points int) *ProgressionStepDefinition {
+	if p == nil || len(p.Steps) == 0 {
+		return nil
+	}
+	if points < 0 {
+		points = 0
+	}
+
+	cumulative := 0
+	matchedIdx := -1
+	for i, step := range p.Steps {
+		if step.ProgressTotal <= 0 {
+			continue
+		}
+		if points < cumulative+step.ProgressTotal {
+			matchedIdx = i
+			break
+		}
+		cumulative += step.ProgressTotal
+	}
+
+	if matchedIdx == -1 {
+		for i := len(p.Steps) - 1; i >= 0; i-- {
+			if p.Steps[i].StepName != "" && !isTransitionalProgressionStep(p.Steps[i].StepName) {
+				step := p.Steps[i]
+				return &step
+			}
+		}
+		step := p.Steps[len(p.Steps)-1]
+		return &step
+	}
+
+	switch p.Steps[matchedIdx].StepName {
+	case "PROMOTION":
+		for i := matchedIdx - 1; i >= 0; i-- {
+			if p.Steps[i].StepName != "" && !isTransitionalProgressionStep(p.Steps[i].StepName) {
+				step := p.Steps[i]
+				return &step
+			}
+		}
+	case "RELEGATION":
+		for i := matchedIdx + 1; i < len(p.Steps); i++ {
+			if p.Steps[i].StepName != "" && !isTransitionalProgressionStep(p.Steps[i].StepName) {
+				step := p.Steps[i]
+				return &step
+			}
+		}
+	}
+
+	step := p.Steps[matchedIdx]
+	return &step
+}
+
 type RequestInfo = int32
 
 const (
@@ -610,4 +670,3 @@ const (
 	CompProgressionHashInt64 = int64(3696598664)
 	CompMetricHash           = "268448617"
 )
-
