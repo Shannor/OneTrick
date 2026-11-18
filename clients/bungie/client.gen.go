@@ -623,7 +623,7 @@ type DestinyComponentsLoadoutsDestinyLoadoutComponent struct {
 
 // DestinyComponentsLoadoutsDestinyLoadoutItemComponent defines model for Destiny.Components.Loadouts.DestinyLoadoutItemComponent.
 type DestinyComponentsLoadoutsDestinyLoadoutItemComponent struct {
-	ItemInstanceId *int64    `json:"itemInstanceId,omitempty"`
+	ItemInstanceId *string   `json:"itemInstanceId,omitempty"`
 	PlugItemHashes *[]uint32 `json:"plugItemHashes,omitempty"`
 }
 
@@ -924,7 +924,7 @@ type DestinyDestinyItemQuantity struct {
 	ItemHash *uint32 `json:"itemHash,omitempty"`
 
 	// ItemInstanceId If this quantity is referring to a specific instance of an item, this will have the item's instance ID. Normally, this will be null.
-	ItemInstanceId *int64 `json:"itemInstanceId"`
+	ItemInstanceId *string `json:"itemInstanceId"`
 
 	// Quantity The amount of the item needed/available depending on the context of where DestinyItemQuantity is being used.
 	Quantity *int32 `json:"quantity,omitempty"`
@@ -1927,7 +1927,7 @@ type DestinyQuestsDestinyQuestStatus struct {
 	Completed *bool `json:"completed,omitempty"`
 
 	// ItemInstanceId The current Quest Step will be an instanced item in the player's inventory. If you care about that, this is the instance ID of that item.
-	ItemInstanceId *int64 `json:"itemInstanceId,omitempty"`
+	ItemInstanceId *string `json:"itemInstanceId,omitempty"`
 
 	// QuestHash The hash identifier for the Quest Item. (Note: Quests are defined as Items, and thus you would use this to look up the quest's DestinyInventoryItemDefinition). For information on all steps in the quest, you can then examine its DestinyInventoryItemDefinition.setData property for Quest Steps (which are *also* items). You can use the Item Definition to display human readable data about the overall quest.
 	QuestHash *uint32 `json:"questHash,omitempty"`

@@ -11438,9 +11438,8 @@
             }
           },
           "itemInstanceId": {
-            "type": "integer",
+            "type": "string",
             "description": "If this quantity is referring to a specific instance of an item, this will have the item's instance ID. Normally, this will be null.",
-            "format": "int64",
             "nullable": true
           },
           "quantity": {
@@ -32764,8 +32763,7 @@
         "type": "object",
         "properties": {
           "itemInstanceId": {
-            "type": "integer",
-            "format": "int64"
+            "type": "string"
           },
           "plugItemHashes": {
             "type": "array",
@@ -33260,9 +33258,8 @@
             "description": "Whether or not the quest is tracked"
           },
           "itemInstanceId": {
-            "type": "integer",
-            "description": "The current Quest Step will be an instanced item in the player's inventory. If you care about that, this is the instance ID of that item.",
-            "format": "int64"
+            "type": "string",
+            "description": "The current Quest Step will be an instanced item in the player's inventory. If you care about that, this is the instance ID of that item."
           },
           "completed": {
             "type": "boolean",
