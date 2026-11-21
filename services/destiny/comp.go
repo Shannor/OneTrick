@@ -12,17 +12,18 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 )
 
-// ExtractCompetitiveRank extracts a CompRankSnapshot from a Bungie profile response,
+// extractCompetitiveRank extracts a CompRankSnapshot from a Bungie profile response,
 // preferring CharacterProgressions["3696598664"] and falling back to Metrics["268448617"]
 // when CharacterProgressions.Data is omitted due to player privacy settings.
-func ExtractCompetitiveRank(
+func extractCompetitiveRank(
+	ctx context.Context,
 	profile *bungie.DestinyResponsesDestinyProfileResponse,
 	characterID string,
 	progDef *ProgressionDefinition,
 	recordedAt time.Time,
-) (*api.CompRankSnapshot, string, error) {
+) (*api.CompRankSnapshot, error) {
 	if profile == nil {
-		return nil, "", fmt.Errorf("profile response is nil")
+		return nil, fmt.Errorf("profile response is nil")
 	}
 
 	// 1. Primary Rich Source: CharacterProgressions (Component 202) -> Progression Hash 3696598664
@@ -80,13 +81,14 @@ func ExtractCompetitiveRank(
 				}
 			}
 
+			clog.WithGroupField(ctx, "destinyService.getCompetitiveRank", "source", "characterProgressions")
 			return &api.CompRankSnapshot{
 				Points:       points,
 				StepIndex:    stepIndexPtr,
 				DivisionName: divisionNamePtr,
 				Icon:         iconPtr,
 				RecordedAt:   ptr.Of(recordedAt),
-			}, "characterProgressions", nil
+			}, nil
 		}
 	}
 
@@ -104,17 +106,18 @@ func ExtractCompetitiveRank(
 						iconPtr = ptr.Of(step.Icon)
 					}
 				}
+				clog.WithGroupField(ctx, "destinyService.getCompetitiveRank", "source", "metrics")
 				return &api.CompRankSnapshot{
 					Points:       points,
 					DivisionName: divisionNamePtr,
 					Icon:         iconPtr,
 					RecordedAt:   ptr.Of(recordedAt),
-				}, "metrics", nil
+				}, nil
 			}
 		}
 	}
 
-	return nil, "", fmt.Errorf("competitive rank data not available")
+	return nil, fmt.Errorf("competitive rank data not available")
 }
 
 func (a *service) GetCompetitiveRank(ctx context.Context, membershipID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error) {
@@ -154,14 +157,11 @@ func (a *service) GetCompetitiveRank(ctx context.Context, membershipID int64, me
 		}
 	}
 
-	snapshot, source, err := ExtractCompetitiveRank(resp.JSON200.Response, characterID, progDef, time.Now().UTC())
+	snapshot, err := extractCompetitiveRank(ctx, resp.JSON200.Response, characterID, progDef, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
 
-	clog.WithGroupFields(ctx, "destinyService.getCompetitiveRank", clog.Fields{
-		"source": source,
-		"points": snapshot.Points,
-	})
+	clog.WithGroupField(ctx, "destinyService.getCompetitiveRank", "points", snapshot.Points)
 	return snapshot, nil
 }

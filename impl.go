@@ -45,6 +45,7 @@ func NewServer(
 	sessionService session.Service,
 	manifestService destiny.ManifestService,
 	statsService stats.Service,
+	internalAPIKey string,
 ) Server {
 	return Server{
 		D2Service:         service,
@@ -55,6 +56,7 @@ func NewServer(
 		SessionService:    sessionService,
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
+		InternalAPIKey:    internalAPIKey,
 	}
 }
 

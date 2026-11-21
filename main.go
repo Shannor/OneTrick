@@ -80,8 +80,8 @@ func main() {
 		sessionService,
 		manifestService,
 		statsService,
+		env.InternalAPIKey,
 	)
-	server.InternalAPIKey = env.InternalAPIKey
 
 	defer firestore.Close()
 
