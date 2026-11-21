@@ -7,6 +7,9 @@ generate:
   models: true
   client: true
 output-options:
+  overlay:
+    path: overlay.yaml
+    strict: true
   include-operation-ids: [
     "Destiny2.GetProfile",
     "Destiny2.GetActivityHistory",

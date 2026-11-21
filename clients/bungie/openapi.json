@@ -1900,7 +1900,7 @@
         "deprecated": false
       }
     },
-    "/GroupV2/{groupId}/AdminsAndFounder/{currentpage}": {
+    "/GroupV2/{groupId}/AdminsAndFounder/": {
       "summary": "GroupV2.GetAdminsAndFounderOfGroup",
       "description": "Get the list of members in a given group who are of admin level or higher.",
       "get": {
@@ -8549,8 +8549,9 @@
             "x-enum-is-bitmask": false
           },
           "membershipId": {
-            "type": "string",
+            "type": "integer",
             "description": "Membership ID as they user is known in the Accounts service",
+            "format": "int64"
           },
           "displayName": {
             "type": "string",
@@ -8573,7 +8574,8 @@
         "type": "object",
         "properties": {
           "membershipId": {
-            "type": "string"
+            "type": "integer",
+            "format": "int64"
           },
           "uniqueName": {
             "type": "string"
@@ -8597,7 +8599,8 @@
             "format": "int32"
           },
           "successMessageFlags": {
-            "type": "string"
+            "type": "integer",
+            "format": "int64"
           },
           "isDeleted": {
             "type": "boolean"
@@ -8893,7 +8896,6 @@
         }
       },
       "User.UserMembershipData": {
-        "x-go-name": "MembershipData",
         "type": "object",
         "properties": {
           "destinyMemberships": {
@@ -8904,8 +8906,9 @@
             "description": "this allows you to see destiny memberships that are visible and linked to this account (regardless of whether or not they have characters on the world server)"
           },
           "primaryMembershipId": {
-            "type": "string",
+            "type": "integer",
             "description": "If this property is populated, it will have the membership ID of the account considered to be \"primary\" in this user's cross save relationship.\r\n If null, this user has no cross save relationship, nor primary account.",
+            "format": "int64",
             "nullable": true
           },
           "bungieNetUser": {
@@ -8973,8 +8976,9 @@
             "x-enum-is-bitmask": false
           },
           "membershipId": {
-            "type": "string",
+            "type": "integer",
             "description": "Membership ID as they user is known in the Accounts service",
+            "format": "int64"
           },
           "displayName": {
             "type": "string",
@@ -9023,7 +9027,6 @@
         }
       },
       "User.UserSearchResponse": {
-        "x-go-name": "SearchResponse",
         "type": "object",
         "properties": {
           "searchResults": {
@@ -9042,7 +9045,6 @@
         }
       },
       "User.UserSearchResponseDetail": {
-        "x-go-name": "UserSearchDetail",
         "type": "object",
         "properties": {
           "bungieGlobalDisplayName": {
@@ -9054,7 +9056,8 @@
             "nullable": true
           },
           "bungieNetMembershipId": {
-            "type": "string",
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "destinyMemberships": {
@@ -9066,7 +9069,6 @@
         }
       },
       "User.UserSearchPrefixRequest": {
-        "x-go-name": "UserSearchPrefixRequest",
         "type": "object",
         "properties": {
           "displayNamePrefix": {
@@ -11438,8 +11440,9 @@
             }
           },
           "itemInstanceId": {
-            "type": "string",
+            "type": "integer",
             "description": "If this quantity is referring to a specific instance of an item, this will have the item's instance ID. Normally, this will be null.",
+            "format": "int64",
             "nullable": true
           },
           "quantity": {
@@ -11938,16 +11941,20 @@
         "type": "object",
         "properties": {
           "red": {
-            "type": "integer"
+            "type": "string",
+            "format": "byte"
           },
           "green": {
-            "type": "integer"
+            "type": "string",
+            "format": "byte"
           },
           "blue": {
-            "type": "integer"
+            "type": "string",
+            "format": "byte"
           },
           "alpha": {
-            "type": "integer"
+            "type": "string",
+            "format": "byte"
           }
         },
         "description": "Represents a color whose RGBA values are all represented as values between 0 and 255."
@@ -15263,93 +15270,6 @@
               "91",
               "92"
             ],
-            "x-enum-varnames": [
-              "None",
-              "Story",
-              "Strike",
-              "Raid",
-              "AllPvP",
-              "Patrol",
-              "AllPvE",
-              "Reserved9",
-              "Control",
-              "Reserved11",
-              "Clash",
-              "Reserved13",
-              "CrimsonDoubles",
-              "Nightfall",
-              "HeroicNightfall",
-              "AllStrikes",
-              "IronBanner",
-              "Reserved20",
-              "Reserved21",
-              "Reserved22",
-              "Reserved24",
-              "AllMayhem",
-              "Reserved26",
-              "Reserved27",
-              "Reserved28",
-              "Reserved29",
-              "Reserved30",
-              "Supremacy",
-              "PrivateMatchesAll",
-              "Survival",
-              "Countdown",
-              "TrialsOfTheNine",
-              "Social",
-              "TrialsCountdown",
-              "TrialsSurvival",
-              "IronBannerControl",
-              "IronBannerClash",
-              "IronBannerSupremacy",
-              "ScoredNightfall",
-              "ScoredHeroicNightfall",
-              "Rumble",
-              "AllDoubles",
-              "Doubles",
-              "PrivateMatchesClash",
-              "PrivateMatchesControl",
-              "PrivateMatchesSupremacy",
-              "PrivateMatchesCountdown",
-              "PrivateMatchesSurvival",
-              "PrivateMatchesMayhem",
-              "PrivateMatchesRumble",
-              "HeroicAdventure",
-              "Showdown",
-              "Lockdown",
-              "Scorched",
-              "ScorchedTeam",
-              "Gambit",
-              "AllPvECompetitive",
-              "Breakthrough",
-              "BlackArmoryRun",
-              "Salvage",
-              "IronBannerSalvage",
-              "PvPCompetitive",
-              "PvPQuickplay",
-              "ClashQuickplay",
-              "ClashCompetitive",
-              "ControlQuickplay",
-              "ControlCompetitive",
-              "GambitPrime",
-              "Reckoning",
-              "Menagerie",
-              "VexOffensive",
-              "NightmareHunt",
-              "Elimination",
-              "Momentum",
-              "Dungeon",
-              "Sundial",
-              "TrialsOfOsiris",
-              "Dares",
-              "Offensive",
-              "LostSector",
-              "Rift",
-              "ZoneControl",
-              "IronBannerRift",
-              "IronBannerZoneControl",
-              "Relic"
-            ],
             "type": "integer",
             "description": "If the activity had an activity mode directly defined on it, this will be the enum value of that mode.",
             "format": "int32",
@@ -16749,93 +16669,6 @@
               "90",
               "91",
               "92"
-            ],
-            "x-enum-varnames": [
-              "None",
-              "Story",
-              "Strike",
-              "Raid",
-              "AllPvP",
-              "Patrol",
-              "AllPvE",
-              "Reserved9",
-              "Control",
-              "Reserved11",
-              "Clash",
-              "Reserved13",
-              "CrimsonDoubles",
-              "Nightfall",
-              "HeroicNightfall",
-              "AllStrikes",
-              "IronBanner",
-              "Reserved20",
-              "Reserved21",
-              "Reserved22",
-              "Reserved24",
-              "AllMayhem",
-              "Reserved26",
-              "Reserved27",
-              "Reserved28",
-              "Reserved29",
-              "Reserved30",
-              "Supremacy",
-              "PrivateMatchesAll",
-              "Survival",
-              "Countdown",
-              "TrialsOfTheNine",
-              "Social",
-              "TrialsCountdown",
-              "TrialsSurvival",
-              "IronBannerControl",
-              "IronBannerClash",
-              "IronBannerSupremacy",
-              "ScoredNightfall",
-              "ScoredHeroicNightfall",
-              "Rumble",
-              "AllDoubles",
-              "Doubles",
-              "PrivateMatchesClash",
-              "PrivateMatchesControl",
-              "PrivateMatchesSupremacy",
-              "PrivateMatchesCountdown",
-              "PrivateMatchesSurvival",
-              "PrivateMatchesMayhem",
-              "PrivateMatchesRumble",
-              "HeroicAdventure",
-              "Showdown",
-              "Lockdown",
-              "Scorched",
-              "ScorchedTeam",
-              "Gambit",
-              "AllPvECompetitive",
-              "Breakthrough",
-              "BlackArmoryRun",
-              "Salvage",
-              "IronBannerSalvage",
-              "PvPCompetitive",
-              "PvPQuickplay",
-              "ClashQuickplay",
-              "ClashCompetitive",
-              "ControlQuickplay",
-              "ControlCompetitive",
-              "GambitPrime",
-              "Reckoning",
-              "Menagerie",
-              "VexOffensive",
-              "NightmareHunt",
-              "Elimination",
-              "Momentum",
-              "Dungeon",
-              "Sundial",
-              "TrialsOfOsiris",
-              "Dares",
-              "Offensive",
-              "LostSector",
-              "Rift",
-              "ZoneControl",
-              "IronBannerRift",
-              "IronBannerZoneControl",
-              "Relic"
             ],
             "type": "integer",
             "description": "If the playlist entry had an activity mode directly defined on it, this will be the enum value of that mode.",
@@ -29468,7 +29301,6 @@
       },
       "Destiny.Entities.Items.DestinyItemComponent": {
         "type": "object",
-        "x-go-name": "ItemComponent",
         "properties": {
           "itemHash": {
             "type": "integer",
@@ -29479,8 +29311,9 @@
             }
           },
           "itemInstanceId": {
-            "type": "string",
+            "type": "integer",
             "description": "If the item is instanced, it will have an instance ID. Lack of an instance ID implies that the item has no distinct local qualities aside from stack size.",
+            "format": "int64",
             "nullable": true
           },
           "quantity": {
@@ -31822,11 +31655,11 @@
       },
       "Destiny.Components.Profiles.DestinyProfileTransitoryPartyMember": {
         "type": "object",
-        "x-go-name": "PartyMember",
         "properties": {
           "membershipId": {
-            "type": "string",
-            "description": "The Membership ID that matches the party member."
+            "type": "integer",
+            "description": "The Membership ID that matches the party member.",
+            "format": "int64"
           },
           "emblemHash": {
             "type": "integer",
@@ -32411,11 +32244,11 @@
       },
       "Destiny.Entities.Characters.DestinyCharacterComponent": {
         "type": "object",
-        "x-go-name": "CharacterComponent",
         "properties": {
           "membershipId": {
-            "type": "string",
+            "type": "integer",
             "description": "Every Destiny Profile has a membershipId. This is provided on the character as well for convenience.",
+            "format": "int64"
           },
           "membershipType": {
             "type": "integer",
@@ -32427,8 +32260,9 @@
             "x-enum-is-bitmask": false
           },
           "characterId": {
-            "type": "string",
-            "description": "The unique identifier for the character."
+            "type": "integer",
+            "description": "The unique identifier for the character.",
+            "format": "int64"
           },
           "dateLastPlayed": {
             "type": "string",
@@ -32436,12 +32270,14 @@
             "format": "date-time"
           },
           "minutesPlayedThisSession": {
-            "type": "string",
-            "description": "If the user is currently playing, this is how long they've been playing."
+            "type": "integer",
+            "description": "If the user is currently playing, this is how long they've been playing.",
+            "format": "int64"
           },
           "minutesPlayedTotal": {
-            "type": "string",
-            "description": "If this value is 525,600, then they played Destiny for a year. Or they're a very dedicated Rent fan. Note that this includes idle time, not just time spent actually in activities shooting things."
+            "type": "integer",
+            "description": "If this value is 525,600, then they played Destiny for a year. Or they're a very dedicated Rent fan. Note that this includes idle time, not just time spent actually in activities shooting things.",
+            "format": "int64"
           },
           "light": {
             "type": "integer",
@@ -32763,7 +32599,8 @@
         "type": "object",
         "properties": {
           "itemInstanceId": {
-            "type": "string"
+            "type": "integer",
+            "format": "int64"
           },
           "plugItemHashes": {
             "type": "array",
@@ -33258,8 +33095,9 @@
             "description": "Whether or not the quest is tracked"
           },
           "itemInstanceId": {
-            "type": "string",
-            "description": "The current Quest Step will be an instanced item in the player's inventory. If you care about that, this is the instance ID of that item."
+            "type": "integer",
+            "description": "The current Quest Step will be an instanced item in the player's inventory. If you care about that, this is the instance ID of that item.",
+            "format": "int64"
           },
           "completed": {
             "type": "boolean",
@@ -35223,7 +35061,6 @@
       },
       "Destiny.Entities.Characters.DestinyCharacterActivitiesComponent": {
         "type": "object",
-        "x-go-type-name": "CharacterActivitiesComponent",
         "properties": {
           "dateActivityStarted": {
             "type": "string",
@@ -35261,7 +35098,6 @@
             }
           },
           "currentActivityModeType": {
-            "x-go-type-name": "CurrentActivityModeType",
             "enum": [
               "0",
               "2",
@@ -35348,93 +35184,6 @@
               "90",
               "91",
               "92"
-            ],
-            "x-enum-varnames": [
-              "None",
-              "Story",
-              "Strike",
-              "Raid",
-              "AllPvP",
-              "Patrol",
-              "AllPvE",
-              "Reserved9",
-              "Control",
-              "Reserved11",
-              "Clash",
-              "Reserved13",
-              "CrimsonDoubles",
-              "Nightfall",
-              "HeroicNightfall",
-              "AllStrikes",
-              "IronBanner",
-              "Reserved20",
-              "Reserved21",
-              "Reserved22",
-              "Reserved24",
-              "AllMayhem",
-              "Reserved26",
-              "Reserved27",
-              "Reserved28",
-              "Reserved29",
-              "Reserved30",
-              "Supremacy",
-              "PrivateMatchesAll",
-              "Survival",
-              "Countdown",
-              "TrialsOfTheNine",
-              "Social",
-              "TrialsCountdown",
-              "TrialsSurvival",
-              "IronBannerControl",
-              "IronBannerClash",
-              "IronBannerSupremacy",
-              "ScoredNightfall",
-              "ScoredHeroicNightfall",
-              "Rumble",
-              "AllDoubles",
-              "Doubles",
-              "PrivateMatchesClash",
-              "PrivateMatchesControl",
-              "PrivateMatchesSupremacy",
-              "PrivateMatchesCountdown",
-              "PrivateMatchesSurvival",
-              "PrivateMatchesMayhem",
-              "PrivateMatchesRumble",
-              "HeroicAdventure",
-              "Showdown",
-              "Lockdown",
-              "Scorched",
-              "ScorchedTeam",
-              "Gambit",
-              "AllPvECompetitive",
-              "Breakthrough",
-              "BlackArmoryRun",
-              "Salvage",
-              "IronBannerSalvage",
-              "PvPCompetitive",
-              "PvPQuickplay",
-              "ClashQuickplay",
-              "ClashCompetitive",
-              "ControlQuickplay",
-              "ControlCompetitive",
-              "GambitPrime",
-              "Reckoning",
-              "Menagerie",
-              "VexOffensive",
-              "NightmareHunt",
-              "Elimination",
-              "Momentum",
-              "Dungeon",
-              "Sundial",
-              "TrialsOfOsiris",
-              "Dares",
-              "Offensive",
-              "LostSector",
-              "Rift",
-              "ZoneControl",
-              "IronBannerRift",
-              "IronBannerZoneControl",
-              "Relic"
             ],
             "type": "integer",
             "description": "And the current activity's most specific mode type, if it can be found.",
@@ -36609,7 +36358,6 @@
       },
       "Destiny.Entities.Items.DestinyItemInstanceComponent": {
         "type": "object",
-        "x-go-name": "ItemInstanceComponent",
         "properties": {
           "damageType": {
             "type": "integer",
@@ -37928,11 +37676,11 @@
       },
       "Destiny.Responses.DestinyItemResponse": {
         "type": "object",
-        "x-go-name": "DestinyItem",
         "properties": {
           "characterId": {
-            "type": "string",
+            "type": "integer",
             "description": "If the item is on a character, this will return the ID of the character that is holding the item.",
+            "format": "int64",
             "nullable": true
           },
           "item": {
@@ -40493,7 +40241,6 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportData": {
         "type": "object",
-        "x-go-name": "PostGameCarnageReportData",
         "properties": {
           "period": {
             "type": "string",
@@ -40538,7 +40285,6 @@
       },
       "Destiny.HistoricalStats.DestinyHistoricalStatsActivity": {
         "type": "object",
-        "x-go-name": "HistoricalStatsActivity",
         "properties": {
           "referenceId": {
             "type": "integer",
@@ -40557,8 +40303,9 @@
             }
           },
           "instanceId": {
-            "type": "string",
-            "description": "The unique identifier for this *specific* match that was played.\r\nThis value can be used to get additional data about this activity such as who else was playing via the GetPostGameCarnageReport endpoint."
+            "type": "integer",
+            "description": "The unique identifier for this *specific* match that was played.\r\nThis value can be used to get additional data about this activity such as who else was playing via the GetPostGameCarnageReport endpoint.",
+            "format": "int64"
           },
           "mode": {
             "type": "integer",
@@ -40600,7 +40347,6 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry": {
         "type": "object",
-        "x-go-name": "PostGameCarnageReportEntry",
         "properties": {
           "standing": {
             "type": "integer",
@@ -40626,8 +40372,9 @@
             "description": "Identity details of the player"
           },
           "characterId": {
-            "type": "string",
-            "description": "ID of the player's character used in the activity."
+            "type": "integer",
+            "description": "ID of the player's character used in the activity.",
+            "format": "int64"
           },
           "values": {
             "type": "object",
@@ -40651,7 +40398,6 @@
         }
       },
       "Destiny.HistoricalStats.DestinyHistoricalStatsValue": {
-        "x-go-name": "HistoricalStatsValue",
         "type": "object",
         "properties": {
           "statId": {
@@ -40709,7 +40455,6 @@
       },
       "Destiny.HistoricalStats.DestinyPlayer": {
         "type": "object",
-        "x-go-type-name": "DestinyPlayer",
         "properties": {
           "destinyUserInfo": {
             "type": "object",
@@ -40784,7 +40529,6 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportExtendedData": {
         "type": "object",
-        "x-go-name": "PostGameCarnageReportExtendedData",
         "properties": {
           "weapons": {
             "type": "array",
@@ -40807,7 +40551,6 @@
       },
       "Destiny.HistoricalStats.DestinyHistoricalWeaponStats": {
         "type": "object",
-        "x-go-name": "HistoricalWeaponStats",
         "properties": {
           "referenceId": {
             "type": "integer",
@@ -40831,13 +40574,11 @@
       },
       "Destiny.HistoricalStats.DestinyPostGameCarnageReportTeamEntry": {
         "type": "object",
-        "x-go-name": "TeamEntry",
         "properties": {
           "teamId": {
             "type": "integer",
             "description": "Integer ID for the team.",
-            "format": "int32",
-            "x-go-name": "teamID"
+            "format": "int32"
           },
           "standing": {
             "type": "object",
@@ -41653,7 +41394,6 @@
       },
       "Destiny.HistoricalStats.DestinyHistoricalStatsPeriodGroup": {
         "type": "object",
-        "x-go-name": "StatsPeriodGroup",
         "properties": {
           "period": {
             "type": "string",
@@ -47543,7 +47283,6 @@
       },
       "User.UserSearchResponse": {
         "description": "Look at the Response property for more information about the nature of this response",
-        "x-go-name": "UserSearchResponse",
         "content": {
           "application/json": {
             "schema": {
@@ -49158,7 +48897,6 @@
       },
       "Destiny.Responses.DestinyProfileResponse": {
         "description": "The response for GetDestinyProfile, with components for character and item-level data.",
-        "x-go-name": "DestinyProfileResponse",
         "content": {
           "application/json": {
             "schema": {
@@ -49294,7 +49032,6 @@
       },
       "Config.ClanBanner.ClanBannerSource": {
         "description": "Look at the Response property for more information about the nature of this response",
-        "x-go-name": "Dont care",
         "content": {
           "application/json": {
             "schema": {
@@ -49340,7 +49077,6 @@
       },
       "Destiny.Responses.DestinyItemResponse": {
         "description": "The response object for retrieving an individual instanced item. None of these components are relevant for an item that doesn't have an \"itemInstanceId\": for those, get your information from the DestinyInventoryDefinition.",
-        "x-go-name":"DestinyItemResponse",
         "content": {
           "application/json": {
             "schema": {
@@ -49998,7 +49734,6 @@
       },
       "Destiny.HistoricalStats.DestinyActivityHistoryResults": {
         "description": "Look at the Response property for more information about the nature of this response",
-        "x-go-name": "DestinyActivityHistoryResults",
         "content": {
           "application/json": {
             "schema": {

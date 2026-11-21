@@ -31,10 +31,16 @@ The project follows a clean architecture approach with a focus on separation of 
     ```
 
 2. **Generate API code:**
-    If you make changes to `api/openapi.json` or `clients/bungie/openapi.json`, run:
+    If you make changes to `api/openapi.json` or `clients/bungie/overlay.yaml`, run:
 
     ```bash
     make generate
+    ```
+
+    To pull a newer upstream Bungie OpenAPI specification without overwriting local customizations, run:
+
+    ```bash
+    make sync-bungie-spec
     ```
 
 3. **Run Tests:**
@@ -57,7 +63,7 @@ The project follows a clean architecture approach with a focus on separation of 
 - **Architecture**: API Layer -> Service Layer -> Data/DB Layer.
 - **OpenAPI**:
   - One Trick API: `api/openapi.json` (Main API definition)
-  - Bungie API: `clients/bungie/openapi.json` (External API definition)
+  - Bungie API: `clients/bungie/openapi.json` (Unmodified upstream vendor spec — **do not edit directly**; put all Bungie customizations in `clients/bungie/overlay.yaml`, and update the upstream spec with `make sync-bungie-spec`)
   - **Note**: Most API changes should happen in `api/openapi.json`.
 
 ### Specific Instructions
