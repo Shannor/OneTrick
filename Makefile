@@ -27,6 +27,9 @@ count-prod-db:
 monitor-logs:
 	go run ./scripts/monitor_logs/main.go $(ARGS)
 
+list-servers:
+	@go run ./scripts/list_servers/main.go $(ARGS)
+
 generate:
 	npx --yes @redocly/cli@latest bundle ./openapi/openapi.yaml --output openapi.yaml
 	go generate ./...

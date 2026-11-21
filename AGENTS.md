@@ -8,6 +8,7 @@ This server powers the One Trick Destiny 2 Application
 - Run tests: `go test ./...`
 - Run api generation: `make generate`
 - Monitor production GCP logs (errors & slow calls): `make monitor-logs` (writes reports to `reports/gcp-log-monitor-latest.md` and `.json`)
+- List running local `oneTrick` servers across git worktrees and ports: `make list-servers` (supports `ARGS="-all"`, `ARGS="-v"`, `ARGS="-json"`)
 
 ## General Instructions
 
