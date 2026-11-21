@@ -5,6 +5,7 @@ required:
   - tier
   - exoticArmorMatch
   - powerWeaponMatch
+  - armorSetBonusMatch
 properties:
   snapshot:
     $ref: ./CharacterSnapshot.yaml
@@ -16,6 +17,9 @@ properties:
   powerWeaponMatch:
     type: boolean
     description: True when both snapshots have the same Power weapon equipped
+  armorSetBonusMatch:
+    type: boolean
+    description: True when both snapshots have the same unlocked armor set bonuses (or neither has active set bonuses)
   statDiffs:
     type: object
     description: >-

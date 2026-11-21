@@ -101,9 +101,11 @@ type cachedManifestService struct {
 	races            collectionCache[RaceDefinition]
 	itemCategories   collectionCache[ItemCategory]
 	damageTypes      collectionCache[DamageType]
-	activityModes    collectionCache[ActivityModeDefinition]
-	stats            collectionCache[StatDefinition]
-	progressions     collectionCache[ProgressionDefinition]
+	activityModes     collectionCache[ActivityModeDefinition]
+	stats             collectionCache[StatDefinition]
+	perks             collectionCache[PerkDefinition]
+	progressions      collectionCache[ProgressionDefinition]
+	equipableItemSets collectionCache[EquipableItemSetDefinition]
 
 	itemsByHash         hashCache[ItemDefinition]
 	activitiesByHash    hashCache[ActivityDefinition]
@@ -151,8 +153,16 @@ func (c *cachedManifestService) GetStats(ctx context.Context) (map[string]StatDe
 	return c.stats.getOrLoad(ctx, "manifestService.getStats", c.ManifestService.GetStats)
 }
 
+func (c *cachedManifestService) GetPerks(ctx context.Context) (map[string]PerkDefinition, error) {
+	return c.perks.getOrLoad(ctx, "manifestService.getPerks", c.ManifestService.GetPerks)
+}
+
 func (c *cachedManifestService) GetProgressions(ctx context.Context) (map[string]ProgressionDefinition, error) {
 	return c.progressions.getOrLoad(ctx, "manifestService.getProgressions", c.ManifestService.GetProgressions)
+}
+
+func (c *cachedManifestService) GetEquipableItemSets(ctx context.Context) (map[string]EquipableItemSetDefinition, error) {
+	return c.equipableItemSets.getOrLoad(ctx, "manifestService.getEquipableItemSets", c.ManifestService.GetEquipableItemSets)
 }
 
 func (c *cachedManifestService) GetItem(ctx context.Context, hash int64) (*ItemDefinition, error) {

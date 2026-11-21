@@ -1,10 +1,14 @@
 package destiny
 
 import (
+	"context"
 	"encoding/json"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"strconv"
 	"testing"
+
+	clog "github.com/Shannor/canonical-logger"
 )
 
 func TestTransformCharacter_NoTitle(t *testing.T) {
@@ -456,5 +460,303 @@ func TestHistoricalStatsValueActivityIDConversion(t *testing.T) {
 	}
 	if (*unique)["perGame"].ActivityID != nil {
 		t.Fatalf("expected nil ActivityID for perGame stat, got %v", (*unique)["perGame"].ActivityID)
+	}
+}
+
+func TestGenerateBaseInfo_EquipableItemSetHash(t *testing.T) {
+	itemHash := uint32(3111222333)
+	chestBucket := uint32(ChestArmor)
+	setHash := int64(500001)
+	instID := "6917529000000099"
+
+	items := map[string]ItemDefinition{
+		"3111222333": {
+			Hash: 3111222333,
+			DisplayProperties: ItemDisplayProperties{
+				Name: "Techsec Cuirass",
+				Icon: "/icons/cuirass.jpg",
+			},
+			ItemTypeDisplayName:        "Chest Armor",
+			ItemTypeAndTierDisplayName: "Legendary Chest Armor",
+			Inventory: Inventory{
+				TierType:     5,
+				TierTypeName: "Legendary",
+			},
+			EquippingBlock: EquippingBlock{
+				EquipableItemSetHash: &setHash,
+			},
+		},
+	}
+
+	dItem := &bungie.DestinyItem{
+		Item: &bungie.SingleComponentResponseOfDestinyItemComponent{
+			ItemComponent: &bungie.ItemComponent{
+				ItemHash:       &itemHash,
+				BucketHash:     &chestBucket,
+				ItemInstanceId: &instID,
+			},
+		},
+	}
+
+	got := generateBaseInfo(dItem, items, nil)
+	if got.EquipableItemSetHash == nil || *got.EquipableItemSetHash != setHash {
+		t.Fatalf("expected EquipableItemSetHash=%d, got %v", setHash, got.EquipableItemSetHash)
+	}
+}
+
+func TestGenerateArmorSetBonuses(t *testing.T) {
+	helmetKey := strconv.FormatUint(uint64(HelmetArmor), 10)
+	gauntletsKey := strconv.FormatUint(uint64(GauntletsArmor), 10)
+	chestKey := strconv.FormatUint(uint64(ChestArmor), 10)
+	legKey := strconv.FormatUint(uint64(LegArmor), 10)
+	classKey := strconv.FormatUint(uint64(ClassArmor), 10)
+	kineticKey := strconv.FormatUint(uint64(KineticBucket), 10)
+
+	const (
+		setAHash int64 = 1000
+		setBHash int64 = 2000
+	)
+
+	itemSets := map[string]EquipableItemSetDefinition{
+		"1000": {
+			Hash:              setAHash,
+			DisplayProperties: ItemDisplayProperties{Name: "Techsec Armor"},
+			SetItems:          []int64{101, 102, 103, 104, 105},
+			SetPerks: []ItemSetPerkDefinition{
+				{RequiredSetCount: 4, SandboxPerkHash: 9004},
+				{RequiredSetCount: 2, SandboxPerkHash: 9002},
+			},
+		},
+		"2000": {
+			Hash:              setBHash,
+			DisplayProperties: ItemDisplayProperties{Name: "Bushido Armor"},
+			SetItems:          []int64{201, 202, 203, 204, 205},
+			SetPerks: []ItemSetPerkDefinition{
+				{RequiredSetCount: 2, SandboxPerkHash: 9102},
+				{RequiredSetCount: 4, SandboxPerkHash: 9104},
+			},
+		},
+	}
+
+	perks := map[string]PerkDefinition{
+		"9002": {
+			Hash: 9002,
+			DisplayProperties: DamageTypeDisplayProperties{
+				Name:        "Techsec 2pc",
+				Description: "Kinetic shield bonus",
+				Icon:        "/icons/techsec2.png",
+			},
+		},
+		"9004": {
+			Hash: 9004,
+			DisplayProperties: DamageTypeDisplayProperties{
+				Name:        "Techsec 4pc",
+				Description: "Disorienting burst",
+				Icon:        "/icons/techsec4.png",
+			},
+		},
+		"9102": {
+			Hash: 9102,
+			DisplayProperties: DamageTypeDisplayProperties{
+				Name:        "Bushido 2pc",
+				Description: "Heal on final blow",
+				Icon:        "/icons/bushido2.png",
+			},
+		},
+		"9104": {
+			Hash: 9104,
+			DisplayProperties: DamageTypeDisplayProperties{
+				Name:        "Bushido 4pc",
+				Description: "Damage resist",
+				Icon:        "",
+			},
+		},
+	}
+
+	makeArmor := func(hash int64) api.ItemSnapshot {
+		return api.ItemSnapshot{ItemHash: hash}
+	}
+
+	t.Run("0-piece returns nil", func(t *testing.T) {
+		loadout := api.Loadout{
+			helmetKey:  makeArmor(999),
+			kineticKey: makeArmor(101), // Non-armor bucket should be ignored even if hash overlaps
+		}
+		if got := generateArmorSetBonuses(context.Background(), loadout, itemSets, perks); got != nil {
+			t.Fatalf("expected nil bonuses for 0-piece armor, got %+v", got)
+		}
+	})
+
+	t.Run("1-piece below threshold returns nil", func(t *testing.T) {
+		loadout := api.Loadout{helmetKey: makeArmor(101)}
+		if got := generateArmorSetBonuses(context.Background(), loadout, itemSets, perks); got != nil {
+			t.Fatalf("expected nil bonuses for 1-piece armor, got %+v", got)
+		}
+	})
+
+	t.Run("2-piece unlocks 2pc perk with full Bungie icon URL", func(t *testing.T) {
+		loadout := api.Loadout{
+			helmetKey:    makeArmor(101),
+			gauntletsKey: makeArmor(102),
+		}
+		got := generateArmorSetBonuses(context.Background(), loadout, itemSets, perks)
+		if len(got) != 1 || got[0].SetHash != setAHash || got[0].ActiveCount != 2 || len(got[0].ActivePerks) != 1 {
+			t.Fatalf("unexpected 2pc bonuses: %+v", got)
+		}
+		p := got[0].ActivePerks[0]
+		if p.Hash != 9002 || p.RequiredSetCount != 2 || p.Name != "Techsec 2pc" {
+			t.Fatalf("unexpected 2pc perk: %+v", p)
+		}
+		if p.IconPath == nil || *p.IconPath != "https://www.bungie.net/icons/techsec2.png" {
+			t.Fatalf("expected full bungie icon URL, got %v", p.IconPath)
+		}
+		if p.Description == nil || *p.Description != "Kinetic shield bonus" {
+			t.Fatalf("unexpected perk description: %v", p.Description)
+		}
+	})
+
+	t.Run("3-piece stays capped at 2pc perk with ActiveCount=3", func(t *testing.T) {
+		loadout := api.Loadout{
+			helmetKey:    makeArmor(101),
+			gauntletsKey: makeArmor(102),
+			chestKey:     makeArmor(103),
+		}
+		got := generateArmorSetBonuses(context.Background(), loadout, itemSets, perks)
+		if len(got) != 1 || got[0].ActiveCount != 3 || len(got[0].ActivePerks) != 1 || got[0].ActivePerks[0].Hash != 9002 {
+			t.Fatalf("expected 3pc to cap at 2pc perk, got %+v", got)
+		}
+	})
+
+	t.Run("4-piece unlocks sorted 2pc and 4pc perks", func(t *testing.T) {
+		loadout := api.Loadout{
+			helmetKey:    makeArmor(101),
+			gauntletsKey: makeArmor(102),
+			chestKey:     makeArmor(103),
+			legKey:       makeArmor(104),
+		}
+		got := generateArmorSetBonuses(context.Background(), loadout, itemSets, perks)
+		if len(got) != 1 || got[0].ActiveCount != 4 || len(got[0].ActivePerks) != 2 {
+			t.Fatalf("expected 4pc to unlock 2 perks, got %+v", got)
+		}
+		if got[0].ActivePerks[0].RequiredSetCount != 2 || got[0].ActivePerks[1].RequiredSetCount != 4 {
+			t.Fatalf("expected activePerks sorted by requiredSetCount asc, got %+v", got[0].ActivePerks)
+		}
+	})
+
+	t.Run("5-piece stays capped at 2pc and 4pc perks with ActiveCount=5", func(t *testing.T) {
+		loadout := api.Loadout{
+			helmetKey:    makeArmor(101),
+			gauntletsKey: makeArmor(102),
+			chestKey:     makeArmor(103),
+			legKey:       makeArmor(104),
+			classKey:     makeArmor(105),
+		}
+		got := generateArmorSetBonuses(context.Background(), loadout, itemSets, perks)
+		if len(got) != 1 || got[0].ActiveCount != 5 || len(got[0].ActivePerks) != 2 {
+			t.Fatalf("expected 5pc to unlock 2pc+4pc perks with ActiveCount=5, got %+v", got)
+		}
+	})
+
+	t.Run("dual 2+2 and 2+3 split sets produce two bonuses sorted by setHash", func(t *testing.T) {
+		loadout22 := api.Loadout{
+			helmetKey:    makeArmor(201),
+			gauntletsKey: makeArmor(202),
+			chestKey:     makeArmor(103),
+			legKey:       makeArmor(104),
+		}
+		got22 := generateArmorSetBonuses(context.Background(), loadout22, itemSets, perks)
+		if len(got22) != 2 {
+			t.Fatalf("expected 2 set bonuses for 2+2 split, got %+v", got22)
+		}
+		if got22[0].SetHash != setAHash || got22[0].ActiveCount != 2 || got22[1].SetHash != setBHash || got22[1].ActiveCount != 2 {
+			t.Fatalf("unexpected 2+2 sorted bonuses: %+v", got22)
+		}
+
+		loadout23 := api.Loadout{
+			helmetKey:    makeArmor(201),
+			gauntletsKey: makeArmor(202),
+			chestKey:     makeArmor(203),
+			legKey:       makeArmor(104),
+			classKey:     makeArmor(105),
+		}
+		got23 := generateArmorSetBonuses(context.Background(), loadout23, itemSets, perks)
+		if len(got23) != 2 {
+			t.Fatalf("expected 2 set bonuses for 2+3 split, got %+v", got23)
+		}
+		if got23[0].SetHash != setAHash || got23[0].ActiveCount != 2 || len(got23[0].ActivePerks) != 1 {
+			t.Fatalf("unexpected Set A in 2+3 split: %+v", got23[0])
+		}
+		if got23[1].SetHash != setBHash || got23[1].ActiveCount != 3 || len(got23[1].ActivePerks) != 1 {
+			t.Fatalf("unexpected Set B in 2+3 split: %+v", got23[1])
+		}
+	})
+
+	t.Run("falls back to BaseInfo.EquipableItemSetHash and logs clog warning on missing perk", func(t *testing.T) {
+		fallbackSetHash := setBHash
+		loadout := api.Loadout{
+			helmetKey: {
+				ItemHash: 8888,
+				ItemProperties: api.ItemProperties{
+					BaseInfo: api.BaseItemInfo{EquipableItemSetHash: &fallbackSetHash},
+				},
+			},
+			gauntletsKey: {
+				ItemHash: 8889,
+				ItemProperties: api.ItemProperties{
+					BaseInfo: api.BaseItemInfo{EquipableItemSetHash: &fallbackSetHash},
+				},
+			},
+		}
+
+		partialPerks := map[string]PerkDefinition{} // Missing 9102
+		ctx := clog.NewContext(context.Background())
+		got := generateArmorSetBonuses(ctx, loadout, itemSets, partialPerks)
+		if got != nil {
+			t.Fatalf("expected nil bonuses when unlocked perk is missing from manifest, got %+v", got)
+		}
+		if !clog.BagFromContext(ctx).HasWarning() {
+			t.Fatal("expected clog warning when set bonus perk hash is missing from d2SandboxPerks")
+		}
+	})
+}
+
+type failingItemSetsManifest struct {
+	ManifestService
+}
+
+func (f *failingItemSetsManifest) GetItems(_ context.Context) (map[string]ItemDefinition, error) {
+	return map[string]ItemDefinition{}, nil
+}
+
+func (f *failingItemSetsManifest) GetDamageTypes(_ context.Context) (map[string]DamageType, error) {
+	return map[string]DamageType{}, nil
+}
+
+func (f *failingItemSetsManifest) GetPerks(_ context.Context) (map[string]PerkDefinition, error) {
+	return map[string]PerkDefinition{}, nil
+}
+
+func (f *failingItemSetsManifest) GetEquipableItemSets(_ context.Context) (map[string]EquipableItemSetDefinition, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestBuildLoadout_DegradesGracefullyWhenEquipableItemSetsFails(t *testing.T) {
+	svc := &service{
+		ManifestService: &failingItemSetsManifest{},
+	}
+	ctx := clog.NewContext(context.Background())
+
+	loadout, bonuses, err := svc.buildLoadout(ctx, 12345, 3, nil, map[string]StatDefinition{})
+	if err != nil {
+		t.Fatalf("expected buildLoadout to degrade gracefully without error, got %v", err)
+	}
+	if loadout == nil {
+		t.Fatal("expected non-nil loadout map")
+	}
+	if bonuses != nil {
+		t.Fatalf("expected nil armorSetBonuses on GetEquipableItemSets failure, got %+v", bonuses)
+	}
+	if !clog.BagFromContext(ctx).HasWarning() {
+		t.Fatal("expected clog warning when GetEquipableItemSets fails")
 	}
 }

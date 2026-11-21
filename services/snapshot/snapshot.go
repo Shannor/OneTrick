@@ -438,7 +438,7 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("invalid membership id: %w", err)
 	}
 
-	loadout, stats, timestamp, err := s.D2Service.GetLoadout(ctx, memID, membershipType, characterID)
+	loadout, stats, armorSetBonuses, timestamp, err := s.D2Service.GetLoadout(ctx, memID, membershipType, characterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profile data: %w", err)
 	}
@@ -446,12 +446,18 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("failed to fetch timestamp for profile data: %w", err)
 	}
 
+	var bonusesPtr *[]api.ArmorSetBonus
+	if len(armorSetBonuses) > 0 {
+		bonusesPtr = &armorSetBonuses
+	}
+
 	clog.WithGroupField(ctx, "snapshotService.generateSnapshot", "loadoutCount", len(loadout))
 	return &api.CharacterSnapshot{
-		UserID:      userID,
-		CharacterID: characterID,
-		Stats:       new(stats),
-		Loadout:     loadout,
+		UserID:          userID,
+		CharacterID:     characterID,
+		Stats:           new(stats),
+		Loadout:         loadout,
+		ArmorSetBonuses: bonusesPtr,
 	}, nil
 }
 

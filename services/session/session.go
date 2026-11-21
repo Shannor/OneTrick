@@ -16,6 +16,11 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 )
 
+type TickOptions struct {
+	DryRun   bool
+	SkipSave bool
+}
+
 type Service interface {
 	Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error)
 	Update(ctx context.Context, sessionID string, name, description string) error
@@ -27,6 +32,7 @@ type Service interface {
 	FinalizeCompTracking(ctx context.Context, sessionID string) error
 	SetLastActivity(ctx context.Context, ID, activityID string) error
 	Delete(ctx context.Context, sessionID string, userID string) error
+	RunTick(ctx context.Context, opts TickOptions) (*api.SessionTickResponse, error)
 }
 
 var (
@@ -377,4 +383,16 @@ func (s service) AddAggregateIDs(ctx context.Context, sessionID string, aggregat
 		"aggregateCount": len(aggregateIDs),
 	})
 	return s.store.addAggregateIDs(ctx, sessionID, aggregateIDs)
+}
+
+func (s service) RunTick(ctx context.Context, opts TickOptions) (*api.SessionTickResponse, error) {
+	start := time.Now()
+	clog.WithGroupFields(ctx, "sessionService.runTick", clog.Fields{
+		"dryRun":   opts.DryRun,
+		"skipSave": opts.SkipSave,
+	})
+	return &api.SessionTickResponse{
+		DryRun:     opts.DryRun,
+		DurationMs: time.Since(start).Milliseconds(),
+	}, nil
 }

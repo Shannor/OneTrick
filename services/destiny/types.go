@@ -246,8 +246,24 @@ type ItemStat struct {
 }
 
 type EquippingBlock struct {
-	UniqueLabelHash       int64 `json:"uniqueLabelHash" firestore:"uniqueLabelHash"`
-	EquipmentSlotTypeHash int64 `json:"equipmentSlotTypeHash" firestore:"equipmentSlotTypeHash"`
+	UniqueLabelHash       int64  `json:"uniqueLabelHash" firestore:"uniqueLabelHash"`
+	EquipmentSlotTypeHash int64  `json:"equipmentSlotTypeHash" firestore:"equipmentSlotTypeHash"`
+	EquipableItemSetHash  *int64 `json:"equipableItemSetHash,omitempty" firestore:"equipableItemSetHash,omitempty"`
+}
+
+type EquipableItemSetDefinition struct {
+	DisplayProperties ItemDisplayProperties   `json:"displayProperties" firestore:"displayProperties"`
+	SetItems          []int64                 `json:"setItems" firestore:"setItems"`
+	SetPerks          []ItemSetPerkDefinition `json:"setPerks" firestore:"setPerks"`
+	Hash              int64                   `json:"hash" firestore:"hash"`
+	Index             int                     `json:"index" firestore:"index"`
+	Redacted          bool                    `json:"redacted" firestore:"redacted"`
+	Blacklisted       bool                    `json:"blacklisted" firestore:"blacklisted"`
+}
+
+type ItemSetPerkDefinition struct {
+	RequiredSetCount int   `json:"requiredSetCount" firestore:"requiredSetCount"`
+	SandboxPerkHash  int64 `json:"sandboxPerkHash" firestore:"sandboxPerkHash"`
 }
 
 type TranslationBlock struct {

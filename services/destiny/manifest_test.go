@@ -8,15 +8,17 @@ import (
 
 type spyManifestService struct {
 	ManifestService
-	classesCalls      atomic.Int32
-	racesCalls        atomic.Int32
-	modesCalls        atomic.Int32
-	recordCalls       atomic.Int32
-	itemCalls         atomic.Int32
-	activityCalls     atomic.Int32
-	activityModeCalls atomic.Int32
-	progressionsCalls atomic.Int32
-	progressionCalls  atomic.Int32
+	classesCalls           atomic.Int32
+	racesCalls             atomic.Int32
+	modesCalls             atomic.Int32
+	perksCalls             atomic.Int32
+	equipableItemSetsCalls atomic.Int32
+	recordCalls            atomic.Int32
+	itemCalls              atomic.Int32
+	activityCalls          atomic.Int32
+	activityModeCalls      atomic.Int32
+	progressionsCalls      atomic.Int32
+	progressionCalls       atomic.Int32
 }
 
 func (s *spyManifestService) GetClasses(_ context.Context) (map[string]ClassDefinition, error) {
@@ -32,6 +34,20 @@ func (s *spyManifestService) GetRaces(_ context.Context) (map[string]RaceDefinit
 func (s *spyManifestService) GetActivityModes(_ context.Context) (map[string]ActivityModeDefinition, error) {
 	s.modesCalls.Add(1)
 	return map[string]ActivityModeDefinition{"84": {Hash: 84}}, nil
+}
+
+func (s *spyManifestService) GetPerks(_ context.Context) (map[string]PerkDefinition, error) {
+	s.perksCalls.Add(1)
+	return map[string]PerkDefinition{
+		"900001": {Hash: 900001, DisplayProperties: DamageTypeDisplayProperties{Name: "Set Bonus Perk"}},
+	}, nil
+}
+
+func (s *spyManifestService) GetEquipableItemSets(_ context.Context) (map[string]EquipableItemSetDefinition, error) {
+	s.equipableItemSetsCalls.Add(1)
+	return map[string]EquipableItemSetDefinition{
+		"500001": {Hash: 500001, DisplayProperties: ItemDisplayProperties{Name: "Techsec Armor"}},
+	}, nil
 }
 
 func (s *spyManifestService) GetProgressions(_ context.Context) (map[string]ProgressionDefinition, error) {
@@ -81,12 +97,26 @@ func TestCachedManifestServiceWrapper(t *testing.T) {
 		if err != nil || len(races) != 1 {
 			t.Fatalf("expected 1 cached race, got len=%d err=%v", len(races), err)
 		}
+		perks, err := svc.GetPerks(ctx)
+		if err != nil || len(perks) != 1 {
+			t.Fatalf("expected 1 cached perk, got len=%d err=%v", len(perks), err)
+		}
+		itemSets, err := svc.GetEquipableItemSets(ctx)
+		if err != nil || len(itemSets) != 1 {
+			t.Fatalf("expected 1 cached equipable item set, got len=%d err=%v", len(itemSets), err)
+		}
 	}
 	if spy.classesCalls.Load() != 1 {
 		t.Fatalf("expected inner GetClasses called once, got %d", spy.classesCalls.Load())
 	}
 	if spy.racesCalls.Load() != 1 {
 		t.Fatalf("expected inner GetRaces called once, got %d", spy.racesCalls.Load())
+	}
+	if spy.perksCalls.Load() != 1 {
+		t.Fatalf("expected inner GetPerks called once, got %d", spy.perksCalls.Load())
+	}
+	if spy.equipableItemSetsCalls.Load() != 1 {
+		t.Fatalf("expected inner GetEquipableItemSets called once, got %d", spy.equipableItemSetsCalls.Load())
 	}
 
 	// 2. Hash lookup methods should cache per hash and only call the inner service once per unique hash
