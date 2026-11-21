@@ -251,7 +251,7 @@ func TestSearchCrossSavePrimaryMembershipResolution(t *testing.T) {
 }
 
 func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
-	t.Run("partial discriminator Name#12 filters zero-padded 4-digit codes", func(t *testing.T) {
+	t.Run("partial discriminator Name#12 filters zero-padded 4-digit codes and requires exact display name match", func(t *testing.T) {
 		client := &fakeSearchBungieClient{
 			globalResp: &bungie.UserSearchByGlobalNamePostResponse{
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
@@ -267,10 +267,18 @@ func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
 								},
 							},
 							{
-								BungieGlobalDisplayName:     ptr.Of("Guardian"),
+								BungieGlobalDisplayName:     ptr.Of("guardian"),
 								BungieGlobalDisplayNameCode: ptr.Of(int16(1299)),
 								DestinyMemberships: &[]bungie.UserUserInfoCard{
 									{MembershipId: ptr.Of("m2"), MembershipType: ptr.Of(int32(1)), DisplayName: ptr.Of("G2")},
+								},
+							},
+							{
+								// Prefix matches "Guardian" and code matches "12", but displayName != "Guardian".
+								BungieGlobalDisplayName:     ptr.Of("GuardianAngel"),
+								BungieGlobalDisplayNameCode: ptr.Of(int16(1255)),
+								DestinyMemberships: &[]bungie.UserUserInfoCard{
+									{MembershipId: ptr.Of("m-angel"), MembershipType: ptr.Of(int32(3)), DisplayName: ptr.Of("Angel")},
 								},
 							},
 							{
@@ -303,7 +311,7 @@ func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
 		if len(results) != 2 {
 			t.Fatalf("expected 2 matching results for #12, got %d", len(results))
 		}
-		if results[0].UniqueName != "Guardian#1234" || results[1].UniqueName != "Guardian#1299" {
+		if results[0].UniqueName != "Guardian#1234" || results[1].UniqueName != "guardian#1299" {
 			t.Errorf("unexpected filtered results: %+v", results)
 		}
 	})
@@ -313,6 +321,7 @@ func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
 			exactResp: &bungie.Destiny2SearchDestinyPlayerByBungieNameResponse{
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.IEnumerableOfUserInfoCard{
+					ErrorCode: ptr.Of(int32(1)),
 					Response: &[]bungie.UserUserInfoCard{
 						{
 							MembershipId:                ptr.Of("4611686018467484863"),
@@ -357,6 +366,21 @@ func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
 		}
 	})
 
+	t.Run("exact Name#1234 with page > 0 returns empty without calling Bungie", func(t *testing.T) {
+		client := &fakeSearchBungieClient{}
+		svc := &service{Client: client}
+		results, hasMore, err := svc.Search(context.Background(), "Guardian#1234", 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if hasMore || len(results) != 0 {
+			t.Fatalf("expected empty results and hasMore=false, got len=%d hasMore=%v", len(results), hasMore)
+		}
+		if client.exactCalls != 0 || client.globalCalls != 0 {
+			t.Fatalf("expected 0 Bungie calls on page > 0 for exact Bungie name, got exact=%d global=%d", client.exactCalls, client.globalCalls)
+		}
+	})
+
 	t.Run("empty namePart returns empty without calling Bungie", func(t *testing.T) {
 		client := &fakeSearchBungieClient{}
 		svc := &service{Client: client}
@@ -373,7 +397,7 @@ func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
 	})
 }
 
-func TestSearchHandles503AsErrDestinyServerDown(t *testing.T) {
+func TestSearchHandles503AndBungie200ErrorEnvelopes(t *testing.T) {
 	t.Run("prefix search 503", func(t *testing.T) {
 		client := &fakeSearchBungieClient{
 			globalResp: &bungie.UserSearchByGlobalNamePostResponse{
@@ -397,6 +421,78 @@ func TestSearchHandles503AsErrDestinyServerDown(t *testing.T) {
 		_, _, err := svc.Search(context.Background(), "Guardian#1234", 0)
 		if !errors.Is(err, ErrDestinyServerDown) {
 			t.Fatalf("expected ErrDestinyServerDown, got %v", err)
+		}
+	})
+
+	t.Run("exact search HTTP 200 SystemDisabled (ErrorCode=5) returns ErrDestinyServerDown", func(t *testing.T) {
+		client := &fakeSearchBungieClient{
+			exactResp: &bungie.Destiny2SearchDestinyPlayerByBungieNameResponse{
+				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
+				JSON200: &bungie.IEnumerableOfUserInfoCard{
+					ErrorCode:   ptr.Of(int32(5)),
+					ErrorStatus: ptr.Of("SystemDisabled"),
+					Message:     ptr.Of("This system is temporarily disabled for maintenance."),
+					Response:    nil,
+				},
+			},
+		}
+		svc := &service{Client: client}
+		_, _, err := svc.Search(context.Background(), "Guardian#1234", 0)
+		if !errors.Is(err, ErrDestinyServerDown) {
+			t.Fatalf("expected ErrDestinyServerDown for ErrorCode=5, got %v", err)
+		}
+	})
+
+	t.Run("exact search HTTP 200 nil Response returns error", func(t *testing.T) {
+		client := &fakeSearchBungieClient{
+			exactResp: &bungie.Destiny2SearchDestinyPlayerByBungieNameResponse{
+				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
+				JSON200: &bungie.IEnumerableOfUserInfoCard{
+					ErrorCode: ptr.Of(int32(1)),
+					Response:  nil,
+				},
+			},
+		}
+		svc := &service{Client: client}
+		_, _, err := svc.Search(context.Background(), "Guardian#1234", 0)
+		if err == nil {
+			t.Fatal("expected error when exact search JSON200.Response is nil")
+		}
+	})
+
+	t.Run("prefix search HTTP 200 throttle ErrorCode=36 returns error", func(t *testing.T) {
+		client := &fakeSearchBungieClient{
+			globalResp: &bungie.UserSearchByGlobalNamePostResponse{
+				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
+				JSON200: &bungie.UserSearchResponse{
+					ErrorCode:   ptr.Of(int32(36)),
+					ErrorStatus: ptr.Of("ThrottleLimitExceededMinutes"),
+					Message:     ptr.Of("Throttle limit exceeded"),
+				},
+			},
+		}
+		svc := &service{Client: client}
+		_, _, err := svc.Search(context.Background(), "Guardian", 0)
+		if err == nil {
+			t.Fatal("expected error when prefix search returns non-1 ErrorCode")
+		}
+	})
+
+	t.Run("prefix search HTTP 200 SystemDisabled (ErrorCode=5) returns ErrDestinyServerDown", func(t *testing.T) {
+		client := &fakeSearchBungieClient{
+			globalResp: &bungie.UserSearchByGlobalNamePostResponse{
+				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
+				JSON200: &bungie.UserSearchResponse{
+					ErrorCode:   ptr.Of(int32(5)),
+					ErrorStatus: ptr.Of("SystemDisabled"),
+					Message:     ptr.Of("Maintenance"),
+				},
+			},
+		}
+		svc := &service{Client: client}
+		_, _, err := svc.Search(context.Background(), "Guardian", 0)
+		if !errors.Is(err, ErrDestinyServerDown) {
+			t.Fatalf("expected ErrDestinyServerDown for prefix ErrorCode=5, got %v", err)
 		}
 	})
 }

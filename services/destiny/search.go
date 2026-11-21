@@ -13,7 +13,11 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 )
 
-const bungieMembershipTypeAll int32 = -1
+const (
+	bungieMembershipTypeAll       int32 = -1
+	bungieErrorCodeSuccess        int32 = 1
+	bungieErrorCodeSystemDisabled int32 = 5
+)
 
 func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {
 	trimmed := strings.TrimSpace(prefix)
@@ -35,7 +39,14 @@ func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.
 		return []api.SearchUserResult{}, false, nil
 	}
 
-	if page == 0 && hasDiscriminator && len(codePart) == 4 && isASCIIDigits(codePart) {
+	if hasDiscriminator && len(codePart) == 4 && isASCIIDigits(codePart) {
+		if page > 0 {
+			clog.WithGroupFields(ctx, "destinyService.search", clog.Fields{
+				"hasMore":       false,
+				"returnedCount": 0,
+			})
+			return []api.SearchUserResult{}, false, nil
+		}
 		return a.searchExactBungieName(ctx, namePart, codePart)
 	}
 
@@ -52,7 +63,13 @@ func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.
 	if resp.StatusCode() != http.StatusOK {
 		return nil, false, fmt.Errorf("bungie search failed with status %d", resp.StatusCode())
 	}
-	if resp.JSON200 == nil || resp.JSON200.SearchResponse == nil {
+	if resp.JSON200 == nil {
+		return nil, false, fmt.Errorf("no response")
+	}
+	if err := checkBungieEnvelope(ctx, resp.JSON200.ErrorCode, resp.JSON200.ErrorStatus, resp.JSON200.Message); err != nil {
+		return nil, false, err
+	}
+	if resp.JSON200.SearchResponse == nil {
 		return nil, false, fmt.Errorf("no response")
 	}
 
@@ -65,6 +82,9 @@ func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.
 			}
 			res, ok := transformUserSearchDetail(detail)
 			if !ok {
+				continue
+			}
+			if hasDiscriminator && !strings.EqualFold(res.DisplayName, namePart) {
 				continue
 			}
 			results = append(results, res)
@@ -103,9 +123,15 @@ func (a *service) searchExactBungieName(ctx context.Context, namePart string, co
 	if resp.JSON200 == nil {
 		return nil, false, fmt.Errorf("no response")
 	}
+	if err := checkBungieEnvelope(ctx, resp.JSON200.ErrorCode, resp.JSON200.ErrorStatus, resp.JSON200.Message); err != nil {
+		return nil, false, err
+	}
+	if resp.JSON200.Response == nil {
+		return nil, false, fmt.Errorf("no response")
+	}
 
 	results := make([]api.SearchUserResult, 0)
-	if resp.JSON200.Response != nil && len(*resp.JSON200.Response) > 0 {
+	if len(*resp.JSON200.Response) > 0 {
 		if res, ok := transformUserInfoCards(*resp.JSON200.Response); ok {
 			results = append(results, res)
 		}
@@ -116,6 +142,17 @@ func (a *service) searchExactBungieName(ctx context.Context, namePart string, co
 		"returnedCount": len(results),
 	})
 	return results, false, nil
+}
+
+func checkBungieEnvelope(ctx context.Context, errorCode *int32, errorStatus *string, message *string) error {
+	if errorCode == nil || *errorCode == bungieErrorCodeSuccess {
+		return nil
+	}
+	clog.WithGroupField(ctx, "destinyService.search", "bungieErrorCode", *errorCode)
+	if *errorCode == bungieErrorCodeSystemDisabled {
+		return ErrDestinyServerDown
+	}
+	return fmt.Errorf("bungie api error %d (%s): %s", *errorCode, derefString(errorStatus), derefString(message))
 }
 
 func matchesDiscriminatorPrefix(detail bungie.UserSearchDetail, codePrefix string) bool {

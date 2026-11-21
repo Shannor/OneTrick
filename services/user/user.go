@@ -33,9 +33,10 @@ type Service interface {
 	Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, bool, error)
 }
 type userService struct {
-	db        *firestore.Client
-	d2Service destiny.Service
-	store     userSearchStore
+	db            *firestore.Client
+	d2Service     destiny.Service
+	store         userSearchStore
+	bungieTimeout time.Duration
 }
 
 var _ Service = (*userService)(nil)
@@ -313,7 +314,7 @@ func (s *userService) UpdateSearchFields(ctx context.Context, userID string, dis
 		return fmt.Errorf("failed to update user search fields: %w", err)
 	}
 	if fsStore, ok := s.store.(*firestoreUserSearchStore); ok && fsStore != nil {
-		fsStore.invalidateLegacyCache()
+		fsStore.evictLegacyUser(userID)
 	}
 	return nil
 }

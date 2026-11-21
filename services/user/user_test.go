@@ -8,7 +8,10 @@ import (
 	"oneTrick/services/destiny"
 	"reflect"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	clog "github.com/Shannor/canonical-logger"
 )
@@ -18,15 +21,19 @@ type fakeD2SearchService struct {
 	results      []api.SearchUserResult
 	hasMore      bool
 	err          error
+	searchFn     func(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error)
 	capturedPref string
 	capturedPage int32
 	calls        int
 }
 
-func (f *fakeD2SearchService) Search(_ context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {
+func (f *fakeD2SearchService) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {
 	f.calls++
 	f.capturedPref = prefix
 	f.capturedPage = page
+	if f.searchFn != nil {
+		return f.searchFn(ctx, prefix, page)
+	}
 	if f.err != nil {
 		return nil, false, f.err
 	}
@@ -36,6 +43,7 @@ func (f *fakeD2SearchService) Search(_ context.Context, prefix string, page int3
 type fakeUserSearchStore struct {
 	prefixUsers       []User
 	prefixErr         error
+	prefixFn          func(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error)
 	prefixCalls       int
 	crossRefUsers     []User
 	crossRefErr       error
@@ -44,8 +52,11 @@ type fakeUserSearchStore struct {
 	capturedPrimIDs   []string
 }
 
-func (f *fakeUserSearchStore) findUsersByPrefix(_ context.Context, _ string, _ string) ([]User, error) {
+func (f *fakeUserSearchStore) findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error) {
 	f.prefixCalls++
+	if f.prefixFn != nil {
+		return f.prefixFn(ctx, queryLower, rawTrimmed)
+	}
 	if f.prefixErr != nil {
 		return nil, f.prefixErr
 	}
@@ -407,6 +418,112 @@ func TestUserServiceSearch(t *testing.T) {
 		if store.crossRefCalls != 0 {
 			t.Errorf("expected 0 cross-ref calls when Bungie failed, got %d", store.crossRefCalls)
 		}
+		if bag := clog.BagFromContext(ctx); bag == nil || !bag.HasWarning() {
+			t.Errorf("expected clog FieldBag to record warning on Bungie degradation")
+		}
+	})
+
+	t.Run("bounded Bungie timeout degrades promptly to recorded Firestore matches with warning", func(t *testing.T) {
+		store := &fakeUserSearchStore{
+			prefixUsers: []User{
+				{
+					ID:                  "user-timeout",
+					PrimaryMembershipID: "pm-timeout",
+					DisplayName:         "Weegee",
+					UniqueName:          "Weegee#1234",
+					Characters:          []api.Character{hunter},
+				},
+			},
+		}
+		d2 := &fakeD2SearchService{
+			searchFn: func(ctx context.Context, _ string, _ int32) ([]api.SearchUserResult, bool, error) {
+				<-ctx.Done()
+				return nil, false, ctx.Err()
+			},
+		}
+		svc := &userService{
+			d2Service:     d2,
+			store:         store,
+			bungieTimeout: 30 * time.Millisecond,
+		}
+
+		ctx := clog.NewContext(context.Background())
+		start := time.Now()
+		results, hasMore, err := svc.Search(ctx, "Weegee", 0)
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("expected graceful degradation on Bungie timeout, got err=%v", err)
+		}
+		if elapsed > time.Second {
+			t.Fatalf("expected prompt timeout degradation, took %v", elapsed)
+		}
+		if hasMore {
+			t.Errorf("expected hasMore=false on Bungie timeout")
+		}
+		if len(results) != 1 || !results[0].IsRecorded || results[0].UserID == nil || *results[0].UserID != "user-timeout" {
+			t.Fatalf("expected local Firestore result on timeout, got %+v", results)
+		}
+		if bag := clog.BagFromContext(ctx); bag == nil || !bag.HasWarning() {
+			t.Errorf("expected clog FieldBag to record warning on Bungie timeout")
+		}
+	})
+
+	t.Run("caller cancellation returns context.Canceled without false bungieDegraded warning", func(t *testing.T) {
+		reqCtx, cancelReq := context.WithCancel(clog.NewContext(context.Background()))
+		store := &fakeUserSearchStore{}
+		d2 := &fakeD2SearchService{
+			searchFn: func(ctx context.Context, _ string, _ int32) ([]api.SearchUserResult, bool, error) {
+				cancelReq()
+				<-ctx.Done()
+				return nil, false, ctx.Err()
+			},
+		}
+		svc := &userService{d2Service: d2, store: store}
+
+		_, _, err := svc.Search(reqCtx, "Weegee", 0)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled on caller abort, got %v", err)
+		}
+		if bag := clog.BagFromContext(reqCtx); bag != nil && bag.HasWarning() {
+			t.Errorf("expected no degradation warning on normal caller cancellation")
+		}
+	})
+
+	t.Run("page 0 executes Firestore prefix query concurrently with Bungie search", func(t *testing.T) {
+		firestoreStarted := make(chan struct{})
+		bungieStarted := make(chan struct{})
+
+		store := &fakeUserSearchStore{
+			prefixFn: func(_ context.Context, _ string, _ string) ([]User, error) {
+				close(firestoreStarted)
+				select {
+				case <-bungieStarted:
+				case <-time.After(time.Second):
+					return nil, errors.New("timed out waiting for concurrent Bungie search")
+				}
+				return []User{{ID: "u-conc", PrimaryMembershipID: "pm-conc", DisplayName: "Conc"}}, nil
+			},
+		}
+		d2 := &fakeD2SearchService{
+			searchFn: func(_ context.Context, _ string, _ int32) ([]api.SearchUserResult, bool, error) {
+				close(bungieStarted)
+				select {
+				case <-firestoreStarted:
+				case <-time.After(time.Second):
+					return nil, false, errors.New("timed out waiting for concurrent Firestore search")
+				}
+				return []api.SearchUserResult{}, false, nil
+			},
+		}
+		svc := &userService{d2Service: d2, store: store}
+
+		results, _, err := svc.Search(context.Background(), "Conc", 0)
+		if err != nil {
+			t.Fatalf("expected concurrent page 0 search to succeed, got %v", err)
+		}
+		if len(results) != 1 || results[0].PrimaryMembershipID != "pm-conc" {
+			t.Fatalf("unexpected concurrent search results: %+v", results)
+		}
 	})
 
 	t.Run("propagates Firestore error when local prefix search fails", func(t *testing.T) {
@@ -417,6 +534,104 @@ func TestUserServiceSearch(t *testing.T) {
 		_, _, err := svc.Search(context.Background(), "Weegee", 0)
 		if err == nil {
 			t.Fatal("expected error when Firestore fails")
+		}
+	})
+}
+
+func TestLegacyUnindexedUsersCache(t *testing.T) {
+	t.Run("serializes concurrent cold-cache refreshes without stampede", func(t *testing.T) {
+		var loadCalls atomic.Int32
+		store := &firestoreUserSearchStore{
+			loadAllUsersFn: func(_ context.Context) ([]User, error) {
+				loadCalls.Add(1)
+				time.Sleep(25 * time.Millisecond)
+				return []User{
+					{ID: "legacy-1", DisplayName: "OldUser"},
+					{ID: "indexed-1", DisplayName: "NewUser", DisplayNameLower: "newuser", UniqueName: "NewUser#1234", UniqueNameLower: "newuser#1234"},
+				}, nil
+			},
+		}
+
+		const workers = 10
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+				users, err := store.getLegacyUnindexedUsers(context.Background())
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if len(users) != 1 || users[0].ID != "legacy-1" {
+					t.Errorf("expected 1 legacy user legacy-1, got %+v", users)
+				}
+			}()
+		}
+		wg.Wait()
+
+		if got := loadCalls.Load(); got != 1 {
+			t.Fatalf("expected exactly 1 collection scan under concurrent cold requests, got %d", got)
+		}
+	})
+
+	t.Run("short-circuits future scans once all users are indexed and evicts backfilled users in-place", func(t *testing.T) {
+		var loadCalls atomic.Int32
+		store := &firestoreUserSearchStore{
+			loadAllUsersFn: func(_ context.Context) ([]User, error) {
+				loadCalls.Add(1)
+				return []User{
+					{ID: "legacy-1", DisplayName: "OldOne"},
+					{ID: "legacy-2", DisplayName: "OldTwo"},
+				}, nil
+			},
+		}
+
+		users, err := store.getLegacyUnindexedUsers(context.Background())
+		if err != nil || len(users) != 2 {
+			t.Fatalf("expected 2 legacy users, got len=%d err=%v", len(users), err)
+		}
+
+		// Evict legacy-1 in-place; cache stays warm without triggering another full scan.
+		store.evictLegacyUser("legacy-1")
+		users, err = store.getLegacyUnindexedUsers(context.Background())
+		if err != nil || len(users) != 1 || users[0].ID != "legacy-2" {
+			t.Fatalf("expected only legacy-2 after in-place eviction, got %+v (err=%v)", users, err)
+		}
+		if got := loadCalls.Load(); got != 1 {
+			t.Fatalf("expected 1 total load call after in-place eviction, got %d", got)
+		}
+
+		// Evict the final legacy user -> short-circuits even after TTL expiry.
+		store.evictLegacyUser("legacy-2")
+		store.legacyMu.Lock()
+		store.legacyExpiresAt = time.Now().Add(-time.Hour)
+		store.legacyMu.Unlock()
+
+		users, err = store.getLegacyUnindexedUsers(context.Background())
+		if err != nil || len(users) != 0 {
+			t.Fatalf("expected 0 legacy users after full backfill, got %+v (err=%v)", users, err)
+		}
+		if got := loadCalls.Load(); got != 1 {
+			t.Fatalf("expected no rescan once legacyAllIndexed=true, got %d load calls", got)
+		}
+	})
+
+	t.Run("caps legacy fallback matches at firestorePrefixLimit", func(t *testing.T) {
+		legacy := make([]User, 0, 40)
+		for i := 0; i < 40; i++ {
+			legacy = append(legacy, User{
+				ID:          "u-" + strconv.Itoa(i),
+				DisplayName: "Alpha" + strconv.Itoa(i),
+			})
+		}
+		matched := matchLegacyUsers(legacy, "a", map[string]User{"u-0": legacy[0]}, firestorePrefixLimit)
+		if len(matched) != firestorePrefixLimit {
+			t.Fatalf("expected legacy matches capped at %d, got %d", firestorePrefixLimit, len(matched))
+		}
+		for _, u := range matched {
+			if u.ID == "u-0" {
+				t.Fatalf("expected already-matched user u-0 to be skipped")
+			}
 		}
 	})
 }

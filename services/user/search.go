@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	firestoreInBatchLimit  = 30
-	firestorePrefixLimit   = 25
-	legacyUsersCacheTTL    = 5 * time.Minute
-	firestorePrefixHighEnd = "\uf8ff"
+	firestoreInBatchLimit      = 30
+	firestorePrefixLimit       = 25
+	legacyUsersCacheTTL        = 5 * time.Minute
+	defaultBungieSearchTimeout = 4 * time.Second
+	firestorePrefixHighEnd     = "\uf8ff"
 )
 
 type userSearchStore interface {
@@ -29,19 +30,39 @@ type userSearchStore interface {
 type firestoreUserSearchStore struct {
 	db *firestore.Client
 
-	legacyMu        sync.RWMutex
-	legacyUsers     []User
-	legacyExpiresAt time.Time
+	// loadAllUsersFn defaults to scanning Firestore's users collection and can be overridden in unit tests.
+	loadAllUsersFn func(ctx context.Context) ([]User, error)
+
+	refreshMu        sync.Mutex
+	legacyMu         sync.RWMutex
+	legacyUsers      []User
+	legacyExpiresAt  time.Time
+	legacyAllIndexed bool
 }
 
 func newFirestoreUserSearchStore(db *firestore.Client) *firestoreUserSearchStore {
 	return &firestoreUserSearchStore{db: db}
 }
 
-func (f *firestoreUserSearchStore) invalidateLegacyCache() {
+func (f *firestoreUserSearchStore) evictLegacyUser(userID string) {
+	if userID == "" {
+		return
+	}
 	f.legacyMu.Lock()
-	f.legacyExpiresAt = time.Time{}
-	f.legacyMu.Unlock()
+	defer f.legacyMu.Unlock()
+	if len(f.legacyUsers) == 0 {
+		return
+	}
+	filtered := make([]User, 0, len(f.legacyUsers))
+	for _, u := range f.legacyUsers {
+		if u.ID != userID {
+			filtered = append(filtered, u)
+		}
+	}
+	f.legacyUsers = filtered
+	if !f.legacyExpiresAt.IsZero() && len(f.legacyUsers) == 0 {
+		f.legacyAllIndexed = true
+	}
 }
 
 func (f *firestoreUserSearchStore) findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error) {
@@ -115,15 +136,8 @@ func (f *firestoreUserSearchStore) findUsersByPrefix(ctx context.Context, queryL
 	// Fallback for existing Firestore user documents created before displayNameLower / uniqueNameLower existed.
 	legacyUsers, err := f.getLegacyUnindexedUsers(ctx)
 	if err == nil && len(legacyUsers) > 0 {
-		for _, u := range legacyUsers {
-			if _, exists := byID[u.ID]; exists {
-				continue
-			}
-			dLower := strings.ToLower(strings.TrimSpace(u.DisplayName))
-			uLower := strings.ToLower(strings.TrimSpace(u.UniqueName))
-			if strings.HasPrefix(dLower, queryLower) || strings.HasPrefix(uLower, queryLower) {
-				byID[u.ID] = u
-			}
+		for _, u := range matchLegacyUsers(legacyUsers, queryLower, byID, firestorePrefixLimit) {
+			byID[u.ID] = u
 		}
 	}
 
@@ -134,9 +148,34 @@ func (f *firestoreUserSearchStore) findUsersByPrefix(ctx context.Context, queryL
 	return results, nil
 }
 
+func matchLegacyUsers(legacyUsers []User, queryLower string, existing map[string]User, limit int) []User {
+	if limit <= 0 || queryLower == "" {
+		return nil
+	}
+	matched := make([]User, 0)
+	for _, u := range legacyUsers {
+		if len(matched) >= limit {
+			break
+		}
+		if _, exists := existing[u.ID]; exists {
+			continue
+		}
+		dLower := strings.ToLower(strings.TrimSpace(u.DisplayName))
+		uLower := strings.ToLower(strings.TrimSpace(u.UniqueName))
+		if strings.HasPrefix(dLower, queryLower) || strings.HasPrefix(uLower, queryLower) {
+			matched = append(matched, u)
+		}
+	}
+	return matched
+}
+
 func (f *firestoreUserSearchStore) getLegacyUnindexedUsers(ctx context.Context) ([]User, error) {
 	now := time.Now()
 	f.legacyMu.RLock()
+	if f.legacyAllIndexed {
+		f.legacyMu.RUnlock()
+		return nil, nil
+	}
 	if !f.legacyExpiresAt.IsZero() && now.Before(f.legacyExpiresAt) {
 		cached := f.legacyUsers
 		f.legacyMu.RUnlock()
@@ -144,11 +183,23 @@ func (f *firestoreUserSearchStore) getLegacyUnindexedUsers(ctx context.Context) 
 	}
 	f.legacyMu.RUnlock()
 
-	docs, err := f.db.Collection(userCollection).Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
+	f.refreshMu.Lock()
+	defer f.refreshMu.Unlock()
+
+	now = time.Now()
+	f.legacyMu.RLock()
+	if f.legacyAllIndexed {
+		f.legacyMu.RUnlock()
+		return nil, nil
 	}
-	allUsers, err := utils.GetAllToStructs[User](docs)
+	if !f.legacyExpiresAt.IsZero() && now.Before(f.legacyExpiresAt) {
+		cached := f.legacyUsers
+		f.legacyMu.RUnlock()
+		return cached, nil
+	}
+	f.legacyMu.RUnlock()
+
+	allUsers, err := f.loadAllUsers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -163,9 +214,26 @@ func (f *firestoreUserSearchStore) getLegacyUnindexedUsers(ctx context.Context) 
 	f.legacyMu.Lock()
 	f.legacyUsers = legacy
 	f.legacyExpiresAt = now.Add(legacyUsersCacheTTL)
+	if len(legacy) == 0 {
+		f.legacyAllIndexed = true
+	}
 	f.legacyMu.Unlock()
 
 	return legacy, nil
+}
+
+func (f *firestoreUserSearchStore) loadAllUsers(ctx context.Context) ([]User, error) {
+	if f.loadAllUsersFn != nil {
+		return f.loadAllUsersFn(ctx)
+	}
+	if f.db == nil {
+		return nil, nil
+	}
+	docs, err := f.db.Collection(userCollection).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	return utils.GetAllToStructs[User](docs)
 }
 
 func (f *firestoreUserSearchStore) findUsersByMembershipIDs(ctx context.Context, bungieNetIDs []string, primaryMembershipIDs []string) ([]User, error) {
@@ -219,6 +287,13 @@ func (f *firestoreUserSearchStore) findUsersByMembershipIDs(ctx context.Context,
 	return results, nil
 }
 
+func (s *userService) bungieSearchTimeout() time.Duration {
+	if s.bungieTimeout > 0 {
+		return s.bungieTimeout
+	}
+	return defaultBungieSearchTimeout
+}
+
 func (s *userService) Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, bool, error) {
 	trimmed := strings.TrimSpace(query)
 	qLower := strings.ToLower(trimmed)
@@ -241,26 +316,45 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 
 	store := s.searchStore()
 
-	var firestoreUsers []User
+	var (
+		firestoreUsers []User
+		firestoreErr   error
+		wg             sync.WaitGroup
+	)
 	if page == 0 && store != nil {
-		var err error
-		firestoreUsers, err = store.findUsersByPrefix(ctx, qLower, trimmed)
-		if err != nil {
-			return nil, false, err
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			firestoreUsers, firestoreErr = store.findUsersByPrefix(ctx, qLower, trimmed)
+		}()
 	}
 
-	var bungieResults []api.SearchUserResult
-	hasMore := false
+	var (
+		bungieResults []api.SearchUserResult
+		hasMore       bool
+		bungieErr     error
+	)
 	if s.d2Service != nil {
-		bResults, bHasMore, err := s.d2Service.Search(ctx, trimmed, int32(page))
-		if err != nil {
-			clog.WithGroupField(ctx, "userService.search", "bungieDegraded", true)
-			hasMore = false
-		} else {
-			bungieResults = bResults
-			hasMore = bHasMore
-		}
+		bungieCtx, cancel := context.WithTimeout(ctx, s.bungieSearchTimeout())
+		bungieResults, hasMore, bungieErr = s.d2Service.Search(bungieCtx, trimmed, int32(page))
+		cancel()
+	}
+
+	wg.Wait()
+
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
+	if firestoreErr != nil {
+		return nil, false, firestoreErr
+	}
+	if bungieErr != nil {
+		clog.WithGroupFields(ctx, "userService.search", clog.Fields{
+			"bungieDegraded": true,
+			"warning":        bungieErr.Error(),
+		})
+		bungieResults = nil
+		hasMore = false
 	}
 
 	crossRefUsers := make([]User, 0)
