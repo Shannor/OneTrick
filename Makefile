@@ -30,6 +30,11 @@ monitor-logs:
 list-servers:
 	@go run ./scripts/list_servers/main.go $(ARGS)
 
+BUNGIE_SPEC_REF ?= master
+
+sync-bungie-spec:
+	curl -fsSL https://raw.githubusercontent.com/Bungie-net/api/$(BUNGIE_SPEC_REF)/openapi.json -o ./clients/bungie/openapi.json
+
 generate:
 	npx --yes @redocly/cli@latest bundle ./openapi/openapi.yaml --output openapi.yaml
 	go generate ./...

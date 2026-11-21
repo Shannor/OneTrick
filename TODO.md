@@ -27,7 +27,7 @@ Steps of actions:
 8. Need to have a way to stop it.
 
 Notes:
-- Need to add auto generating for enpoints https://github.com/Bungie-net/api/blob/master/openapi.json
+- ~~Need to add auto generating for enpoints https://github.com/Bungie-net/api/blob/master/openapi.json~~
 - https://github.com/oapi-codegen/oapi-codegen?tab=readme-ov-file#generating-api-clients
 - Could keep track of loadouts & what items are currently being held in general.
   - Top: Equipped Items

@@ -1,0 +1,213 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/OAI/Overlay-Specification/main/schemas/v1.0/schema.json
+overlay: 1.0.0
+info:
+  title: OneTrick Bungie OpenAPI Overlay
+  version: 1.0.0
+actions:
+  # 1. Broken Upstream Path Fix
+  - target: '$["paths"]["/GroupV2/{groupId}/AdminsAndFounder/"]'
+    description: Remove broken upstream path declaring {currentpage} path param without {currentpage} in URL template
+    remove: true
+
+  # 2. 64-Bit Integer-to-String Coercions (Bungie serializes int64 values as JSON strings)
+  - target: '$.components.schemas["User.UserInfoCard"].properties["membershipId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["User.UserInfoCard"].properties["membershipId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["User.GeneralUser"].properties["membershipId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["User.GeneralUser"].properties["membershipId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["User.GeneralUser"].properties["successMessageFlags"]'
+    update:
+      type: string
+  - target: '$.components.schemas["User.GeneralUser"].properties["successMessageFlags"]["format"]'
+    remove: true
+  - target: '$.components.schemas["User.UserMembershipData"].properties["primaryMembershipId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["User.UserMembershipData"].properties["primaryMembershipId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["GroupsV2.GroupUserInfoCard"].properties["membershipId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["GroupsV2.GroupUserInfoCard"].properties["membershipId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["User.UserSearchResponseDetail"].properties["bungieNetMembershipId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["User.UserSearchResponseDetail"].properties["bungieNetMembershipId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Entities.Items.DestinyItemComponent"].properties["itemInstanceId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Entities.Items.DestinyItemComponent"].properties["itemInstanceId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Components.Profiles.DestinyProfileTransitoryPartyMember"].properties["membershipId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Components.Profiles.DestinyProfileTransitoryPartyMember"].properties["membershipId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["membershipId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["membershipId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["characterId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["characterId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["minutesPlayedThisSession"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["minutesPlayedThisSession"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["minutesPlayedTotal"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"].properties["minutesPlayedTotal"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Responses.DestinyItemResponse"].properties["characterId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Responses.DestinyItemResponse"].properties["characterId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalStatsActivity"].properties["instanceId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalStatsActivity"].properties["instanceId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry"].properties["characterId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry"].properties["characterId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.DestinyItemQuantity"].properties["itemInstanceId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.DestinyItemQuantity"].properties["itemInstanceId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Components.Loadouts.DestinyLoadoutItemComponent"].properties["itemInstanceId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Components.Loadouts.DestinyLoadoutItemComponent"].properties["itemInstanceId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Quests.DestinyQuestStatus"].properties["itemInstanceId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Quests.DestinyQuestStatus"].properties["itemInstanceId"]["format"]'
+    remove: true
+
+  # 3. RGBA Byte-to-Integer Coercions (DestinyColor channels are 0..255 JSON numbers, not base64 bytes)
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["red"]'
+    update:
+      type: integer
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["red"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["green"]'
+    update:
+      type: integer
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["green"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["blue"]'
+    update:
+      type: integer
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["blue"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["alpha"]'
+    update:
+      type: integer
+  - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["alpha"]["format"]'
+    remove: true
+
+  # 4. Go Struct, Type, Field, and Response Naming Extensions
+  - target: '$.components.schemas["User.UserMembershipData"]'
+    update:
+      x-go-name: "MembershipData"
+  - target: '$.components.schemas["User.UserSearchResponse"]'
+    update:
+      x-go-name: "SearchResponse"
+  - target: '$.components.schemas["User.UserSearchResponseDetail"]'
+    update:
+      x-go-name: "UserSearchDetail"
+  - target: '$.components.schemas["User.UserSearchPrefixRequest"]'
+    update:
+      x-go-name: "UserSearchPrefixRequest"
+  - target: '$.components.schemas["Destiny.Entities.Items.DestinyItemComponent"]'
+    update:
+      x-go-name: "ItemComponent"
+  - target: '$.components.schemas["Destiny.Components.Profiles.DestinyProfileTransitoryPartyMember"]'
+    update:
+      x-go-name: "PartyMember"
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterComponent"]'
+    update:
+      x-go-name: "CharacterComponent"
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterActivitiesComponent"]'
+    update:
+      x-go-type-name: "CharacterActivitiesComponent"
+  - target: '$.components.schemas["Destiny.Entities.Items.DestinyItemInstanceComponent"]'
+    update:
+      x-go-name: "ItemInstanceComponent"
+  - target: '$.components.schemas["Destiny.Responses.DestinyItemResponse"]'
+    update:
+      x-go-name: "DestinyItem"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPostGameCarnageReportData"]'
+    update:
+      x-go-name: "PostGameCarnageReportData"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalStatsActivity"]'
+    update:
+      x-go-name: "HistoricalStatsActivity"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPostGameCarnageReportEntry"]'
+    update:
+      x-go-name: "PostGameCarnageReportEntry"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalStatsValue"]'
+    update:
+      x-go-name: "HistoricalStatsValue"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPlayer"]'
+    update:
+      x-go-type-name: "DestinyPlayer"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPostGameCarnageReportExtendedData"]'
+    update:
+      x-go-name: "PostGameCarnageReportExtendedData"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalWeaponStats"]'
+    update:
+      x-go-name: "HistoricalWeaponStats"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPostGameCarnageReportTeamEntry"]'
+    update:
+      x-go-name: "TeamEntry"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalStatsPeriodGroup"]'
+    update:
+      x-go-name: "StatsPeriodGroup"
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyPostGameCarnageReportTeamEntry"].properties["teamId"]'
+    update:
+      x-go-name: teamID
+  - target: '$.components.responses["User.UserSearchResponse"]'
+    update:
+      x-go-name: "UserSearchResponse"
+  - target: '$.components.responses["Destiny.Responses.DestinyProfileResponse"]'
+    update:
+      x-go-name: "DestinyProfileResponse"
+  - target: '$.components.responses["Config.ClanBanner.ClanBannerSource"]'
+    update:
+      x-go-name: "Dont care"
+  - target: '$.components.responses["Destiny.Responses.DestinyItemResponse"]'
+    update:
+      x-go-name: "DestinyItemResponse"
+  - target: '$.components.responses["Destiny.HistoricalStats.DestinyActivityHistoryResults"]'
+    update:
+      x-go-name: "DestinyActivityHistoryResults"
+
+  # 5. Inline Activity Mode Enum Names (x-enum-varnames)
+  - target: '$.components.schemas["Destiny.Definitions.DestinyActivityDefinition"].properties["directActivityModeType"]'
+    update:
+      x-enum-varnames: ["None", "Story", "Strike", "Raid", "AllPvP", "Patrol", "AllPvE", "Reserved9", "Control", "Reserved11", "Clash", "Reserved13", "CrimsonDoubles", "Nightfall", "HeroicNightfall", "AllStrikes", "IronBanner", "Reserved20", "Reserved21", "Reserved22", "Reserved24", "AllMayhem", "Reserved26", "Reserved27", "Reserved28", "Reserved29", "Reserved30", "Supremacy", "PrivateMatchesAll", "Survival", "Countdown", "TrialsOfTheNine", "Social", "TrialsCountdown", "TrialsSurvival", "IronBannerControl", "IronBannerClash", "IronBannerSupremacy", "ScoredNightfall", "ScoredHeroicNightfall", "Rumble", "AllDoubles", "Doubles", "PrivateMatchesClash", "PrivateMatchesControl", "PrivateMatchesSupremacy", "PrivateMatchesCountdown", "PrivateMatchesSurvival", "PrivateMatchesMayhem", "PrivateMatchesRumble", "HeroicAdventure", "Showdown", "Lockdown", "Scorched", "ScorchedTeam", "Gambit", "AllPvECompetitive", "Breakthrough", "BlackArmoryRun", "Salvage", "IronBannerSalvage", "PvPCompetitive", "PvPQuickplay", "ClashQuickplay", "ClashCompetitive", "ControlQuickplay", "ControlCompetitive", "GambitPrime", "Reckoning", "Menagerie", "VexOffensive", "NightmareHunt", "Elimination", "Momentum", "Dungeon", "Sundial", "TrialsOfOsiris", "Dares", "Offensive", "LostSector", "Rift", "ZoneControl", "IronBannerRift", "IronBannerZoneControl", "Relic"]
+  - target: '$.components.schemas["Destiny.Definitions.DestinyActivityPlaylistItemDefinition"].properties["directActivityModeType"]'
+    update:
+      x-enum-varnames: ["None", "Story", "Strike", "Raid", "AllPvP", "Patrol", "AllPvE", "Reserved9", "Control", "Reserved11", "Clash", "Reserved13", "CrimsonDoubles", "Nightfall", "HeroicNightfall", "AllStrikes", "IronBanner", "Reserved20", "Reserved21", "Reserved22", "Reserved24", "AllMayhem", "Reserved26", "Reserved27", "Reserved28", "Reserved29", "Reserved30", "Supremacy", "PrivateMatchesAll", "Survival", "Countdown", "TrialsOfTheNine", "Social", "TrialsCountdown", "TrialsSurvival", "IronBannerControl", "IronBannerClash", "IronBannerSupremacy", "ScoredNightfall", "ScoredHeroicNightfall", "Rumble", "AllDoubles", "Doubles", "PrivateMatchesClash", "PrivateMatchesControl", "PrivateMatchesSupremacy", "PrivateMatchesCountdown", "PrivateMatchesSurvival", "PrivateMatchesMayhem", "PrivateMatchesRumble", "HeroicAdventure", "Showdown", "Lockdown", "Scorched", "ScorchedTeam", "Gambit", "AllPvECompetitive", "Breakthrough", "BlackArmoryRun", "Salvage", "IronBannerSalvage", "PvPCompetitive", "PvPQuickplay", "ClashQuickplay", "ClashCompetitive", "ControlQuickplay", "ControlCompetitive", "GambitPrime", "Reckoning", "Menagerie", "VexOffensive", "NightmareHunt", "Elimination", "Momentum", "Dungeon", "Sundial", "TrialsOfOsiris", "Dares", "Offensive", "LostSector", "Rift", "ZoneControl", "IronBannerRift", "IronBannerZoneControl", "Relic"]
+  - target: '$.components.schemas["Destiny.Entities.Characters.DestinyCharacterActivitiesComponent"].properties["currentActivityModeType"]'
+    update:
+      x-go-type-name: CurrentActivityModeType
+      x-enum-varnames: ["None", "Story", "Strike", "Raid", "AllPvP", "Patrol", "AllPvE", "Reserved9", "Control", "Reserved11", "Clash", "Reserved13", "CrimsonDoubles", "Nightfall", "HeroicNightfall", "AllStrikes", "IronBanner", "Reserved20", "Reserved21", "Reserved22", "Reserved24", "AllMayhem", "Reserved26", "Reserved27", "Reserved28", "Reserved29", "Reserved30", "Supremacy", "PrivateMatchesAll", "Survival", "Countdown", "TrialsOfTheNine", "Social", "TrialsCountdown", "TrialsSurvival", "IronBannerControl", "IronBannerClash", "IronBannerSupremacy", "ScoredNightfall", "ScoredHeroicNightfall", "Rumble", "AllDoubles", "Doubles", "PrivateMatchesClash", "PrivateMatchesControl", "PrivateMatchesSupremacy", "PrivateMatchesCountdown", "PrivateMatchesSurvival", "PrivateMatchesMayhem", "PrivateMatchesRumble", "HeroicAdventure", "Showdown", "Lockdown", "Scorched", "ScorchedTeam", "Gambit", "AllPvECompetitive", "Breakthrough", "BlackArmoryRun", "Salvage", "IronBannerSalvage", "PvPCompetitive", "PvPQuickplay", "ClashQuickplay", "ClashCompetitive", "ControlQuickplay", "ControlCompetitive", "GambitPrime", "Reckoning", "Menagerie", "VexOffensive", "NightmareHunt", "Elimination", "Momentum", "Dungeon", "Sundial", "TrialsOfOsiris", "Dares", "Offensive", "LostSector", "Rift", "ZoneControl", "IronBannerRift", "IronBannerZoneControl", "Relic"]

@@ -7,6 +7,7 @@ This server powers the One Trick Destiny 2 Application
 - Install dependencies: `go mod tidy`
 - Run tests: `go test ./...`
 - Run api generation: `make generate`
+- Sync upstream Bungie OpenAPI spec: `make sync-bungie-spec` (optionally override `BUNGIE_SPEC_REF=<commit-or-tag>`, defaults to `master`)
 - Monitor production GCP logs (errors & slow calls): `make monitor-logs` (writes reports to `reports/gcp-log-monitor-latest.md` and `.json`)
 - List running local `oneTrick` servers across git worktrees and ports: `make list-servers` (supports `ARGS="-all"`, `ARGS="-v"`, `ARGS="-json"`)
 
@@ -17,7 +18,7 @@ This server powers the One Trick Destiny 2 Application
 - The project uses a clean architecture approach with a focus on separation of concerns and testability.
 - This project has two Open API Schemas.
   - One is for One Trick which is in `api/openapi.json`
-  - The other is for generating from Bungie's Destiny API which is in `clients/bungie/openapi.json`
+  - The other is for generating from Bungie's Destiny API which is in `clients/bungie/openapi.json` (an unmodified upstream vendor spec — **never edit `clients/bungie/openapi.json` directly**; all Bungie type coercions, path fixes, and `x-go-*` / `x-enum-varnames` customizations must be made in `clients/bungie/overlay.yaml`)
   - Most changes will need to take place in the One Trick Open API schema and not in bungie's.
 - Each Service can be found in the `/services` folder and provides the business logic for the application.
   
