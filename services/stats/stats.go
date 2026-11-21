@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"oneTrick/api"
-	"oneTrick/ptr"
 	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
@@ -95,29 +94,29 @@ func summarizeAggregatesForCharacter(aggs []api.Aggregate, characterID string) (
 
 func buildPlayerStats(st aggStatSummary, count int) api.PlayerStats {
 	return api.PlayerStats{
-		Assists: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Assists)),
-			Value:        ptr.Of(float64(st.Assists)),
+		Assists: new(api.StatsValuePair{
+			DisplayValue: new(fmt.Sprintf("%d", st.Assists)),
+			Value:        new(float64(st.Assists)),
 		}),
-		Deaths: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Deaths)),
-			Value:        ptr.Of(float64(st.Deaths)),
+		Deaths: new(api.StatsValuePair{
+			DisplayValue: new(fmt.Sprintf("%d", st.Deaths)),
+			Value:        new(float64(st.Deaths)),
 		}),
-		Kills: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Kills)),
-			Value:        ptr.Of(float64(st.Kills)),
+		Kills: new(api.StatsValuePair{
+			DisplayValue: new(fmt.Sprintf("%d", st.Kills)),
+			Value:        new(float64(st.Kills)),
 		}),
-		Kd: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
-			Value:        ptr.Of(getKD(st.Kills, st.Deaths)),
+		Kd: new(api.StatsValuePair{
+			DisplayValue: new(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
+			Value:        new(getKD(st.Kills, st.Deaths)),
 		}),
-		Kda: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
-			Value:        ptr.Of(getKDA(st.Kills, st.Deaths, st.Assists)),
+		Kda: new(api.StatsValuePair{
+			DisplayValue: new(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
+			Value:        new(getKDA(st.Kills, st.Deaths, st.Assists)),
 		}),
-		Standing: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Wins, count))),
-			Value:        ptr.Of(getKD(st.Wins, count)),
+		Standing: new(api.StatsValuePair{
+			DisplayValue: new(fmt.Sprintf("%.2f", getKD(st.Wins, count))),
+			Value:        new(getKD(st.Wins, count)),
 		}),
 	}
 }
@@ -647,29 +646,29 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		order[pairs[idx].id] = int(idx + 1)
 		s := pairs[idx].stats
 		finalPlayerStats[pairs[idx].id] = api.PlayerStats{
-			Assists: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", s.Assists)),
-				Value:        ptr.Of(float64(s.Assists)),
+			Assists: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", s.Assists)),
+				Value:        new(float64(s.Assists)),
 			}),
-			Deaths: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", s.Deaths)),
-				Value:        ptr.Of(float64(s.Deaths)),
+			Deaths: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", s.Deaths)),
+				Value:        new(float64(s.Deaths)),
 			}),
-			Kills: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", s.Kills)),
-				Value:        ptr.Of(float64(s.Kills)),
+			Kills: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", s.Kills)),
+				Value:        new(float64(s.Kills)),
 			}),
-			Kd: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(s.Kills, s.Deaths))),
-				Value:        ptr.Of(getKD(s.Kills, s.Deaths)),
+			Kd: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKD(s.Kills, s.Deaths))),
+				Value:        new(getKD(s.Kills, s.Deaths)),
 			}),
-			Kda: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(s.Kills, s.Deaths, s.Assists))),
-				Value:        ptr.Of(getKDA(s.Kills, s.Deaths, s.Assists)),
+			Kda: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKDA(s.Kills, s.Deaths, s.Assists))),
+				Value:        new(getKDA(s.Kills, s.Deaths, s.Assists)),
 			}),
-			Standing: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(s.Wins, count))),
-				Value:        ptr.Of(getKD(s.Wins, count)),
+			Standing: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKD(s.Wins, count))),
+				Value:        new(getKD(s.Wins, count)),
 			}),
 		}
 	}
@@ -1039,7 +1038,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		} else if featured[i].UsageCount != nil && *featured[i].UsageCount > 5 {
 			reason = fmt.Sprintf("Most Active %s Community Loadout (>5 Games)", classType)
 		}
-		featured[i].FeaturedReason = ptr.Of(reason)
+		featured[i].FeaturedReason = new(reason)
 	}
 
 	clog.WithGroupFields(ctx, "statsService.getFeaturedLoadouts", clog.Fields{
@@ -1072,35 +1071,35 @@ func (s *service) buildFeaturedLoadoutWithUser(snap *api.CharacterSnapshot, u *a
 	}
 
 	if st != nil {
-		feat.UsageCount = ptr.Of(st.GamesCount)
+		feat.UsageCount = new(st.GamesCount)
 		feat.Stats = &api.PlayerStats{
-			Assists: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Assists)),
-				Value:        ptr.Of(float64(st.Assists)),
+			Assists: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", st.Assists)),
+				Value:        new(float64(st.Assists)),
 			}),
-			Deaths: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Deaths)),
-				Value:        ptr.Of(float64(st.Deaths)),
+			Deaths: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", st.Deaths)),
+				Value:        new(float64(st.Deaths)),
 			}),
-			Kills: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Kills)),
-				Value:        ptr.Of(float64(st.Kills)),
+			Kills: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", st.Kills)),
+				Value:        new(float64(st.Kills)),
 			}),
-			Kd: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
-				Value:        ptr.Of(getKD(st.Kills, st.Deaths)),
+			Kd: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
+				Value:        new(getKD(st.Kills, st.Deaths)),
 			}),
-			Kda: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
-				Value:        ptr.Of(getKDA(st.Kills, st.Deaths, st.Assists)),
+			Kda: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
+				Value:        new(getKDA(st.Kills, st.Deaths, st.Assists)),
 			}),
-			Standing: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Wins, st.GamesCount))),
-				Value:        ptr.Of(getKD(st.Wins, st.GamesCount)),
+			Standing: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKD(st.Wins, st.GamesCount))),
+				Value:        new(getKD(st.Wins, st.GamesCount)),
 			}),
 		}
 	} else {
-		feat.UsageCount = ptr.Of(1)
+		feat.UsageCount = new(1)
 	}
 
 	return feat
@@ -1127,35 +1126,35 @@ func (s *service) buildFeaturedLoadout(ctx context.Context, snap *api.CharacterS
 	}
 
 	if st != nil {
-		feat.UsageCount = ptr.Of(st.GamesCount)
+		feat.UsageCount = new(st.GamesCount)
 		feat.Stats = &api.PlayerStats{
-			Assists: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Assists)),
-				Value:        ptr.Of(float64(st.Assists)),
+			Assists: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", st.Assists)),
+				Value:        new(float64(st.Assists)),
 			}),
-			Deaths: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Deaths)),
-				Value:        ptr.Of(float64(st.Deaths)),
+			Deaths: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", st.Deaths)),
+				Value:        new(float64(st.Deaths)),
 			}),
-			Kills: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%d", st.Kills)),
-				Value:        ptr.Of(float64(st.Kills)),
+			Kills: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%d", st.Kills)),
+				Value:        new(float64(st.Kills)),
 			}),
-			Kd: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
-				Value:        ptr.Of(getKD(st.Kills, st.Deaths)),
+			Kd: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKD(st.Kills, st.Deaths))),
+				Value:        new(getKD(st.Kills, st.Deaths)),
 			}),
-			Kda: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
-				Value:        ptr.Of(getKDA(st.Kills, st.Deaths, st.Assists)),
+			Kda: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKDA(st.Kills, st.Deaths, st.Assists))),
+				Value:        new(getKDA(st.Kills, st.Deaths, st.Assists)),
 			}),
-			Standing: ptr.Of(api.StatsValuePair{
-				DisplayValue: ptr.Of(fmt.Sprintf("%.2f", getKD(st.Wins, st.GamesCount))),
-				Value:        ptr.Of(getKD(st.Wins, st.GamesCount)),
+			Standing: new(api.StatsValuePair{
+				DisplayValue: new(fmt.Sprintf("%.2f", getKD(st.Wins, st.GamesCount))),
+				Value:        new(getKD(st.Wins, st.GamesCount)),
 			}),
 		}
 	} else {
-		feat.UsageCount = ptr.Of(1)
+		feat.UsageCount = new(1)
 	}
 
 	return feat

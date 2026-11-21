@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/generator"
-	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
@@ -451,7 +450,7 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 	return &api.CharacterSnapshot{
 		UserID:      userID,
 		CharacterID: characterID,
-		Stats:       ptr.Of(stats),
+		Stats:       new(stats),
 		Loadout:     loadout,
 	}, nil
 }

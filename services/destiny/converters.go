@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/ptr"
 	"strconv"
 	"strings"
 	"time"
@@ -133,7 +132,7 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 		InstanceId:                 *c.ItemInstanceId,
 		ItemHash:                   int64(*c.ItemHash),
 		Name:                       name,
-		Icon:                       ptr.Of(setBaseBungieURL(&icon)),
+		Icon:                       new(setBaseBungieURL(&icon)),
 		ItemTypeAndTierDisplayName: def.ItemTypeAndTierDisplayName,
 		ItemTypeDisplayName:        def.ItemTypeDisplayName,
 		TierTypeName:               def.Inventory.TierTypeName,
@@ -148,7 +147,7 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 				InstanceId:                 *c.ItemInstanceId,
 				ItemHash:                   styleDef.Hash,
 				Name:                       styleDef.DisplayProperties.Name,
-				Icon:                       ptr.Of(setBaseBungieURL(&styleDef.DisplayProperties.Icon)),
+				Icon:                       new(setBaseBungieURL(&styleDef.DisplayProperties.Icon)),
 				ItemTypeAndTierDisplayName: styleDef.ItemTypeAndTierDisplayName,
 				ItemTypeDisplayName:        styleDef.ItemTypeDisplayName,
 				TierTypeName:               styleDef.Inventory.TierTypeName,
@@ -199,7 +198,7 @@ func generatePerks(item *bungie.DestinyItem, perks map[string]PerkDefinition) []
 		}
 		results = append(results, api.Perk{
 			Hash:        int64(*p.PerkHash),
-			IconPath:    ptr.Of(setBaseBungieURL(p.IconPath)),
+			IconPath:    new(setBaseBungieURL(p.IconPath)),
 			Name:        perk.DisplayProperties.Name,
 			Description: &perk.DisplayProperties.Description,
 		})
@@ -228,9 +227,9 @@ func generateSockets(item *bungie.DestinyItem, items map[string]ItemDefinition) 
 			PlugHash:                  hash,
 			Name:                      socket.DisplayProperties.Name,
 			Description:               socket.DisplayProperties.Description,
-			ItemTypeDisplayName:       ptr.Of(socket.ItemTypeDisplayName),
-			ItemTypeTieredDisplayName: ptr.Of(socket.ItemTypeAndTierDisplayName),
-			Icon:                      ptr.Of(setBaseBungieURL(&socket.DisplayProperties.Icon)),
+			ItemTypeDisplayName:       new(socket.ItemTypeDisplayName),
+			ItemTypeTieredDisplayName: new(socket.ItemTypeAndTierDisplayName),
+			Icon:                      new(setBaseBungieURL(&socket.DisplayProperties.Icon)),
 		})
 	}
 	return &sockets
@@ -323,7 +322,7 @@ func uintToInt64[T ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](item *T) *int64
 	if item == nil {
 		return nil
 	}
-	return ptr.Of(int64(*item))
+	return new(int64(*item))
 }
 
 func TransformHistoricActivity(history *bungie.HistoricalStatsActivity, activityDefinition, directorDef ActivityDefinition, modeDefinition ActivityModeDefinition) *api.ActivityHistory {
@@ -530,7 +529,7 @@ func WeaponsToInstanceWeapons(values *[]bungie.HistoricalWeaponStats, items map[
 			r.Display = &api.Display{
 				Description: def.ItemTypeAndTierDisplayName,
 				HasIcon:     def.DisplayProperties.HasIcon,
-				Icon:        ptr.Of(setBaseBungieURL(&def.DisplayProperties.Icon)),
+				Icon:        new(setBaseBungieURL(&def.DisplayProperties.Icon)),
 				Name:        def.DisplayProperties.Name,
 			}
 		}
@@ -674,16 +673,16 @@ func EstimateGameMode(mode *string, activity string) *api.GameMode {
 	act := strings.TrimSpace(activity)
 
 	if isIronBannerActivity(m, act) {
-		return ptr.Of(api.GameModeIronBanner)
+		return new(api.GameModeIronBanner)
 	}
 	if isTrialsActivity(m, act) {
-		return ptr.Of(api.GameModeTrials)
+		return new(api.GameModeTrials)
 	}
 	if isCompetitiveActivity(m, act) {
-		return ptr.Of(api.GameModeCompetitive)
+		return new(api.GameModeCompetitive)
 	}
 	if isQuickplayActivity(m, act) {
-		return ptr.Of(api.GameModeQuickPlay)
+		return new(api.GameModeQuickPlay)
 	}
 	return nil
 }
@@ -722,7 +721,7 @@ func MatchesGameMode(history api.ActivityHistory, gameMode api.GameMode) bool {
 //			DisplayName:    *info.DisplayName,
 //			MembershipID:   *info.MembershipId,
 //			MembershipType: generateSourceSystem(info.MembershipType),
-//			IconPath:       ptr.Of(setBaseBungieURL(info.IconPath)),
+//			IconPath:       new(setBaseBungieURL(info.IconPath)),
 //		}
 //		results = append(results, i)
 //	}

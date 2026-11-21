@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/ptr"
 	"testing"
 )
 
@@ -252,13 +251,13 @@ func TestMatchesGameMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			est := EstimateGameMode(ptr.Of(tt.mode), tt.activity)
+			est := EstimateGameMode(new(tt.mode), tt.activity)
 			if est == nil || *est != tt.expectedMode {
 				t.Errorf("EstimateGameMode(%q, %q) = %v, want %q", tt.mode, tt.activity, est, tt.expectedMode)
 			}
 
 			history := api.ActivityHistory{
-				Mode:              ptr.Of(tt.mode),
+				Mode:              new(tt.mode),
 				Activity:          tt.activity,
 				EstimatedGameMode: est,
 			}
@@ -419,19 +418,19 @@ func TestBungieStringifiedInt64Unmarshaling(t *testing.T) {
 func TestHistoricalStatsValueActivityIDConversion(t *testing.T) {
 	stats := map[string]bungie.HistoricalStatsValue{
 		"personalBest": {
-			ActivityId: ptr.Of("15790919881"),
-			StatId:     ptr.Of("longestKillSpree"),
+			ActivityId: new("15790919881"),
+			StatId:     new("longestKillSpree"),
 			Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{
-				DisplayValue: ptr.Of("12"),
-				Value:        ptr.Of(float64(12)),
+				DisplayValue: new("12"),
+				Value:        new(float64(12)),
 			},
 		},
 		"perGame": {
 			ActivityId: nil,
-			StatId:     ptr.Of("kills"),
+			StatId:     new("kills"),
 			Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{
-				DisplayValue: ptr.Of("20"),
-				Value:        ptr.Of(float64(20)),
+				DisplayValue: new("20"),
+				Value:        new(float64(20)),
 			},
 		},
 	}

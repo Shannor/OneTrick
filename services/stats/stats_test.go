@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"oneTrick/api"
-	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
@@ -57,17 +56,17 @@ func TestSnapshotMetricsSorting(t *testing.T) {
 
 func TestPlayerStatsMapping(t *testing.T) {
 	ps := api.PlayerStats{
-		Kills: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of("25"),
-			Value:        ptr.Of(25.0),
+		Kills: new(api.StatsValuePair{
+			DisplayValue: new("25"),
+			Value:        new(25.0),
 		}),
-		Deaths: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of("10"),
-			Value:        ptr.Of(10.0),
+		Deaths: new(api.StatsValuePair{
+			DisplayValue: new("10"),
+			Value:        new(10.0),
 		}),
-		Kd: ptr.Of(api.StatsValuePair{
-			DisplayValue: ptr.Of("2.50"),
-			Value:        ptr.Of(2.50),
+		Kd: new(api.StatsValuePair{
+			DisplayValue: new("2.50"),
+			Value:        new(2.50),
 		}),
 	}
 
@@ -95,7 +94,7 @@ func TestStatsMatchesGameMode(t *testing.T) {
 
 	for _, tt := range tests {
 		h := api.ActivityHistory{
-			Mode:     ptr.Of(tt.mode),
+			Mode:     new(tt.mode),
 			Activity: tt.activity,
 		}
 		if got := MatchesGameMode(h, tt.gameMode); got != tt.want {
@@ -117,14 +116,14 @@ func TestFilterSnapshotsByGameModeAndMinGames(t *testing.T) {
 	}
 
 	t.Run("gameMode set with minimumGames=0 excludes snapshots with 0 games", func(t *testing.T) {
-		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, ptr.Of(api.GameModeCompetitive), 0)
+		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, new(api.GameModeCompetitive), 0)
 		if len(filtered) != 2 || filtered[0].ID != "snap-three" || filtered[1].ID != "snap-six" {
 			t.Errorf("expected [snap-three, snap-six], got %+v", filtered)
 		}
 	})
 
 	t.Run("gameMode set with minimumGames=5 excludes snapshots with <5 games", func(t *testing.T) {
-		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, ptr.Of(api.GameModeCompetitive), 5)
+		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, new(api.GameModeCompetitive), 5)
 		if len(filtered) != 1 || filtered[0].ID != "snap-six" {
 			t.Errorf("expected [snap-six], got %+v", filtered)
 		}
@@ -138,7 +137,7 @@ func TestFilterSnapshotsByGameModeAndMinGames(t *testing.T) {
 	})
 
 	t.Run("gameMode allGameModes with minimumGames=0 includes snapshots with 0 games", func(t *testing.T) {
-		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, ptr.Of(api.GameModeAll), 0)
+		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, new(api.GameModeAll), 0)
 		if len(filtered) != 3 {
 			t.Errorf("expected all 3 snapshots, got %+v", filtered)
 		}
@@ -407,7 +406,7 @@ func TestComputeSimilarCountsSkipsArchivedAndIncomplete(t *testing.T) {
 	snaps := []api.CharacterSnapshot{
 		{ID: "a", Loadout: makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-1", 4001)},
 		{ID: "b", Loadout: makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-2", 4002)},
-		{ID: "archived", MergedIntoID: ptr.Of("a"), Loadout: makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-3", 4003)},
+		{ID: "archived", MergedIntoID: new("a"), Loadout: makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-3", 4003)},
 		{ID: "empty-kin", Loadout: makeBaseTestLoadout("", "en-1", 3003, "pow-1", 4001)},
 		{ID: "empty-kin-2", Loadout: makeBaseTestLoadout("", "en-1", 3003, "pow-1", 4001)},
 	}
@@ -496,13 +495,13 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 				SnapshotIds:  []string{snapID},
 				ActivityDetails: api.ActivityHistory{
 					Activity:          string(mode),
-					EstimatedGameMode: ptr.Of(mode),
+					EstimatedGameMode: new(mode),
 					InstanceID:        aggID,
 				},
 				SnapshotLinks: map[string]api.SnapshotLink{
 					charID: {
 						CharacterID:      charID,
-						SnapshotID:       ptr.Of(snapID),
+						SnapshotID:       new(snapID),
 						ConfidenceLevel:  api.HighConfidenceLevel,
 						ConfidenceSource: api.SystemConfidenceSource,
 						CreatedAt:        now,
@@ -511,10 +510,10 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 				Performance: map[string]api.InstancePerformance{
 					charID: {
 						PlayerStats: api.PlayerStats{
-							Kills:    ptr.Of(api.StatsValuePair{Value: ptr.Of(killsPerGame)}),
-							Deaths:   ptr.Of(api.StatsValuePair{Value: ptr.Of(deathsPerGame)}),
-							Assists:  ptr.Of(api.StatsValuePair{Value: ptr.Of(2.0)}),
-							Standing: ptr.Of(api.StatsValuePair{Value: ptr.Of(0.0)}),
+							Kills:    new(api.StatsValuePair{Value: new(killsPerGame)}),
+							Deaths:   new(api.StatsValuePair{Value: new(deathsPerGame)}),
+							Assists:  new(api.StatsValuePair{Value: new(2.0)}),
+							Standing: new(api.StatsValuePair{Value: new(0.0)}),
 						},
 					},
 				},
@@ -540,7 +539,7 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 	seedSnap(snapD, -4*time.Minute, "kin-grp2", "en-grp2", 3003, 888001, 6, nil)
 	seedSnap(snapE, -5*time.Minute, "kin-grp2", "en-grp2", 3003, 888001, 6, nil)
 	seedSnap(snapU, -6*time.Minute, "kin-uniq", "en-uniq", 3003, 888001, 6, nil)
-	seedSnap(snapZ, 0, "kin-grp1", "en-grp1", 3003, 888001, 6, ptr.Of(snapA))
+	seedSnap(snapZ, 0, "kin-grp1", "en-grp1", 3003, 888001, 6, new(snapA))
 
 	seedGames(snapA, 15, api.GameModeQuickPlay, 20, 10)
 	seedGames(snapA, 5, api.GameModeTrials, 10, 5) // 20 total games across modes
@@ -662,4 +661,3 @@ func TestGetBestPerformingLoadoutsEmpty(t *testing.T) {
 		t.Fatalf("expected empty loadouts/stats/counts, got loadouts=%v stats=%v counts=%v", loadouts, perfStats, counts)
 	}
 }
-

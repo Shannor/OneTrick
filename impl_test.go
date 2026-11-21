@@ -8,7 +8,6 @@ import (
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/logger"
-	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
@@ -304,8 +303,8 @@ func (m *mockStatsService) GetSimilarSnapshots(
 func (m *mockStatsService) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error) {
 	return []api.FeaturedLoadout{
 		{
-			FeaturedReason: ptr.Of("Top Hunter PvP Loadout of the Day"),
-			UsageCount:     ptr.Of(5),
+			FeaturedReason: new("Top Hunter PvP Loadout of the Day"),
+			UsageCount:     new(5),
 			Snapshot: api.CharacterSnapshot{
 				ID:   "snap-1",
 				Name: "Featured Hunter Loadout",
@@ -322,7 +321,7 @@ func TestGetFeaturedLoadouts(t *testing.T) {
 
 	req := api.GetFeaturedLoadoutsRequestObject{
 		Params: api.GetFeaturedLoadoutsParams{
-			Count: ptr.Of(5),
+			Count: new(5),
 		},
 	}
 
@@ -352,10 +351,10 @@ func TestGetSnapshotsZeroIndexedPageOffset(t *testing.T) {
 		count          *int
 		expectedOffset int
 	}{
-		{name: "nil page defaults to offset 0", page: nil, count: ptr.Of(10), expectedOffset: 0},
-		{name: "page 0 uses offset 0", page: ptr.Of(0), count: ptr.Of(10), expectedOffset: 0},
-		{name: "page 1 uses offset 10", page: ptr.Of(1), count: ptr.Of(10), expectedOffset: 10},
-		{name: "page 2 uses offset 20", page: ptr.Of(2), count: ptr.Of(10), expectedOffset: 20},
+		{name: "nil page defaults to offset 0", page: nil, count: new(10), expectedOffset: 0},
+		{name: "page 0 uses offset 0", page: new(0), count: new(10), expectedOffset: 0},
+		{name: "page 1 uses offset 10", page: new(1), count: new(10), expectedOffset: 10},
+		{name: "page 2 uses offset 20", page: new(2), count: new(10), expectedOffset: 20},
 	}
 
 	for _, tt := range tests {
@@ -434,7 +433,7 @@ func TestGetSessionAggregatesDeduplicatesSnapshotIDs(t *testing.T) {
 			SnapshotLinks: map[string]api.SnapshotLink{
 				charID: {
 					CharacterID: charID,
-					SnapshotID:  ptr.Of(snapID),
+					SnapshotID:  new(snapID),
 				},
 			},
 		}
@@ -533,7 +532,7 @@ func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
 			SnapshotID: "target-1",
 			Params:     api.MergeSnapshotsParams{XUserID: "user-1"},
 			Body: &api.MergeSnapshotsJSONRequestBody{
-				SourceSnapshotIDs: ptr.Of([]string{"src-1", "target-1"}),
+				SourceSnapshotIDs: new([]string{"src-1", "target-1"}),
 			},
 		})
 		if err != nil {
@@ -551,8 +550,8 @@ func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
 			SnapshotID: "target-1",
 			Params:     api.MergeSnapshotsParams{XUserID: "user-1"},
 			Body: &api.MergeSnapshotsJSONRequestBody{
-				SourceSnapshotID:  ptr.Of("src-1"),
-				SourceSnapshotIDs: ptr.Of([]string{"src-1", "src-2"}),
+				SourceSnapshotID:  new("src-1"),
+				SourceSnapshotIDs: new([]string{"src-1", "src-2"}),
 			},
 		})
 		if err != nil {
@@ -606,7 +605,7 @@ func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
 			resp, err := server.MergeSnapshots(context.Background(), api.MergeSnapshotsRequestObject{
 				SnapshotID: "target-1",
 				Params:     api.MergeSnapshotsParams{XUserID: "user-1"},
-				Body:       &api.MergeSnapshotsJSONRequestBody{SourceSnapshotID: ptr.Of("src-1")},
+				Body:       &api.MergeSnapshotsJSONRequestBody{SourceSnapshotID: new("src-1")},
 			})
 			if err != nil {
 				t.Fatalf("unexpected error for %s: %v", tc.label, err)
@@ -635,8 +634,8 @@ func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
 	t.Run("returns 200 with target, tiered items, stats, and counts", func(t *testing.T) {
 		counts := map[string]int{"target-1": 12, "cand-1": 3}
 		statsMap := map[string]api.PlayerStats{
-			"target-1": {Kd: ptr.Of(api.StatsValuePair{Value: ptr.Of(1.50)})},
-			"cand-1":   {Kd: ptr.Of(api.StatsValuePair{Value: ptr.Of(2.00)})},
+			"target-1": {Kd: new(api.StatsValuePair{Value: new(1.50)})},
+			"cand-1":   {Kd: new(api.StatsValuePair{Value: new(2.00)})},
 		}
 		diffs := map[string]int{"Recovery": 10}
 		server := Server{
@@ -682,7 +681,7 @@ func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
 			Params: api.GetSnapshotsParams{
 				UserID:      "u1",
 				CharacterID: "c1",
-				HasSimilar:  ptr.Of(true),
+				HasSimilar:  new(true),
 			},
 		})
 		if err != nil {
@@ -932,7 +931,7 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 					Enabled: true,
 					Start: &api.CompRankSnapshot{
 						Points:       5820,
-						DivisionName: ptr.Of("Platinum III"),
+						DivisionName: new("Platinum III"),
 					},
 				},
 			},
@@ -947,7 +946,7 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 			Body: &api.StartSessionJSONRequestBody{
 				UserID:      "user-1",
 				CharacterID: "char-1",
-				TrackComp:   ptr.Of(true),
+				TrackComp:   new(true),
 			},
 		})
 		if err != nil {
@@ -968,7 +967,7 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 			Body: &api.StartUserSessionJSONRequestBody{
 				UserID:      "user-1",
 				CharacterID: "char-1",
-				TrackComp:   ptr.Of(true),
+				TrackComp:   new(true),
 			},
 		})
 		if err != nil {

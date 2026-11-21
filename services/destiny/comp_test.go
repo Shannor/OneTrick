@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"oneTrick/clients/bungie"
-	"oneTrick/ptr"
 	"testing"
 )
 
@@ -352,8 +351,8 @@ func TestGetCompetitiveRank_UntestedAndPromotionAndAscendantZeroSteps(t *testing
 							charID: {
 								Progressions: &map[string]bungie.DestinyDestinyProgression{
 									CompProgressionHash: {
-										CurrentProgress: ptr.Of(tc.points),
-										StepIndex:       ptr.Of(tc.stepIndex),
+										CurrentProgress: new(tc.points),
+										StepIndex:       new(tc.stepIndex),
 									},
 								},
 							},
