@@ -103,11 +103,13 @@ type cachedManifestService struct {
 	damageTypes      collectionCache[DamageType]
 	activityModes    collectionCache[ActivityModeDefinition]
 	stats            collectionCache[StatDefinition]
+	progressions     collectionCache[ProgressionDefinition]
 
 	itemsByHash         hashCache[ItemDefinition]
 	activitiesByHash    hashCache[ActivityDefinition]
 	activityModesByHash hashCache[ActivityModeDefinition]
 	recordsByHash       hashCache[RecordDefinition]
+	progressionsByHash  hashCache[ProgressionDefinition]
 }
 
 // NewCachedManifestService wraps an existing ManifestService with in-memory caching.
@@ -149,6 +151,10 @@ func (c *cachedManifestService) GetStats(ctx context.Context) (map[string]StatDe
 	return c.stats.getOrLoad(ctx, "manifestService.getStats", c.ManifestService.GetStats)
 }
 
+func (c *cachedManifestService) GetProgressions(ctx context.Context) (map[string]ProgressionDefinition, error) {
+	return c.progressions.getOrLoad(ctx, "manifestService.getProgressions", c.ManifestService.GetProgressions)
+}
+
 func (c *cachedManifestService) GetItem(ctx context.Context, hash int64) (*ItemDefinition, error) {
 	return c.itemsByHash.getOrLoad(ctx, "manifestService.getItem", hash, c.ManifestService.GetItem)
 }
@@ -178,4 +184,23 @@ func (c *cachedManifestService) GetActivityMode(ctx context.Context, hash int64)
 
 func (c *cachedManifestService) GetRecord(ctx context.Context, hash int64) (*RecordDefinition, error) {
 	return c.recordsByHash.getOrLoad(ctx, "manifestService.getRecord", hash, c.ManifestService.GetRecord)
+}
+
+func (c *cachedManifestService) GetProgression(ctx context.Context, hash int64) (*ProgressionDefinition, error) {
+	if hash != 0 {
+		hashStr := strconv.FormatInt(hash, 10)
+		c.progressions.mu.RLock()
+		if c.progressions.items != nil {
+			if def, ok := c.progressions.items[hashStr]; ok {
+				c.progressions.mu.RUnlock()
+				clog.WithGroupFields(ctx, "manifestService.getProgression", clog.Fields{
+					"hash":   hash,
+					"cached": true,
+				})
+				return &def, nil
+			}
+		}
+		c.progressions.mu.RUnlock()
+	}
+	return c.progressionsByHash.getOrLoad(ctx, "manifestService.getProgression", hash, c.ManifestService.GetProgression)
 }

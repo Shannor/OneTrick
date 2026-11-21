@@ -1,0 +1,25 @@
+type: object
+required:
+  - points
+properties:
+  points:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: points
+  stepIndex:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: stepIndex
+  divisionName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: divisionName
+  icon:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: icon
+  recordedAt:
+    type: string
+    format: date-time
+    x-oapi-codegen-extra-tags:
+      firestore: recordedAt

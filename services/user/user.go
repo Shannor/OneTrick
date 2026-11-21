@@ -8,7 +8,6 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"oneTrick/utils"
-	"strconv"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -21,6 +20,7 @@ type Service interface {
 	GetUser(ctx context.Context, ID string) (*User, error)
 	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
+	GetPrimaryMembership(ctx context.Context, userID string) (int64, int64, error)
 	GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error)
 	// BackfillCharacters fetches characters from Destiny for the user's primary membership
 	// and updates the user's characterIds field in Firestore.
@@ -144,25 +144,28 @@ func (s *userService) GetMembershipType(ctx context.Context, userID string, memb
 	return membershipType, nil
 }
 
-func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error) {
-	clog.WithGroupField(ctx, "userService.getFireteam", "userId", userID)
+func (s *userService) GetPrimaryMembership(ctx context.Context, userID string) (int64, int64, error) {
+	clog.WithGroupField(ctx, "userService.getPrimaryMembership", "userId", userID)
 	u, err := s.GetUser(ctx, userID)
 	if err != nil {
-		return nil, err
+		return 0, 0, fmt.Errorf("failed to fetch user: %w", err)
 	}
-	t := int64(0)
-	for _, membership := range u.Memberships {
-		if membership.ID == u.PrimaryMembershipID {
-			t = membership.Type
-			break
-		}
-	}
-	if t == 0 && len(u.Memberships) > 0 {
-		t = u.Memberships[0].Type
-	}
-	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	pmID, membershipType, err := u.PrimaryMembership()
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse primary membership id")
+		return 0, 0, err
+	}
+	clog.WithGroupFields(ctx, "userService.getPrimaryMembership", clog.Fields{
+		"membershipId":   pmID,
+		"membershipType": membershipType,
+	})
+	return pmID, membershipType, nil
+}
+
+func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error) {
+	clog.WithGroupField(ctx, "userService.getFireteam", "userId", userID)
+	pmId, t, err := s.GetPrimaryMembership(ctx, userID)
+	if err != nil {
+		return nil, err
 	}
 	partyMembers, err := s.d2Service.GetPartyMembers(ctx, pmId, t)
 	if err != nil {
@@ -210,23 +213,9 @@ func (s *userService) BackfillCharacters(ctx context.Context, userID string) err
 	if err != nil {
 		return fmt.Errorf("failed to fetch user: %w", err)
 	}
-	if u.PrimaryMembershipID == "" {
-		return fmt.Errorf("user missing primary membership id")
-	}
-	// Find membership type for the primary membership
-	membershipType := int64(0)
-	for _, m := range u.Memberships {
-		if m.ID == u.PrimaryMembershipID {
-			membershipType = m.Type
-			break
-		}
-	}
-	if membershipType == 0 && len(u.Memberships) > 0 {
-		membershipType = u.Memberships[0].Type
-	}
-	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	pmId, membershipType, err := u.PrimaryMembership()
 	if err != nil {
-		return fmt.Errorf("failed to parse primary membership id: %w", err)
+		return err
 	}
 	chars, err := s.d2Service.GetCharacters(ctx, pmId, membershipType)
 	if err != nil {

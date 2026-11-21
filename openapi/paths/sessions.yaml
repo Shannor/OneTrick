@@ -19,6 +19,8 @@ post:
             userId:
               type: string
               x-go-name: userID
+            trackComp:
+              type: boolean
   operationId: StartSession
   description: Create a new session
   responses:

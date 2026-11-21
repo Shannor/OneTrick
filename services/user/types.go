@@ -1,7 +1,10 @@
 package user
 
 import (
+	"errors"
+	"fmt"
 	"oneTrick/api"
+	"strconv"
 	"time"
 )
 
@@ -16,6 +19,33 @@ type User struct {
 	CharacterIDs          []string        `json:"characterIDs" firestore:"characterIds"`
 	Characters            []api.Character `json:"characters" firestore:"characters"`
 	LastUpdatedCharacters time.Time       `json:"lastUpdatedCharacters" firestore:"lastUpdatedCharacters"`
+}
+
+func (u *User) PrimaryMembership() (int64, int64, error) {
+	if u == nil {
+		return 0, 0, errors.New("user is nil")
+	}
+	if u.PrimaryMembershipID == "" {
+		return 0, 0, errors.New("user missing primary membership id")
+	}
+	membershipType := int64(0)
+	for _, membership := range u.Memberships {
+		if membership.ID == u.PrimaryMembershipID {
+			membershipType = membership.Type
+			break
+		}
+	}
+	if membershipType == 0 && len(u.Memberships) > 0 {
+		membershipType = u.Memberships[0].Type
+	}
+	if membershipType == 0 {
+		return 0, 0, errors.New("user missing valid membership type")
+	}
+	pmID, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse primary membership id: %w", err)
+	}
+	return pmID, membershipType, nil
 }
 
 type Membership struct {

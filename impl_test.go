@@ -576,19 +576,28 @@ func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
 			label    string
 		}{
 			{
-				err:      fmt.Errorf("%w: incompatible subclass", snapshot.InvalidMerge),
-				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots400JSONResponse); return ok },
-				label:    "400",
+				err: fmt.Errorf("%w: incompatible subclass", snapshot.InvalidMerge),
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool {
+					_, ok := r.(api.MergeSnapshots400JSONResponse)
+					return ok
+				},
+				label: "400",
 			},
 			{
-				err:      snapshot.Unauthorized,
-				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots401JSONResponse); return ok },
-				label:    "401",
+				err: snapshot.Unauthorized,
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool {
+					_, ok := r.(api.MergeSnapshots401JSONResponse)
+					return ok
+				},
+				label: "401",
 			},
 			{
-				err:      snapshot.NotFound,
-				checkTyp: func(r api.MergeSnapshotsResponseObject) bool { _, ok := r.(api.MergeSnapshots404JSONResponse); return ok },
-				label:    "404",
+				err: snapshot.NotFound,
+				checkTyp: func(r api.MergeSnapshotsResponseObject) bool {
+					_, ok := r.(api.MergeSnapshots404JSONResponse)
+					return ok
+				},
+				label: "404",
 			},
 		}
 
@@ -870,4 +879,187 @@ func TestGetSessionAggregatesEmptySession(t *testing.T) {
 	if len(okResp.Aggregates) != 0 || len(okResp.Snapshots) != 0 {
 		t.Fatalf("expected empty aggregates and snapshots, got %+v", okResp)
 	}
+}
+
+type mockCompSessionService struct {
+	session.Service
+	capturedTrackComp bool
+	startedSession    *api.Session
+	finalizeErrors    map[string]error
+	finalizedIDs      []string
+}
+
+func (m *mockCompSessionService) Start(_ context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
+	m.capturedTrackComp = trackComp
+	if m.startedSession != nil {
+		return m.startedSession, nil
+	}
+	return &api.Session{
+		ID:           "ses-comp-1",
+		UserID:       userID,
+		CharacterID:  characterID,
+		StartedAt:    time.Now(),
+		AggregateIDs: []string{},
+		StartedBy:    &startedBy,
+	}, nil
+}
+
+func (m *mockCompSessionService) FinalizeCompTracking(_ context.Context, sessionID string) error {
+	m.finalizedIDs = append(m.finalizedIDs, sessionID)
+	if err, ok := m.finalizeErrors[sessionID]; ok {
+		return err
+	}
+	return nil
+}
+
+func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
+	uMock := &mockUserService{
+		existingUser: &user.User{
+			ID:          "user-1",
+			DisplayName: "Zone 6 Weegee",
+		},
+	}
+
+	t.Run("StartSession and StartUserSession forward trackComp=true", func(t *testing.T) {
+		sesMock := &mockCompSessionService{
+			startedSession: &api.Session{
+				ID:           "ses-1",
+				UserID:       "user-1",
+				CharacterID:  "char-1",
+				StartedAt:    time.Now(),
+				AggregateIDs: []string{},
+				CompTracking: &api.CompTracking{
+					Enabled: true,
+					Start: &api.CompRankSnapshot{
+						Points:       5820,
+						DivisionName: ptr.Of("Platinum III"),
+					},
+				},
+			},
+		}
+		server := Server{
+			UserService:    uMock,
+			SessionService: sesMock,
+		}
+
+		resp, err := server.StartSession(context.Background(), api.StartSessionRequestObject{
+			Params: api.StartSessionParams{XUserID: "user-1", XMembershipID: "4611686018467484863"},
+			Body: &api.StartSessionJSONRequestBody{
+				UserID:      "user-1",
+				CharacterID: "char-1",
+				TrackComp:   ptr.Of(true),
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+		if !sesMock.capturedTrackComp {
+			t.Fatal("expected trackComp=true to be forwarded to SessionService.Start")
+		}
+		created, ok := resp.(api.StartSession201JSONResponse)
+		if !ok || created.CompTracking == nil || !created.CompTracking.Enabled {
+			t.Fatalf("expected 201 with CompTracking.Enabled=true, got %+v", resp)
+		}
+
+		sesMock.capturedTrackComp = false
+		uResp, err := server.StartUserSession(context.Background(), api.StartUserSessionRequestObject{
+			UserID: "user-1",
+			Params: api.StartUserSessionParams{XUserID: "user-1", XMembershipID: "4611686018467484863"},
+			Body: &api.StartUserSessionJSONRequestBody{
+				UserID:      "user-1",
+				CharacterID: "char-1",
+				TrackComp:   ptr.Of(true),
+			},
+		})
+		if err != nil {
+			t.Fatalf("StartUserSession failed: %v", err)
+		}
+		if !sesMock.capturedTrackComp {
+			t.Fatal("expected trackComp=true to be forwarded in StartUserSession")
+		}
+		uCreated, ok := uResp.(api.StartUserSession201JSONResponse)
+		if !ok || uCreated.CompTracking == nil || !uCreated.CompTracking.Enabled {
+			t.Fatalf("expected 201 with CompTracking.Enabled=true, got %+v", uResp)
+		}
+	})
+
+	t.Run("POST /internal/sessions/finalize-comp enforces X-Internal-API-Key, returns 204 on success, and 500 on batch failure", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		swagger, err := api.GetSwagger()
+		if err != nil {
+			t.Fatalf("GetSwagger failed: %v", err)
+		}
+		swagger.Servers = nil
+
+		sesMock := &mockCompSessionService{
+			finalizeErrors: map[string]error{
+				"ses-failed": fmt.Errorf("bungie timeout"),
+			},
+		}
+		server := Server{
+			SessionService: sesMock,
+			InternalAPIKey: "secret-internal-key",
+		}
+
+		r := gin.New()
+		r.ContextWithFallback = true
+		r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+			ErrorHandler: logger.GinValidationErrorHandler,
+			Options: openapi3filter.Options{
+				AuthenticationFunc: validator.Authenticate,
+			},
+		}))
+		h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+			logger.GinStrictMiddleware[api.StrictHandlerFunc],
+		})
+		api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+			ErrorHandler: logger.GinParamErrorHandler,
+		})
+
+		// Missing key -> 401
+		reqNoKey := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated"]}`))
+		reqNoKey.Header.Set("Content-Type", "application/json")
+		wNoKey := httptest.NewRecorder()
+		r.ServeHTTP(wNoKey, reqNoKey)
+		if wNoKey.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when X-Internal-API-Key is missing, got %d: %s", wNoKey.Code, wNoKey.Body.String())
+		}
+
+		// Wrong key -> 401
+		reqBadKey := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated"]}`))
+		reqBadKey.Header.Set("Content-Type", "application/json")
+		reqBadKey.Header.Set("X-Internal-API-Key", "wrong-key")
+		wBadKey := httptest.NewRecorder()
+		r.ServeHTTP(wBadKey, reqBadKey)
+		if wBadKey.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when X-Internal-API-Key is invalid, got %d: %s", wBadKey.Code, wBadKey.Body.String())
+		}
+
+		// Valid key with clean batch -> 204 No Content
+		reqOK := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","","ses-skipped"]}`))
+		reqOK.Header.Set("Content-Type", "application/json")
+		reqOK.Header.Set("X-Internal-API-Key", "secret-internal-key")
+		wOK := httptest.NewRecorder()
+		r.ServeHTTP(wOK, reqOK)
+		if wOK.Code != http.StatusNoContent {
+			t.Fatalf("expected 204 No Content, got %d: %s", wOK.Code, wOK.Body.String())
+		}
+		if len(sesMock.finalizedIDs) != 2 {
+			t.Fatalf("expected 2 non-empty session IDs forwarded to FinalizeCompTracking, got %v", sesMock.finalizedIDs)
+		}
+
+		// Valid key with failing item -> 500 so server-tick can retry and wide event logs ERROR
+		sesMock.finalizedIDs = nil
+		reqFail := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","ses-failed","ses-skipped"]}`))
+		reqFail.Header.Set("Content-Type", "application/json")
+		reqFail.Header.Set("X-Internal-API-Key", "secret-internal-key")
+		wFail := httptest.NewRecorder()
+		r.ServeHTTP(wFail, reqFail)
+		if wFail.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 when batch contains failures, got %d: %s", wFail.Code, wFail.Body.String())
+		}
+		if len(sesMock.finalizedIDs) != 3 {
+			t.Fatalf("expected all 3 non-empty session IDs attempted before returning 500, got %v", sesMock.finalizedIDs)
+		}
+	})
 }

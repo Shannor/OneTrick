@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"oneTrick/api"
@@ -32,6 +33,7 @@ type Server struct {
 	AggregateService  aggregate.Service
 	SessionService    session.Service
 	StatsService      stats.Service
+	InternalAPIKey    string
 }
 
 func NewServer(
@@ -43,6 +45,7 @@ func NewServer(
 	sessionService session.Service,
 	manifestService destiny.ManifestService,
 	statsService stats.Service,
+	internalAPIKey string,
 ) Server {
 	return Server{
 		D2Service:         service,
@@ -53,6 +56,7 @@ func NewServer(
 		SessionService:    sessionService,
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
+		InternalAPIKey:    internalAPIKey,
 	}
 }
 
@@ -222,10 +226,12 @@ func (s Server) GetSimilarSnapshots(ctx context.Context, request api.GetSimilarS
 }
 
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {
+	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	clog.WithGroupFields(ctx, "request", clog.Fields{
 		"userId":      request.UserID,
 		"characterId": request.Body.CharacterID,
+		"trackComp":   trackComp,
 	})
 	if request.Params.XUserID != request.UserID {
 		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
@@ -239,7 +245,7 @@ func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessi
 		ID:       u.ID,
 		Username: u.DisplayName,
 	}
-	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy)
+	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy, trackComp)
 	if err != nil {
 		return api.StartUserSession400JSONResponse{Message: err.Error()}, nil
 	}
@@ -280,24 +286,6 @@ const CharacterRefreshTTL = 6 * time.Hour
 
 var inFlightCharacterUpdates sync.Map
 
-func resolvePrimaryMembership(u *user.User) (int64, int64, error) {
-	t := int64(0)
-	for _, membership := range u.Memberships {
-		if membership.ID == u.PrimaryMembershipID {
-			t = membership.Type
-			break
-		}
-	}
-	if t == 0 && len(u.Memberships) > 0 {
-		t = u.Memberships[0].Type
-	}
-	pmId, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to parse primary membership id: %w", err)
-	}
-	return pmId, t, nil
-}
-
 func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (api.GetUserResponseObject, error) {
 	clog.WithGroupField(ctx, "request", "userId", request.UserID)
 	u, err := s.UserService.GetUser(ctx, request.UserID)
@@ -314,7 +302,7 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 	}
 
 	if len(result.Characters) == 0 {
-		pmId, t, err := resolvePrimaryMembership(u)
+		pmId, t, err := u.PrimaryMembership()
 		if err != nil {
 			return result, err
 		}
@@ -337,7 +325,7 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 					"userId":              u.ID,
 					"primaryMembershipId": u.PrimaryMembershipID,
 				})
-				pmId, t, err := resolvePrimaryMembership(u)
+				pmId, t, err := u.PrimaryMembership()
 				if err != nil {
 					return err
 				}
@@ -473,10 +461,12 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
+	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	clog.WithGroupFields(ctx, "request", clog.Fields{
 		"userId":      request.Body.UserID,
 		"characterId": request.Body.CharacterID,
+		"trackComp":   trackComp,
 	})
 	if request.Params.XUserID != request.Body.UserID {
 		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
@@ -489,7 +479,7 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 		ID:       u.ID,
 		Username: u.DisplayName,
 	}
-	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy)
+	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy, trackComp)
 	if err != nil {
 		return api.StartSession400JSONResponse{Message: err.Error()}, nil
 	}
@@ -510,6 +500,27 @@ func (s Server) CompleteSession(ctx context.Context, request api.CompleteSession
 		return nil, err
 	}
 	return api.CompleteSession200JSONResponse(*ses), nil
+}
+
+func (s Server) FinalizeSessionsComp(ctx context.Context, request api.FinalizeSessionsCompRequestObject) (api.FinalizeSessionsCompResponseObject, error) {
+	if request.Params.XInternalAPIKey == nil || *request.Params.XInternalAPIKey == "" || s.InternalAPIKey == "" ||
+		subtle.ConstantTimeCompare([]byte(*request.Params.XInternalAPIKey), []byte(s.InternalAPIKey)) != 1 {
+		return api.FinalizeSessionsComp401JSONResponse{Message: "unauthorized"}, nil
+	}
+	if request.Body == nil {
+		return api.FinalizeSessionsComp400JSONResponse{Message: "body cannot be empty"}, nil
+	}
+
+	if err := clog.LoopRollup(ctx, "sessionService.finalizeCompBatch", request.Body.SessionIDs, func(iterCtx context.Context, _ int, sessionID string) error {
+		if sessionID == "" {
+			return nil
+		}
+		return s.SessionService.FinalizeCompTracking(iterCtx, sessionID)
+	}); err != nil {
+		return api.FinalizeSessionsComp500JSONResponse{Message: "failed to finalize one or more sessions"}, nil
+	}
+
+	return api.FinalizeSessionsComp204Response{}, nil
 }
 
 func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {

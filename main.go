@@ -68,7 +68,7 @@ func main() {
 	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
 	userService := user.NewUserService(firestore, destinyService, searchClient)
 	aggregateService := aggregate.NewService(firestore)
-	sessionService := session.NewService(firestore, aggregateService)
+	sessionService := session.NewService(firestore, aggregateService, userService, destinyService)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	server := NewServer(
@@ -80,6 +80,7 @@ func main() {
 		sessionService,
 		manifestService,
 		statsService,
+		env.InternalAPIKey,
 	)
 
 	defer firestore.Close()

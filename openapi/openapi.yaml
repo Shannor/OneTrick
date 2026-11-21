@@ -49,6 +49,8 @@ paths:
     $ref: paths/sessions_{sessionId}_complete.yaml
   /sessions/{sessionId}/aggregates:
     $ref: paths/sessions_{sessionId}_aggregates.yaml
+  /internal/sessions/finalize-comp:
+    $ref: paths/internal_sessions_finalize-comp.yaml
   /metrics/best-performing-loadouts:
     $ref: paths/metrics_best-performing-loadouts.yaml
   /metrics/featured-loadouts:

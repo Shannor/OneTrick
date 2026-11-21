@@ -61,6 +61,10 @@ type ManifestService interface {
 	// Returns a map with hash values as keys and RecordDefinition structs as values
 	GetRecords(ctx context.Context) (map[string]RecordDefinition, error)
 
+	// GetProgressions retrieves all progression definitions from the manifest
+	// Returns a map with hash values as keys and ProgressionDefinition structs as values
+	GetProgressions(ctx context.Context) (map[string]ProgressionDefinition, error)
+
 	// GetItem retrieves a single item definition from the manifest by its hash
 	// More efficient than GetItems when only one item is needed
 	// Returns nil and an error if the item isn't found
@@ -80,22 +84,26 @@ type ManifestService interface {
 	// More efficient than GetRecords when only one record is needed
 	// Returns nil and an error if the record isn't found
 	GetRecord(ctx context.Context, hash int64) (*RecordDefinition, error)
+
+	// GetProgression retrieves a single progression definition from the manifest by its hash
+	GetProgression(ctx context.Context, hash int64) (*ProgressionDefinition, error)
 }
 type ManifestCollection string
 
 const (
-	PlaceCollection            ManifestCollection = "d2Places"
-	ActivityCollection         ManifestCollection = "d2Activities"
-	ClassCollection            ManifestCollection = "d2Classes"
-	InventoryBucketCollection  ManifestCollection = "d2InventoryBuckets"
-	RaceCollection             ManifestCollection = "d2Races"
-	ItemCategoryCollection     ManifestCollection = "d2ItemCategories"
-	DamageCollection           ManifestCollection = "d2DamageTypes"
-	ActivityModeCollection     ManifestCollection = "d2ActivityModes"
-	StatDefinitionCollection   ManifestCollection = "d2StatDefinitions"
-	ItemDefinitionCollection   ManifestCollection = "d2ItemDefinitions"
-	SandboxPerkCollection      ManifestCollection = "d2SandboxPerks"
-	RecordDefinitionCollection ManifestCollection = "d2RecordDefinitions"
+	PlaceCollection                 ManifestCollection = "d2Places"
+	ActivityCollection              ManifestCollection = "d2Activities"
+	ClassCollection                 ManifestCollection = "d2Classes"
+	InventoryBucketCollection       ManifestCollection = "d2InventoryBuckets"
+	RaceCollection                  ManifestCollection = "d2Races"
+	ItemCategoryCollection          ManifestCollection = "d2ItemCategories"
+	DamageCollection                ManifestCollection = "d2DamageTypes"
+	ActivityModeCollection          ManifestCollection = "d2ActivityModes"
+	StatDefinitionCollection        ManifestCollection = "d2StatDefinitions"
+	ItemDefinitionCollection        ManifestCollection = "d2ItemDefinitions"
+	SandboxPerkCollection           ManifestCollection = "d2SandboxPerks"
+	RecordDefinitionCollection      ManifestCollection = "d2RecordDefinitions"
+	ProgressionDefinitionCollection ManifestCollection = "d2ProgressionDefinitions"
 )
 
 // ManifestService provides access to the current Destiny manifest data
@@ -290,6 +298,21 @@ func (m *manifestService) GetRecords(ctx context.Context) (map[string]RecordDefi
 	})
 }
 
+func (m *manifestService) GetProgressions(ctx context.Context) (map[string]ProgressionDefinition, error) {
+	docs, err := m.db.Collection(string(ProgressionDefinitionCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[ProgressionDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	clog.WithGroupField(ctx, "manifestService.getProgressions", "count", len(results))
+	return utils.ToMap[ProgressionDefinition, string](results, func(t ProgressionDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
 // GetItem retrieves a single item definition from the manifest by its hash
 func (m *manifestService) GetItem(ctx context.Context, hash int64) (*ItemDefinition, error) {
 	clog.WithGroupField(ctx, "manifestService.getItem", "hash", hash)
@@ -369,6 +392,31 @@ func (m *manifestService) GetRecord(ctx context.Context, hash int64) (*RecordDef
 	var result RecordDefinition
 	if err := doc.DataTo(&result); err != nil {
 		return nil, fmt.Errorf("failed to convert record definition: %w", err)
+	}
+
+	return &result, nil
+}
+
+// GetProgression retrieves a single progression definition from the manifest by its hash
+func (m *manifestService) GetProgression(ctx context.Context, hash int64) (*ProgressionDefinition, error) {
+	clog.WithGroupField(ctx, "manifestService.getProgression", "hash", hash)
+	if hash == 0 {
+		return nil, fmt.Errorf("progression hash cannot be zero")
+	}
+	if m.db == nil {
+		return nil, fmt.Errorf("manifest database client is not configured")
+	}
+
+	hashStr := strconv.FormatInt(hash, 10)
+
+	doc, err := m.db.Collection(string(ProgressionDefinitionCollection)).Doc(hashStr).Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get progression definition: %w", err)
+	}
+
+	var result ProgressionDefinition
+	if err := doc.DataTo(&result); err != nil {
+		return nil, fmt.Errorf("failed to convert progression definition: %w", err)
 	}
 
 	return &result, nil

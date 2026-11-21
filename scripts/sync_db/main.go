@@ -37,6 +37,8 @@ var defaultCollections = []string{
 	"d2ItemDefinitions",
 	"d2SandboxPerks",
 	"d2RecordDefinitions",
+	"d2ProgressionDefinitions",
+	"d2EquipableItemSets",
 }
 
 type docTask struct {

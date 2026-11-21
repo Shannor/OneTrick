@@ -66,7 +66,7 @@ type Manifest struct {
 	PlugSetDefinition                        map[string]any                       `json:"DestinyPlugSetDefinition"`
 	PowerCapDefinition                       map[string]any                       `json:"DestinyPowerCapDefinition"`
 	PresentationNodeDefinition               map[string]any                       `json:"DestinyPresentationNodeDefinition"`
-	ProgressionDefinition                    map[string]any                       `json:"DestinyProgressionDefinition"`
+	ProgressionDefinition                    map[string]ProgressionDefinition     `json:"DestinyProgressionDefinition"`
 	ProgressionLevelRequirementDefinition    map[string]any                       `json:"DestinyProgressionLevelRequirementDefinition"`
 	RecordDefinition                         map[string]RecordDefinition          `json:"DestinyRecordDefinition"`
 	RewardAdjusterPointerDefinition          map[string]any                       `json:"DestinyRewardAdjusterPointerDefinition"`
@@ -575,15 +575,98 @@ const (
 	ClassArmor     ArmorBucket = 1585787867
 )
 
+type ProgressionStepDefinition struct {
+	StepName      string `json:"stepName" firestore:"stepName"`
+	ProgressTotal int    `json:"progressTotal" firestore:"progressTotal"`
+	Icon          string `json:"icon" firestore:"icon"`
+}
+
+type ProgressionDefinition struct {
+	DisplayProperties ModeDisplayProperties       `json:"displayProperties" firestore:"displayProperties"`
+	Steps             []ProgressionStepDefinition `json:"steps" firestore:"steps"`
+	Hash              int64                       `json:"hash" firestore:"hash"`
+	Index             int                         `json:"index" firestore:"index"`
+	Redacted          bool                        `json:"redacted" firestore:"redacted"`
+	Blacklisted       bool                        `json:"blacklisted" firestore:"blacklisted"`
+}
+
+func isTransitionalProgressionStep(name string) bool {
+	return name == "PROMOTION" || name == "RELEGATION"
+}
+
+// StepForPoints resolves the rank/division step corresponding to a cumulative point total
+// using the manifest step totals. Transitional series steps ("PROMOTION" / "RELEGATION")
+// are mapped to their adjacent division when an explicit stepIndex is unavailable.
+func (p *ProgressionDefinition) StepForPoints(points int) *ProgressionStepDefinition {
+	if p == nil || len(p.Steps) == 0 {
+		return nil
+	}
+	if points < 0 {
+		points = 0
+	}
+
+	cumulative := 0
+	matchedIdx := -1
+	for i, step := range p.Steps {
+		if step.ProgressTotal <= 0 {
+			continue
+		}
+		if points < cumulative+step.ProgressTotal {
+			matchedIdx = i
+			break
+		}
+		cumulative += step.ProgressTotal
+	}
+
+	if matchedIdx == -1 {
+		for i := len(p.Steps) - 1; i >= 0; i-- {
+			if p.Steps[i].StepName != "" && !isTransitionalProgressionStep(p.Steps[i].StepName) {
+				step := p.Steps[i]
+				return &step
+			}
+		}
+		step := p.Steps[len(p.Steps)-1]
+		return &step
+	}
+
+	switch p.Steps[matchedIdx].StepName {
+	case "PROMOTION":
+		for i := matchedIdx - 1; i >= 0; i-- {
+			if p.Steps[i].StepName != "" && !isTransitionalProgressionStep(p.Steps[i].StepName) {
+				step := p.Steps[i]
+				return &step
+			}
+		}
+	case "RELEGATION":
+		for i := matchedIdx + 1; i < len(p.Steps); i++ {
+			if p.Steps[i].StepName != "" && !isTransitionalProgressionStep(p.Steps[i].StepName) {
+				step := p.Steps[i]
+				return &step
+			}
+		}
+	}
+
+	step := p.Steps[matchedIdx]
+	return &step
+}
+
 type RequestInfo = int32
 
 const (
-	CharactersCode      RequestInfo = 200
-	CharactersEquipment RequestInfo = 205
-	ItemInstanceCode    RequestInfo = 300
-	ItemPerksCode       RequestInfo = 302
-	ItemStatsCode       RequestInfo = 304
-	ItemSocketsCode     RequestInfo = 305
-	ItemCommonDataCode  RequestInfo = 307
-	TransitoryCode      RequestInfo = 1000
+	CharactersCode            RequestInfo = 200
+	CharacterProgressionsCode RequestInfo = 202
+	CharactersEquipment       RequestInfo = 205
+	ItemInstanceCode          RequestInfo = 300
+	ItemPerksCode             RequestInfo = 302
+	ItemStatsCode             RequestInfo = 304
+	ItemSocketsCode           RequestInfo = 305
+	ItemCommonDataCode        RequestInfo = 307
+	TransitoryCode            RequestInfo = 1000
+	MetricsCode               RequestInfo = 1100
+)
+
+const (
+	CompProgressionHash      = "3696598664"
+	CompProgressionHashInt64 = int64(3696598664)
+	CompMetricHash           = "268448617"
 )

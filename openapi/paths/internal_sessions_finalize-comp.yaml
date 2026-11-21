@@ -1,0 +1,51 @@
+post:
+  operationId: FinalizeSessionsComp
+  description: Finalize Competitive rank and score delta for one or more sessions
+  parameters:
+    - name: X-Internal-API-Key
+      in: header
+      required: false
+      x-go-name: XInternalAPIKey
+      schema:
+        type: string
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: object
+          required:
+            - sessionIds
+          properties:
+            sessionIds:
+              type: array
+              x-go-name: sessionIDs
+              items:
+                type: string
+  responses:
+    "204":
+      description: Competitive session tracking finalized
+    "400":
+      description: Invalid request body
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "401":
+      description: Missing or invalid internal API key
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "404":
+      description: Session not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "500":
+      description: Error finalizing Competitive sessions
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
