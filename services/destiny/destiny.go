@@ -529,31 +529,6 @@ func (a *service) GetPartyMembers(ctx context.Context, primaryMembershipId int64
 	return members, nil
 }
 
-func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {
-	clog.WithGroupFields(ctx, "destinyService.search", clog.Fields{
-		"prefix": prefix,
-		"page":   page,
-	})
-	body := bungie.UserSearchPrefixRequest{DisplayNamePrefix: ptr.Of(prefix)}
-	resp, err := a.Client.UserSearchByGlobalNamePostWithResponse(ctx, page, body)
-	if err != nil {
-		return nil, false, err
-	}
-	if resp.JSON200 == nil || resp.JSON200.SearchResponse == nil {
-		return nil, false, fmt.Errorf("no response")
-	}
-	hasMore := false
-	if resp.JSON200.SearchResponse.HasMore != nil {
-		hasMore = *resp.JSON200.SearchResponse.HasMore
-	}
-	results := make([]api.SearchUserResult, 0)
-	clog.WithGroupFields(ctx, "destinyService.search", clog.Fields{
-		"hasMore":       hasMore,
-		"returnedCount": len(results),
-	})
-	return results, hasMore, nil
-}
-
 func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.PostGameCarnageReportData, []api.Team, error) {
 	id, err := strconv.ParseInt(activityID, 10, 64)
 	if err != nil {

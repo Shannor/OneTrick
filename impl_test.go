@@ -45,10 +45,16 @@ func (m *mockAuthService) GetCurrentUser(ctx context.Context, token string) (*bu
 
 type mockUserService struct {
 	user.Service
-	existingUser      *user.User
-	createdUser       *user.User
-	updatedCharacters []api.Character
-	updateCalls       atomic.Int32
+	existingUser          *user.User
+	createdUser           *user.User
+	updatedCharacters     []api.Character
+	updateCalls           atomic.Int32
+	updateSearchFieldCall atomic.Int32
+	searchResults         []api.SearchUserResult
+	searchHasMore         bool
+	searchErr             error
+	capturedSearchQuery   string
+	capturedSearchPage    int
 }
 
 func (m *mockUserService) GetUser(ctx context.Context, id string) (*user.User, error) {
@@ -68,6 +74,20 @@ func (m *mockUserService) UpdateCharacters(ctx context.Context, userID string, c
 	m.updateCalls.Add(1)
 	m.updatedCharacters = characters
 	return nil
+}
+
+func (m *mockUserService) UpdateSearchFields(ctx context.Context, userID string, displayName string, uniqueName string) error {
+	m.updateSearchFieldCall.Add(1)
+	return nil
+}
+
+func (m *mockUserService) Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, bool, error) {
+	m.capturedSearchQuery = query
+	m.capturedSearchPage = page
+	if m.searchErr != nil {
+		return nil, false, m.searchErr
+	}
+	return m.searchResults, m.searchHasMore, nil
 }
 
 type mockD2Service struct {
@@ -1060,6 +1080,100 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		}
 		if len(sesMock.finalizedIDs) != 3 {
 			t.Fatalf("expected all 3 non-empty session IDs attempted before returning 500, got %v", sesMock.finalizedIDs)
+		}
+	})
+}
+
+func TestSearchEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	userMock := &mockUserService{
+		searchResults: []api.SearchUserResult{
+			{
+				IsRecorded:          true,
+				UserID:              ptr.Of("user-1"),
+				PrimaryMembershipID: "4611686018467484863",
+				DisplayName:         "Weegee",
+				UniqueName:          "Weegee#1234",
+				AlternateNames:      []string{"WeegeeSteam"},
+			},
+		},
+		searchHasMore: true,
+	}
+	server := Server{UserService: userMock}
+
+	r := gin.New()
+	r.ContextWithFallback = true
+	r.Use(logger.CanonicalLogger())
+	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+		ErrorHandler: logger.GinValidationErrorHandler,
+		Options: openapi3filter.Options{
+			AuthenticationFunc: validator.Authenticate,
+		},
+	}))
+	h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+		logger.GinStrictMiddleware[api.StrictHandlerFunc],
+	})
+	api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+		ErrorHandler: logger.GinParamErrorHandler,
+	})
+
+	t.Run("public unauthenticated POST /search returns 200 with results and hasMore", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/search", strings.NewReader(`{"prefix":"  Weegee  ","page":0}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK without auth headers, got %d: %s", w.Code, w.Body.String())
+		}
+		if userMock.capturedSearchQuery != "Weegee" || userMock.capturedSearchPage != 0 {
+			t.Errorf("expected trimmed query=Weegee page=0, got query=%q page=%d", userMock.capturedSearchQuery, userMock.capturedSearchPage)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, `"isRecorded":true`) || !strings.Contains(body, `"hasMore":true`) {
+			t.Errorf("unexpected response body: %s", body)
+		}
+	})
+
+	t.Run("whitespace-only prefix returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/search", strings.NewReader(`{"prefix":"   ","page":0}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for whitespace prefix, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("negative page returns 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/search", strings.NewReader(`{"prefix":"Weegee","page":-1}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for negative page, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("service error returns 500", func(t *testing.T) {
+		userMock.searchErr = fmt.Errorf("firestore unavailable")
+		defer func() { userMock.searchErr = nil }()
+
+		req := httptest.NewRequest(http.MethodPost, "/search", strings.NewReader(`{"prefix":"Weegee","page":0}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 Internal Server Error, got %d: %s", w.Code, w.Body.String())
 		}
 	})
 }

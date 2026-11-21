@@ -12,7 +12,6 @@ const (
 	D2ClientSecret = "D2_CLIENT_SECRET"
 	D2RedirectURI  = "D2_REDIRECT_URI"
 	Environment    = "ENVIRONMENT"
-	AlgoliaAPIKey  = "ALGOLIA_API_KEY"
 	InternalAPIKey = "INTERNAL_API_KEY"
 )
 
@@ -22,7 +21,6 @@ type Env struct {
 	D2ClientID     string
 	D2ClientSecret string
 	RedirectURI    string
-	AlgoliaAPIKey  string
 	InternalAPIKey string
 }
 
@@ -52,11 +50,6 @@ func GetEvn() Env {
 		environment = "dev"
 	}
 
-	algoliaKey, ok := os.LookupEnv(AlgoliaAPIKey)
-	if !ok {
-		slog.Debug("Missing Algolia API key, not indexing")
-	}
-
 	internalAPIKey, ok := os.LookupEnv(InternalAPIKey)
 	if !ok {
 		slog.Debug("Missing Internal API key, internal endpoints disabled")
@@ -67,7 +60,6 @@ func GetEvn() Env {
 		Environment:    EnvironmentKey(environment),
 		D2ClientID:     clientID,
 		D2ClientSecret: clientSecret,
-		AlgoliaAPIKey:  algoliaKey,
 		InternalAPIKey: internalAPIKey,
 	}
 }

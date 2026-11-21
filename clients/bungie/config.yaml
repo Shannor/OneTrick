@@ -15,6 +15,7 @@ output-options:
     "Destiny2.GetActivityHistory",
     "Destiny2.GetPostGameCarnageReport",
     "Destiny2.GetItem",
+    "Destiny2.SearchDestinyPlayerByBungieName",
     "User.GetMembershipDataForCurrentUser",
     "User.SearchByGlobalNamePost"
   ]

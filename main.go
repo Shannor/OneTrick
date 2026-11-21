@@ -19,7 +19,6 @@ import (
 	"os"
 
 	clog "github.com/Shannor/canonical-logger"
-	"github.com/algolia/algoliasearch-client-go/v4/algolia/search"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -54,10 +53,6 @@ func main() {
 		}),
 	)
 	firestore := gcp.CreateFirestore(context.Background())
-	searchClient, err := search.NewClient("WCLL3JHGK2", env.AlgoliaAPIKey)
-	if err != nil {
-		return
-	}
 
 	manifestService := destiny.NewCachedManifestService(
 		destiny.NewManifestService(firestore, string(env.Environment)),
@@ -66,7 +61,7 @@ func main() {
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
-	userService := user.NewUserService(firestore, destinyService, searchClient)
+	userService := user.NewUserService(firestore, destinyService)
 	aggregateService := aggregate.NewService(firestore)
 	sessionService := session.NewService(firestore, aggregateService, userService, destinyService)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)

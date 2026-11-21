@@ -23,14 +23,12 @@ func TestGetEvn(t *testing.T) {
 		os.Setenv(D2ClientID, "test_client_id")
 		os.Setenv(D2ClientSecret, "test_client_secret")
 		os.Setenv(Environment, "production")
-		os.Setenv(AlgoliaAPIKey, "test_algolia_key")
 
 		expected := Env{
 			ApiKey:         "test_api_key",
 			Environment:    ProductionEnv,
 			D2ClientID:     "test_client_id",
 			D2ClientSecret: "test_client_secret",
-			AlgoliaAPIKey:  "test_algolia_key",
 		}
 
 		if got := GetEvn(); !reflect.DeepEqual(got, expected) {

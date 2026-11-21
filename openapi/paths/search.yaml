@@ -1,7 +1,8 @@
-summary: return a list from bungie of matching users
+summary: Search for recorded 1 Trick users and Bungie Destiny 2 players
 post:
   operationId: search
   requestBody:
+    required: true
     content:
       application/json:
         schema:
@@ -12,9 +13,11 @@ post:
           properties:
             prefix:
               type: string
+              minLength: 1
             page:
               type: integer
               format: int32
+              minimum: 0
   responses:
     '200':
       description: Return a list of search results found
@@ -32,3 +35,20 @@ post:
                   $ref: ../components/schemas/SearchUserResult.yaml
               hasMore:
                 type: boolean
+    '400':
+      description: Invalid request body
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+    '500':
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

@@ -77,10 +77,11 @@ paths:
                     type: integer
                     format: int32
   /search:
-    summary: return a list from bungie of matching users
+    summary: Search for recorded 1 Trick users and Bungie Destiny 2 players
     post:
       operationId: search
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -91,9 +92,11 @@ paths:
               properties:
                 prefix:
                   type: string
+                  minLength: 1
                 page:
                   type: integer
                   format: int32
+                  minimum: 0
       responses:
         '200':
           description: Return a list of search results found
@@ -111,6 +114,23 @@ paths:
                       $ref: '#/components/schemas/SearchUserResult'
                   hasMore:
                     type: boolean
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                properties:
+                  message:
+                    type: string
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /fireteam:
     get:
       operationId: GetFireteam
@@ -1257,34 +1277,6 @@ components:
         ping:
           type: string
           example: pong
-    SearchUserResult:
-      x-oapi-codegen-extra-tags:
-        firestore: searchUserResult
-      required:
-        - displayName
-        - primaryMembershipId
-        - uniqueName
-        - objectId
-        - alternateNames
-      properties:
-        displayName:
-          type: string
-        bungieId:
-          type: string
-          x-go-name: bungieID
-        primaryMembershipId:
-          type: string
-          x-go-name: primaryMembershipID
-        uniqueName:
-          type: string
-          x-go-name: uniqueName
-        objectId:
-          type: string
-          x-go-name: objectID
-        alternateNames:
-          type: array
-          items:
-            type: string
     Color:
       x-oapi-codegen-extra-tags:
         firestore: color
@@ -1406,6 +1398,74 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ClassStat'
+    SearchUserResult:
+      type: object
+      x-oapi-codegen-extra-tags:
+        firestore: searchUserResult
+      required:
+        - isRecorded
+        - displayName
+        - uniqueName
+        - primaryMembershipId
+        - alternateNames
+      properties:
+        isRecorded:
+          type: boolean
+          description: True when this Guardian has recorded data in 1 Trick; false when found only via Bungie search.
+        userId:
+          type: string
+          x-go-name: UserID
+          description: 1 Trick user document ID when isRecorded is true.
+        bungieNetMembershipId:
+          type: string
+          x-go-name: BungieNetMembershipID
+          description: Bungie.net GeneralUser membership ID if available.
+        primaryMembershipId:
+          type: string
+          x-go-name: PrimaryMembershipID
+          description: Primary Destiny 2 platform membership ID (cross-save primary or first Destiny membership).
+        primaryMembershipType:
+          type: integer
+          format: int64
+          description: BungieMembershipType for primaryMembershipId (1=Xbox, 2=PSN, 3=Steam, 6=Epic, etc.).
+        displayName:
+          type: string
+        uniqueName:
+          type: string
+          description: Full Bungie Name with discriminator (e.g. Guardian#1234) when available.
+        iconPath:
+          type: string
+        alternateNames:
+          type: array
+          items:
+            type: string
+        characters:
+          type: array
+          description: Cached Destiny 2 characters when isRecorded is true.
+          items:
+            $ref: '#/components/schemas/Character'
+    InternalError:
+      type: string
+      enum:
+        - DestinyServerDown
+        - InternalSystemDown
+        - UnknownError
+      x-enum-varnames:
+        - ErrDestinyServerDown
+        - ErrInternalSystemDown
+        - ErrUnknownError
+    OneTrickError:
+      description: Known errors for the one trick API
+      type: object
+      required:
+        - message
+        - status
+      properties:
+        message:
+          type: string
+          description: User friendly description of the error
+        status:
+          $ref: '#/components/schemas/InternalError'
     FireteamMember:
       x-oapi-codegen-extra-tags:
         firestore: fireteamMember
@@ -1436,16 +1496,6 @@ components:
             $ref: '#/components/schemas/Character'
           x-oapi-codegen-extra-tags:
             firestore: characters
-    InternalError:
-      type: string
-      enum:
-        - DestinyServerDown
-        - InternalSystemDown
-        - UnknownError
-      x-enum-varnames:
-        - ErrDestinyServerDown
-        - ErrInternalSystemDown
-        - ErrUnknownError
     Profile:
       type: object
       required:
@@ -2206,18 +2256,6 @@ components:
           description: Time in seconds the player was in the match
           x-oapi-codegen-extra-tags:
             firestore: timePlayed
-    OneTrickError:
-      description: Known errors for the one trick API
-      type: object
-      required:
-        - message
-        - status
-      properties:
-        message:
-          type: string
-          description: User friendly description of the error
-        status:
-          $ref: '#/components/schemas/InternalError'
     SimilarityTier:
       type: string
       description: Similarity tier relative to a target snapshot. 'high' requires matching Kinetic + Energy + Subclass + Exotic Armor; 'base' requires matching Kinetic + Energy + Subclass with differing Exotic Armor.

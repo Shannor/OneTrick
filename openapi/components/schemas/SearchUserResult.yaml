@@ -1,27 +1,45 @@
+type: object
 x-oapi-codegen-extra-tags:
   firestore: searchUserResult
 required:
+  - isRecorded
   - displayName
-  - primaryMembershipId
   - uniqueName
-  - objectId
+  - primaryMembershipId
   - alternateNames
 properties:
-  displayName:
+  isRecorded:
+    type: boolean
+    description: True when this Guardian has recorded data in 1 Trick; false when found only via Bungie search.
+  userId:
     type: string
-  bungieId:
+    x-go-name: UserID
+    description: 1 Trick user document ID when isRecorded is true.
+  bungieNetMembershipId:
     type: string
-    x-go-name: bungieID
+    x-go-name: BungieNetMembershipID
+    description: Bungie.net GeneralUser membership ID if available.
   primaryMembershipId:
     type: string
-    x-go-name: primaryMembershipID
+    x-go-name: PrimaryMembershipID
+    description: Primary Destiny 2 platform membership ID (cross-save primary or first Destiny membership).
+  primaryMembershipType:
+    type: integer
+    format: int64
+    description: BungieMembershipType for primaryMembershipId (1=Xbox, 2=PSN, 3=Steam, 6=Epic, etc.).
+  displayName:
+    type: string
   uniqueName:
     type: string
-    x-go-name: uniqueName
-  objectId:
+    description: Full Bungie Name with discriminator (e.g. Guardian#1234) when available.
+  iconPath:
     type: string
-    x-go-name: objectID
   alternateNames:
     type: array
     items:
       type: string
+  characters:
+    type: array
+    description: Cached Destiny 2 characters when isRecorded is true.
+    items:
+      $ref: ./Character.yaml
