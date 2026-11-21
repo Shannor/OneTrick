@@ -277,6 +277,17 @@ func TransformD2HistoricalStatValues(stats *map[string]bungie.HistoricalStatsVal
 	return &result
 }
 
+func parseOptionalInt64(value *string) *int64 {
+	if value == nil || *value == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseInt(*value, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
 func transformD2StatValue(item *bungie.HistoricalStatsValue) *api.UniqueStatValue {
 	if item == nil {
 		return nil
@@ -285,7 +296,7 @@ func transformD2StatValue(item *bungie.HistoricalStatsValue) *api.UniqueStatValu
 		return nil
 	}
 	result := &api.UniqueStatValue{
-		ActivityID: item.ActivityId,
+		ActivityID: parseOptionalInt64(item.ActivityId),
 	}
 	if item.Basic != nil {
 		result.Basic = api.StatsValuePair{
@@ -483,7 +494,7 @@ func BungieStatValueToUniqueStatValue(values *map[string]bungie.HistoricalStatsV
 	result := make(map[string]api.UniqueStatValue)
 	for key, value := range *values {
 		uv := api.UniqueStatValue{
-			ActivityID: value.ActivityId,
+			ActivityID: parseOptionalInt64(value.ActivityId),
 			Name:       value.StatId,
 		}
 		if value.Basic != nil {

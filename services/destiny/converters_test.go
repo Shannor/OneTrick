@@ -1,6 +1,7 @@
 package destiny
 
 import (
+	"encoding/json"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/ptr"
@@ -381,3 +382,80 @@ func TestGenerateBaseInfo_TierAndStyleFields(t *testing.T) {
 	})
 }
 
+func TestBungieStringifiedInt64Unmarshaling(t *testing.T) {
+	var profile bungie.DestinyEntitiesProfilesDestinyProfileComponent
+	if err := json.Unmarshal([]byte(`{"characterIds":["2305843009261519028","2305843009261519029"]}`), &profile); err != nil {
+		t.Fatalf("failed to unmarshal DestinyProfileComponent characterIds: %v", err)
+	}
+	if profile.CharacterIds == nil || len(*profile.CharacterIds) != 2 || (*profile.CharacterIds)[0] != "2305843009261519028" {
+		t.Fatalf("unexpected characterIds: %+v", profile.CharacterIds)
+	}
+
+	var statVal bungie.HistoricalStatsValue
+	if err := json.Unmarshal([]byte(`{"activityId":"15790919881","statId":"longestKillSpree","basic":{"value":12,"displayValue":"12"}}`), &statVal); err != nil {
+		t.Fatalf("failed to unmarshal HistoricalStatsValue activityId: %v", err)
+	}
+	if statVal.ActivityId == nil || *statVal.ActivityId != "15790919881" {
+		t.Fatalf("unexpected activityId: %+v", statVal.ActivityId)
+	}
+
+	var receipt bungie.DestinyVendorsDestinyVendorReceipt
+	if err := json.Unmarshal([]byte(`{"purchasedByCharacterId":"2305843009261519028","timeToExpiration":"86400"}`), &receipt); err != nil {
+		t.Fatalf("failed to unmarshal DestinyVendorReceipt: %v", err)
+	}
+	if receipt.PurchasedByCharacterId == nil || *receipt.PurchasedByCharacterId != "2305843009261519028" || receipt.TimeToExpiration == nil || *receipt.TimeToExpiration != "86400" {
+		t.Fatalf("unexpected receipt fields: %+v", receipt)
+	}
+
+	var user bungie.UserGeneralUser
+	if err := json.Unmarshal([]byte(`{"membershipId":"4611686018434106050","lastBanReportId":"99887766554433","legacyPortalUID":"11223344556677"}`), &user); err != nil {
+		t.Fatalf("failed to unmarshal UserGeneralUser: %v", err)
+	}
+	if user.LastBanReportId == nil || *user.LastBanReportId != "99887766554433" || user.LegacyPortalUID == nil || *user.LegacyPortalUID != "11223344556677" {
+		t.Fatalf("unexpected user fields: %+v", user)
+	}
+}
+
+func TestHistoricalStatsValueActivityIDConversion(t *testing.T) {
+	stats := map[string]bungie.HistoricalStatsValue{
+		"personalBest": {
+			ActivityId: ptr.Of("15790919881"),
+			StatId:     ptr.Of("longestKillSpree"),
+			Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{
+				DisplayValue: ptr.Of("12"),
+				Value:        ptr.Of(float64(12)),
+			},
+		},
+		"perGame": {
+			ActivityId: nil,
+			StatId:     ptr.Of("kills"),
+			Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{
+				DisplayValue: ptr.Of("20"),
+				Value:        ptr.Of(float64(20)),
+			},
+		},
+	}
+
+	transformed := TransformD2HistoricalStatValues(&stats)
+	if transformed == nil {
+		t.Fatal("expected non-nil transformed stats")
+	}
+	pb := (*transformed)["personalBest"]
+	if pb.ActivityID == nil || *pb.ActivityID != 15790919881 {
+		t.Fatalf("expected ActivityID 15790919881, got %v", pb.ActivityID)
+	}
+	if (*transformed)["perGame"].ActivityID != nil {
+		t.Fatalf("expected nil ActivityID for perGame stat, got %v", (*transformed)["perGame"].ActivityID)
+	}
+
+	unique := BungieStatValueToUniqueStatValue(&stats)
+	if unique == nil {
+		t.Fatal("expected non-nil unique stats")
+	}
+	if (*unique)["personalBest"].ActivityID == nil || *(*unique)["personalBest"].ActivityID != 15790919881 {
+		t.Fatalf("expected ActivityID 15790919881, got %v", (*unique)["personalBest"].ActivityID)
+	}
+	if (*unique)["perGame"].ActivityID != nil {
+		t.Fatalf("expected nil ActivityID for perGame stat, got %v", (*unique)["perGame"].ActivityID)
+	}
+}

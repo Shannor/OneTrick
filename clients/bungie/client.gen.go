@@ -1438,7 +1438,7 @@ type DestinyEntitiesProfilesDestinyProfileComponent struct {
 	ActiveEventCardHash *uint32 `json:"activeEventCardHash"`
 
 	// CharacterIds A list of the character IDs, for further querying on your part.
-	CharacterIds *[]int64 `json:"characterIds,omitempty"`
+	CharacterIds *[]string `json:"characterIds,omitempty"`
 
 	// CurrentGuardianRank The 'current' Guardian Rank value, which starts at rank 1. This rank value will drop at the start of a new season to your 'renewed' rank from the previous season.
 	CurrentGuardianRank *int32 `json:"currentGuardianRank,omitempty"`
@@ -1526,7 +1526,7 @@ type StatsPeriodGroup struct {
 // HistoricalStatsValue defines model for Destiny.HistoricalStats.DestinyHistoricalStatsValue.
 type HistoricalStatsValue struct {
 	// ActivityId When a stat represents the best, most, longest, fastest or some other personal best, the actual activity ID where that personal best was established is available on this property.
-	ActivityId *int64 `json:"activityId"`
+	ActivityId *string `json:"activityId"`
 
 	// Basic Basic stat value.
 	Basic *DestinyHistoricalStatsDestinyHistoricalStatsValuePair `json:"basic,omitempty"`
@@ -2204,7 +2204,7 @@ type DestinyVendorsDestinyVendorReceipt struct {
 	LicenseUnlockHash *uint32 `json:"licenseUnlockHash,omitempty"`
 
 	// PurchasedByCharacterId The ID of the character who made the purchase.
-	PurchasedByCharacterId *int64 `json:"purchasedByCharacterId,omitempty"`
+	PurchasedByCharacterId *string `json:"purchasedByCharacterId,omitempty"`
 
 	// RefundPolicy Whether you can get a refund, and what happens in order for the refund to be received. See the DestinyVendorItemRefundPolicy enum for details.
 	RefundPolicy *int32 `json:"refundPolicy,omitempty"`
@@ -2213,7 +2213,7 @@ type DestinyVendorsDestinyVendorReceipt struct {
 	SequenceNumber *int32 `json:"sequenceNumber,omitempty"`
 
 	// TimeToExpiration The seconds since epoch at which this receipt is rendered invalid.
-	TimeToExpiration *int64 `json:"timeToExpiration,omitempty"`
+	TimeToExpiration *string `json:"timeToExpiration,omitempty"`
 }
 
 // DestinyBaseItemComponentSetOfuint32 defines model for DestinyBaseItemComponentSetOfuint32.
@@ -2816,9 +2816,9 @@ type UserGeneralUser struct {
 	FbDisplayName                     *string                `json:"fbDisplayName,omitempty"`
 	FirstAccess                       *time.Time             `json:"firstAccess"`
 	IsDeleted                         *bool                  `json:"isDeleted,omitempty"`
-	LastBanReportId                   *int64                 `json:"lastBanReportId"`
+	LastBanReportId                   *string                `json:"lastBanReportId"`
 	LastUpdate                        *time.Time             `json:"lastUpdate"`
-	LegacyPortalUID                   *int64                 `json:"legacyPortalUID"`
+	LegacyPortalUID                   *string                `json:"legacyPortalUID"`
 	Locale                            *string                `json:"locale,omitempty"`
 	LocaleInheritDefault              *bool                  `json:"localeInheritDefault,omitempty"`
 	MembershipId                      *string                `json:"membershipId,omitempty"`

@@ -100,6 +100,36 @@ actions:
       type: string
   - target: '$.components.schemas["Destiny.Quests.DestinyQuestStatus"].properties["itemInstanceId"]["format"]'
     remove: true
+  - target: '$.components.schemas["Destiny.Entities.Profiles.DestinyProfileComponent"].properties["characterIds"].items'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Entities.Profiles.DestinyProfileComponent"].properties["characterIds"].items["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalStatsValue"].properties["activityId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.HistoricalStats.DestinyHistoricalStatsValue"].properties["activityId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Vendors.DestinyVendorReceipt"].properties["purchasedByCharacterId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Vendors.DestinyVendorReceipt"].properties["purchasedByCharacterId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["Destiny.Vendors.DestinyVendorReceipt"].properties["timeToExpiration"]'
+    update:
+      type: string
+  - target: '$.components.schemas["Destiny.Vendors.DestinyVendorReceipt"].properties["timeToExpiration"]["format"]'
+    remove: true
+  - target: '$.components.schemas["User.GeneralUser"].properties["lastBanReportId"]'
+    update:
+      type: string
+  - target: '$.components.schemas["User.GeneralUser"].properties["lastBanReportId"]["format"]'
+    remove: true
+  - target: '$.components.schemas["User.GeneralUser"].properties["legacyPortalUID"]'
+    update:
+      type: string
+  - target: '$.components.schemas["User.GeneralUser"].properties["legacyPortalUID"]["format"]'
+    remove: true
 
   # 3. RGBA Byte-to-Integer Coercions (DestinyColor channels are 0..255 JSON numbers, not base64 bytes)
   - target: '$.components.schemas["Destiny.Misc.DestinyColor"].properties["red"]'
