@@ -983,7 +983,7 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		}
 	})
 
-	t.Run("POST /internal/sessions/finalize-comp enforces X-Internal-API-Key and returns 204", func(t *testing.T) {
+	t.Run("POST /internal/sessions/finalize-comp enforces X-Internal-API-Key, returns 204 on success, and 500 on batch failure", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
 		swagger, err := api.GetSwagger()
 		if err != nil {
@@ -1035,8 +1035,8 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 			t.Fatalf("expected 401 when X-Internal-API-Key is invalid, got %d: %s", wBadKey.Code, wBadKey.Body.String())
 		}
 
-		// Valid key -> 204 No Content even when individual iterations fail (partial failures captured in clog.LoopRollup)
-		reqOK := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","","ses-skipped","ses-failed"]}`))
+		// Valid key with clean batch -> 204 No Content
+		reqOK := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","","ses-skipped"]}`))
 		reqOK.Header.Set("Content-Type", "application/json")
 		reqOK.Header.Set("X-Internal-API-Key", "secret-internal-key")
 		wOK := httptest.NewRecorder()
@@ -1044,8 +1044,22 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		if wOK.Code != http.StatusNoContent {
 			t.Fatalf("expected 204 No Content, got %d: %s", wOK.Code, wOK.Body.String())
 		}
+		if len(sesMock.finalizedIDs) != 2 {
+			t.Fatalf("expected 2 non-empty session IDs forwarded to FinalizeCompTracking, got %v", sesMock.finalizedIDs)
+		}
+
+		// Valid key with failing item -> 500 so server-tick can retry and wide event logs ERROR
+		sesMock.finalizedIDs = nil
+		reqFail := httptest.NewRequest(http.MethodPost, "/internal/sessions/finalize-comp", strings.NewReader(`{"sessionIds":["ses-updated","ses-failed","ses-skipped"]}`))
+		reqFail.Header.Set("Content-Type", "application/json")
+		reqFail.Header.Set("X-Internal-API-Key", "secret-internal-key")
+		wFail := httptest.NewRecorder()
+		r.ServeHTTP(wFail, reqFail)
+		if wFail.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 when batch contains failures, got %d: %s", wFail.Code, wFail.Body.String())
+		}
 		if len(sesMock.finalizedIDs) != 3 {
-			t.Fatalf("expected 3 non-empty session IDs forwarded to FinalizeCompTracking, got %v", sesMock.finalizedIDs)
+			t.Fatalf("expected all 3 non-empty session IDs attempted before returning 500, got %v", sesMock.finalizedIDs)
 		}
 	})
 }

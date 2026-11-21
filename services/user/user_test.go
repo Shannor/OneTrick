@@ -36,7 +36,7 @@ func TestUserPrimaryMembership(t *testing.T) {
 		}
 	})
 
-	t.Run("errors on nil user or empty or non-numeric primary membership ID", func(t *testing.T) {
+	t.Run("errors on nil user, empty/non-numeric primary membership ID, or missing membership type", func(t *testing.T) {
 		var nilUser *User
 		if _, _, err := nilUser.PrimaryMembership(); err == nil {
 			t.Fatal("expected error for nil user")
@@ -44,8 +44,14 @@ func TestUserPrimaryMembership(t *testing.T) {
 		if _, _, err := (&User{}).PrimaryMembership(); err == nil {
 			t.Fatal("expected error for empty primary membership ID")
 		}
-		if _, _, err := (&User{PrimaryMembershipID: "not-a-number"}).PrimaryMembership(); err == nil {
+		if _, _, err := (&User{PrimaryMembershipID: "not-a-number", Memberships: []Membership{{ID: "not-a-number", Type: 3}}}).PrimaryMembership(); err == nil {
 			t.Fatal("expected error for non-numeric primary membership ID")
+		}
+		if _, _, err := (&User{PrimaryMembershipID: "4611686018467484863"}).PrimaryMembership(); err == nil {
+			t.Fatal("expected error when memberships list is empty")
+		}
+		if _, _, err := (&User{PrimaryMembershipID: "4611686018467484863", Memberships: []Membership{{ID: "4611686018467484863", Type: 0}}}).PrimaryMembership(); err == nil {
+			t.Fatal("expected error when membership type is 0")
 		}
 	})
 }

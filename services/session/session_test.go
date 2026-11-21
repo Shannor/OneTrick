@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	clog "github.com/Shannor/canonical-logger"
 )
 
 type memorySessionStore struct {
-	docs map[string]*api.Session
-	seq  int
+	docs        map[string]*api.Session
+	seq         int
+	getDocCalls atomic.Int32
 }
 
 func newMemorySessionStore() *memorySessionStore {
@@ -54,6 +56,7 @@ func (m *memorySessionStore) getActiveDoc(_ context.Context, userID, characterID
 }
 
 func (m *memorySessionStore) getDoc(_ context.Context, sessionID string) (*api.Session, error) {
+	m.getDocCalls.Add(1)
 	s, ok := m.docs[sessionID]
 	if !ok {
 		return nil, ErrNotFound
@@ -274,9 +277,21 @@ func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testin
 		t.Fatalf("unexpected CompTracking.Start: %+v", started.CompTracking.Start)
 	}
 
-	// 2. Complete session populates compTracking.end and compTracking.pointDelta
+	// 1b. FinalizeCompTracking on a still-pending session refuses to seal compTracking.end prematurely
+	if err := svc.FinalizeCompTracking(ctx, started.ID); err == nil {
+		t.Fatal("expected FinalizeCompTracking to fail while session is still pending")
+	}
+	if d2Svc.calls.Load() != 1 {
+		t.Fatalf("expected no additional GetCompetitiveRank calls when session is pending, got %d", d2Svc.calls.Load())
+	}
+
+	// 2. Complete session populates compTracking.end and compTracking.pointDelta with a single getDoc read
+	store.getDocCalls.Store(0)
 	if err := svc.Complete(ctx, started.ID); err != nil {
 		t.Fatalf("Complete failed: %v", err)
+	}
+	if store.getDocCalls.Load() != 1 {
+		t.Fatalf("expected Complete to read session doc once, got %d getDoc calls", store.getDocCalls.Load())
 	}
 	completed, err := svc.Get(ctx, started.ID)
 	if err != nil {
@@ -330,3 +345,21 @@ func TestSessionService_StartWithoutCompTrackingSkipsBungieCall(t *testing.T) {
 		t.Fatalf("expected 0 GetCompetitiveRank calls when finalizing session without compTracking, got %d", d2Svc.calls.Load())
 	}
 }
+
+func TestSessionService_StartWarnsWhenCompServicesMissing(t *testing.T) {
+	svc := &service{
+		store: newMemorySessionStore(),
+	}
+	ctx := clog.NewContext(context.Background())
+	started, err := svc.Start(ctx, "user-1", "char-1", api.AuditField{ID: "user-1", Username: "Guardian"}, true)
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if started.CompTracking == nil || !started.CompTracking.Enabled || started.CompTracking.Start != nil {
+		t.Fatalf("expected CompTracking enabled with nil Start, got %+v", started.CompTracking)
+	}
+	if !clog.BagFromContext(ctx).HasWarning() {
+		t.Fatal("expected canonical FieldBag warning when competitive rank services are not configured")
+	}
+}
+

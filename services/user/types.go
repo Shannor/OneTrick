@@ -38,6 +38,9 @@ func (u *User) PrimaryMembership() (int64, int64, error) {
 	if membershipType == 0 && len(u.Memberships) > 0 {
 		membershipType = u.Memberships[0].Type
 	}
+	if membershipType == 0 {
+		return 0, 0, errors.New("user missing valid membership type")
+	}
 	pmID, err := strconv.ParseInt(u.PrimaryMembershipID, 10, 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to parse primary membership id: %w", err)

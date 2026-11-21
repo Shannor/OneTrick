@@ -509,12 +509,14 @@ func (s Server) FinalizeSessionsComp(ctx context.Context, request api.FinalizeSe
 		return api.FinalizeSessionsComp400JSONResponse{Message: "body cannot be empty"}, nil
 	}
 
-	_ = clog.LoopRollup(ctx, "sessionService.finalizeCompBatch", request.Body.SessionIDs, func(iterCtx context.Context, _ int, sessionID string) error {
+	if err := clog.LoopRollup(ctx, "sessionService.finalizeCompBatch", request.Body.SessionIDs, func(iterCtx context.Context, _ int, sessionID string) error {
 		if sessionID == "" {
 			return nil
 		}
 		return s.SessionService.FinalizeCompTracking(iterCtx, sessionID)
-	})
+	}); err != nil {
+		return api.FinalizeSessionsComp500JSONResponse{Message: "failed to finalize one or more sessions"}, nil
+	}
 
 	return api.FinalizeSessionsComp204Response{}, nil
 }

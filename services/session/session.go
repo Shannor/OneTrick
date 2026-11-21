@@ -99,6 +99,8 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 					compTracking.Start = snap
 				}
 			}
+		} else {
+			clog.WithGroupField(ctx, "sessionService.start", "warning", "competitive rank services not configured")
 		}
 		result.CompTracking = compTracking
 	}
@@ -240,15 +242,18 @@ func (s service) Complete(ctx context.Context, ID string) error {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 	if session.CompletedAt == nil {
-		if err := s.store.completeDoc(ctx, ID, time.Now()); err != nil {
+		completedAt := time.Now()
+		if err := s.store.completeDoc(ctx, ID, completedAt); err != nil {
 			return fmt.Errorf("failed to complete session: %w", err)
 		}
+		session.CompletedAt = &completedAt
+		session.Status = ptr.Of(api.SessionComplete)
 	} else {
 		clog.WithGroupField(ctx, "sessionService.complete", "warning", "session already completed")
 	}
 
 	if session.CompTracking != nil && session.CompTracking.Enabled && session.CompTracking.End == nil {
-		if err := s.FinalizeCompTracking(ctx, ID); err != nil {
+		if err := s.finalizeCompTrackingForSession(ctx, session); err != nil {
 			clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
 				"warning":       "failed to finalize competitive rank",
 				"compRankError": err.Error(),
@@ -265,11 +270,22 @@ func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) err
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
-	clog.WithGroupField(ctx, "sessionService.finalizeCompTracking", "userId", ses.UserID)
+	return s.finalizeCompTrackingForSession(ctx, ses)
+}
+
+func (s service) finalizeCompTrackingForSession(ctx context.Context, ses *api.Session) error {
+	clog.WithGroupFields(ctx, "sessionService.finalizeCompTracking", clog.Fields{
+		"sessionId": ses.ID,
+		"userId":    ses.UserID,
+	})
 
 	if ses.CompTracking == nil || !ses.CompTracking.Enabled || ses.CompTracking.End != nil {
 		clog.WithGroupField(ctx, "sessionService.finalizeCompTracking", "skipped", true)
 		return nil
+	}
+
+	if ses.CompletedAt == nil && (ses.Status == nil || *ses.Status != api.SessionComplete) {
+		return fmt.Errorf("session %s is not completed", ses.ID)
 	}
 
 	if s.userService == nil || s.d2Service == nil {
@@ -292,7 +308,7 @@ func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) err
 		pointDelta = &delta
 	}
 
-	if err := s.store.updateCompTrackingEnd(ctx, sessionID, endSnap, pointDelta); err != nil {
+	if err := s.store.updateCompTrackingEnd(ctx, ses.ID, endSnap, pointDelta); err != nil {
 		return fmt.Errorf("failed to persist competitive rank end: %w", err)
 	}
 
