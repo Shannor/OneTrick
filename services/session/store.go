@@ -12,14 +12,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type tickCandidate struct {
+	session   api.Session
+	updatedAt *time.Time
+}
+
 type sessionStore interface {
 	hasActive(ctx context.Context, userID, characterID string) (bool, error)
 	createDoc(ctx context.Context, ses *api.Session) (*api.Session, error)
 	getActiveDoc(ctx context.Context, userID, characterID string) (*api.Session, error)
 	getDoc(ctx context.Context, sessionID string) (*api.Session, error)
 	listDocs(ctx context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error)
+	getTickCandidates(ctx context.Context, completedSince time.Time) ([]tickCandidate, error)
 	updateFields(ctx context.Context, sessionID string, updates []firestore.Update) error
 	completeDoc(ctx context.Context, sessionID string, completedAt time.Time) error
+	endSessionDoc(ctx context.Context, sessionID string, completedBy api.AuditField, completedAt time.Time, summary *api.SessionSummary) error
+	updateSummary(ctx context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error
 	updateCompTrackingEnd(ctx context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error
 	setLastActivity(ctx context.Context, sessionID, activityID string, seenAt time.Time) error
 	deleteDoc(ctx context.Context, sessionID string) error
@@ -113,6 +121,48 @@ func (f *firestoreStore) listDocs(ctx context.Context, userID, characterID *stri
 	return result, nil
 }
 
+func (f *firestoreStore) getTickCandidates(ctx context.Context, completedSince time.Time) ([]tickCandidate, error) {
+	orFilter := firestore.OrFilter{
+		Filters: []firestore.EntityFilter{
+			firestore.PropertyFilter{
+				Path:     "status",
+				Operator: "==",
+				Value:    api.SessionPending,
+			},
+			firestore.PropertyFilter{
+				Path:     "completedAt",
+				Operator: ">=",
+				Value:    completedSince,
+			},
+		},
+	}
+
+	docs, err := f.db.Collection(collection).
+		WhereEntity(orFilter).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := make([]tickCandidate, 0, len(docs))
+	for _, doc := range docs {
+		var s api.Session
+		if err := doc.DataTo(&s); err != nil {
+			return nil, err
+		}
+		var meta struct {
+			UpdatedAt *time.Time `firestore:"updatedAt"`
+		}
+		_ = doc.DataTo(&meta)
+		candidates = append(candidates, tickCandidate{
+			session:   s,
+			updatedAt: meta.UpdatedAt,
+		})
+	}
+	return candidates, nil
+}
+
 func (f *firestoreStore) updateFields(ctx context.Context, sessionID string, updates []firestore.Update) error {
 	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, updates)
 	return err
@@ -127,6 +177,49 @@ func (f *firestoreStore) completeDoc(ctx context.Context, sessionID string, comp
 		{
 			Path:  "status",
 			Value: api.SessionComplete,
+		},
+	})
+	return err
+}
+
+func (f *firestoreStore) endSessionDoc(ctx context.Context, sessionID string, completedBy api.AuditField, completedAt time.Time, summary *api.SessionSummary) error {
+	updates := []firestore.Update{
+		{
+			Path:  "completedBy",
+			Value: completedBy,
+		},
+		{
+			Path:  "status",
+			Value: api.SessionComplete,
+		},
+		{
+			Path:  "completedAt",
+			Value: completedAt,
+		},
+		{
+			Path:  "updatedAt",
+			Value: completedAt,
+		},
+	}
+	if summary != nil {
+		updates = append(updates, firestore.Update{
+			Path:  "sessionSummary",
+			Value: summary,
+		})
+	}
+	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, updates)
+	return err
+}
+
+func (f *firestoreStore) updateSummary(ctx context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error {
+	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
+		{
+			Path:  "sessionSummary",
+			Value: summary,
+		},
+		{
+			Path:  "updatedAt",
+			Value: updatedAt,
 		},
 	})
 	return err
@@ -157,6 +250,10 @@ func (f *firestoreStore) setLastActivity(ctx context.Context, sessionID, activit
 		},
 		{
 			Path:  "lastSeenTimestamp",
+			Value: seenAt,
+		},
+		{
+			Path:  "updatedAt",
 			Value: seenAt,
 		},
 	})

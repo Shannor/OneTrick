@@ -8,6 +8,7 @@ import (
 	"oneTrick/generator"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
+	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"slices"
 	"time"
@@ -15,11 +16,6 @@ import (
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
 )
-
-type TickOptions struct {
-	DryRun   bool
-	SkipSave bool
-}
 
 type Service interface {
 	Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error)
@@ -32,6 +28,9 @@ type Service interface {
 	FinalizeCompTracking(ctx context.Context, sessionID string) error
 	SetLastActivity(ctx context.Context, ID, activityID string) error
 	Delete(ctx context.Context, sessionID string, userID string) error
+	ComputeSessionSummary(ctx context.Context, ses api.Session) (*api.SessionSummary, error)
+	UpdateSessionSummary(ctx context.Context, sessionID string, summary *api.SessionSummary) error
+	CleanupEmptyCompleted(ctx context.Context, dryRun bool) (int, error)
 	RunTick(ctx context.Context, opts TickOptions) (*api.SessionTickResponse, error)
 }
 
@@ -45,22 +44,45 @@ type service struct {
 	aggregateService aggregate.Service
 	userService      user.Service
 	d2Service        destiny.Service
+	snapshotService  snapshot.Service
+	manifestService  destiny.ManifestService
+	nowFn            func() time.Time
 }
 
 var _ Service = (*service)(nil)
 
-func NewService(db *firestore.Client, aggregateService aggregate.Service, userService user.Service, d2Service destiny.Service) Service {
+func NewService(
+	db *firestore.Client,
+	aggregateService aggregate.Service,
+	userService user.Service,
+	d2Service destiny.Service,
+	snapshotService snapshot.Service,
+	manifestService destiny.ManifestService,
+) Service {
 	return &service{
 		store:            &firestoreStore{db: db},
 		aggregateService: aggregateService,
 		userService:      userService,
 		d2Service:        d2Service,
+		snapshotService:  snapshotService,
+		manifestService:  manifestService,
 	}
 }
 
 const (
 	collection = "sessions"
+	// CutOffDuration is when an inactive or stale pending session is automatically ended or deleted.
+	CutOffDuration           = 2 * time.Hour
+	completedGracePeriod     = 15 * time.Minute
+	activityStartGracePeriod = 15 * time.Minute
 )
+
+func (s service) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
+}
 
 func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
 	clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
@@ -383,16 +405,4 @@ func (s service) AddAggregateIDs(ctx context.Context, sessionID string, aggregat
 		"aggregateCount": len(aggregateIDs),
 	})
 	return s.store.addAggregateIDs(ctx, sessionID, aggregateIDs)
-}
-
-func (s service) RunTick(ctx context.Context, opts TickOptions) (*api.SessionTickResponse, error) {
-	start := time.Now()
-	clog.WithGroupFields(ctx, "sessionService.runTick", clog.Fields{
-		"dryRun":   opts.DryRun,
-		"skipSave": opts.SkipSave,
-	})
-	return &api.SessionTickResponse{
-		DryRun:     opts.DryRun,
-		DurationMs: time.Since(start).Milliseconds(),
-	}, nil
 }

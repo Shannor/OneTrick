@@ -126,16 +126,58 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		return nil, fmt.Errorf("no activities found")
 	}
 
-	activities, err := a.ManifestService.GetActivities(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("cannot enhance activities: %v", err)
+	periods := *resp.JSON200.Response.Activities
+	activityIDs := make([]int64, 0, len(periods)*2)
+	for _, p := range periods {
+		if p.ActivityDetails == nil {
+			continue
+		}
+		if p.ActivityDetails.ReferenceId != nil {
+			activityIDs = append(activityIDs, int64(*p.ActivityDetails.ReferenceId))
+		}
+		if p.ActivityDetails.DirectorActivityHash != nil {
+			activityIDs = append(activityIDs, int64(*p.ActivityDetails.DirectorActivityHash))
+		}
 	}
-	modes, err := a.ManifestService.GetActivityModes(ctx)
+
+	activities, err := a.ManifestService.GetActivitiesByIDs(ctx, activityIDs)
 	if err != nil {
 		return nil, fmt.Errorf("cannot enhance activities: %v", err)
 	}
 
-	history := TransformPeriodGroups(*resp.JSON200.Response.Activities, activities, modes)
+	modeIDs := make([]int64, 0, len(activities))
+	for _, act := range activities {
+		if act.DirectActivityModeHash != 0 {
+			modeIDs = append(modeIDs, int64(act.DirectActivityModeHash))
+		}
+	}
+
+	modes, err := a.ManifestService.GetActivityModesByIDs(ctx, modeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("cannot enhance activities: %v", err)
+	}
+
+	needsModeTypeFallback := false
+	for _, p := range periods {
+		if p.ActivityDetails == nil || p.ActivityDetails.DirectorActivityHash == nil || p.ActivityDetails.Mode == nil || *p.ActivityDetails.Mode == 0 {
+			continue
+		}
+		act, ok := activities[strconv.Itoa(int(*p.ActivityDetails.DirectorActivityHash))]
+		if !ok {
+			continue
+		}
+		if _, found := modes[strconv.Itoa(act.DirectActivityModeHash)]; !found {
+			needsModeTypeFallback = true
+			break
+		}
+	}
+	if needsModeTypeFallback {
+		if allModes, modeErr := a.ManifestService.GetActivityModes(ctx); modeErr == nil {
+			modes = allModes
+		}
+	}
+
+	history := TransformPeriodGroups(periods, activities, modes)
 	clog.WithGroupField(ctx, "destinyService.getActivityHistory", "returnedCount", len(history))
 	return history, nil
 }
@@ -255,30 +297,32 @@ func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, ch
 }
 
 func buildItemsSet(ctx context.Context, data *bungie.PostGameCarnageReportData, characterSet *set.Set[string], a *service) map[string]ItemDefinition {
-	items := make(map[string]ItemDefinition)
 	if data == nil || data.Entries == nil {
-		return items
+		return make(map[string]ItemDefinition)
 	}
+	var itemIDs []int64
 	for _, entry := range *data.Entries {
-		if entry.CharacterId == nil {
+		if entry.CharacterId == nil || !characterSet.Contains(*entry.CharacterId) {
 			continue
 		}
-		if characterSet.Contains(*entry.CharacterId) {
-			if entry.Extended != nil && entry.Extended.Weapons != nil {
-				for _, stats := range *entry.Extended.Weapons {
-					if stats.ReferenceId != nil {
-						id := *stats.ReferenceId
-						item, err := a.ManifestService.GetItem(ctx, int64(id))
-						if err != nil {
-							continue
-						}
-						if item != nil {
-							items[strconv.FormatInt(item.Hash, 10)] = *item
-						}
-					}
+		if entry.Extended != nil && entry.Extended.Weapons != nil {
+			for _, stats := range *entry.Extended.Weapons {
+				if stats.ReferenceId != nil {
+					itemIDs = append(itemIDs, int64(*stats.ReferenceId))
 				}
 			}
 		}
+	}
+	if len(itemIDs) == 0 {
+		return make(map[string]ItemDefinition)
+	}
+	items, err := a.ManifestService.GetItemsByIDs(ctx, itemIDs)
+	if err != nil {
+		clog.WithGroupFields(ctx, "destinyService.buildItemsSet", clog.Fields{
+			"warning":    "failed to fetch weapon item definitions",
+			"fetchError": err.Error(),
+		})
+		return make(map[string]ItemDefinition)
 	}
 	return items
 }
@@ -393,58 +437,6 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 		"armorSetBonusCount": len(armorSetBonuses),
 	})
 	return loadout, stats, armorSetBonuses, timeStamp, nil
-}
-
-func (a *service) buildLoadout(ctx context.Context, membershipID int64, membershipType int64, items []bungie.ItemComponent, stats map[string]StatDefinition) (api.Loadout, []api.ArmorSetBonus, error) {
-
-	// TODO: Could convert this to build items by ID requests
-	d2Items, err := a.ManifestService.GetItems(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	damageTypes, err := a.ManifestService.GetDamageTypes(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// TODO: Could convert this to build items by ID requests
-	perks, err := a.ManifestService.GetPerks(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	itemSets, err := a.ManifestService.GetEquipableItemSets(ctx)
-	if err != nil {
-		clog.WithGroupFields(ctx, "destinyService.buildLoadout", clog.Fields{
-			"warning":       "failed to get equipable item sets",
-			"itemSetsError": err.Error(),
-		})
-		itemSets = nil
-	}
-
-	loadout := make(api.Loadout)
-	for _, item := range items {
-		if item.ItemInstanceId == nil {
-			continue
-		}
-		snap := api.ItemSnapshot{
-			InstanceID: *item.ItemInstanceId,
-		}
-		d, err := a.GetItemDetails(ctx, membershipID, membershipType, *item.ItemInstanceId)
-		if err != nil {
-			continue
-		}
-		details := TransformItemToDetails(d, d2Items, damageTypes, perks, stats)
-		snap.Name = details.BaseInfo.Name
-		snap.ItemHash = details.BaseInfo.ItemHash
-		snap.ItemProperties = *details
-		snap.BucketHash = &details.BaseInfo.BucketHash
-		loadout[strconv.FormatInt(snap.ItemProperties.BaseInfo.BucketHash, 10)] = snap
-	}
-
-	armorSetBonuses := generateArmorSetBonuses(ctx, loadout, itemSets, perks)
-
-	return loadout, armorSetBonuses, nil
 }
 
 func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {

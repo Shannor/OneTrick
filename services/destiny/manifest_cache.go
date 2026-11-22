@@ -2,6 +2,7 @@ package destiny
 
 import (
 	"context"
+	"oneTrick/utils"
 	"strconv"
 	"sync"
 
@@ -90,17 +91,99 @@ func (c *hashCache[T]) getOrLoad(
 	return loaded, nil
 }
 
+func (c *hashCache[T]) getOrLoadMany(
+	ctx context.Context,
+	group string,
+	ids []int64,
+	colCache *collectionCache[T],
+	loader func(context.Context, []int64) (map[string]T, error),
+) (map[string]T, error) {
+	uniqueIDs := utils.UniqueNonZero(ids)
+	if len(uniqueIDs) == 0 {
+		return make(map[string]T), nil
+	}
+
+	result := make(map[string]T, len(uniqueIDs))
+	remaining := uniqueIDs
+
+	if colCache != nil {
+		colCache.mu.RLock()
+		if colCache.items != nil {
+			remaining = make([]int64, 0)
+			for _, id := range uniqueIDs {
+				key := strconv.FormatInt(id, 10)
+				if def, ok := colCache.items[key]; ok {
+					result[key] = def
+				} else {
+					remaining = append(remaining, id)
+				}
+			}
+		}
+		colCache.mu.RUnlock()
+	}
+
+	missing := make([]int64, 0, len(remaining))
+	if len(remaining) > 0 {
+		c.mu.RLock()
+		for _, id := range remaining {
+			if c.items != nil {
+				if cached, ok := c.items[id]; ok && cached != nil {
+					result[strconv.FormatInt(id, 10)] = *cached
+					continue
+				}
+			}
+			missing = append(missing, id)
+		}
+		c.mu.RUnlock()
+	}
+
+	if len(missing) == 0 {
+		clog.WithGroupFields(ctx, group, clog.Fields{
+			"requested": len(uniqueIDs),
+			"returned":  len(result),
+			"cached":    true,
+		})
+		return result, nil
+	}
+
+	loaded, err := loader(ctx, missing)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	if c.items == nil {
+		c.items = make(map[int64]*T)
+	}
+	for k, v := range loaded {
+		val := v
+		if id, err := strconv.ParseInt(k, 10, 64); err == nil {
+			c.items[id] = &val
+		}
+		result[k] = val
+	}
+	c.mu.Unlock()
+
+	clog.WithGroupFields(ctx, group, clog.Fields{
+		"requested": len(uniqueIDs),
+		"returned":  len(result),
+		"cacheHits": len(uniqueIDs) - len(missing),
+		"cached":    false,
+	})
+	return result, nil
+}
+
 // cachedManifestService wraps a ManifestService with an in-memory caching layer
 // so the underlying service remains completely unaware of caching.
 type cachedManifestService struct {
 	ManifestService
 
-	places           collectionCache[PlaceDefinition]
-	classes          collectionCache[ClassDefinition]
-	inventoryBuckets collectionCache[InventoryBucketDefinition]
-	races            collectionCache[RaceDefinition]
-	itemCategories   collectionCache[ItemCategory]
-	damageTypes      collectionCache[DamageType]
+	places            collectionCache[PlaceDefinition]
+	classes           collectionCache[ClassDefinition]
+	inventoryBuckets  collectionCache[InventoryBucketDefinition]
+	races             collectionCache[RaceDefinition]
+	itemCategories    collectionCache[ItemCategory]
+	damageTypes       collectionCache[DamageType]
 	activityModes     collectionCache[ActivityModeDefinition]
 	stats             collectionCache[StatDefinition]
 	perks             collectionCache[PerkDefinition]
@@ -108,6 +191,7 @@ type cachedManifestService struct {
 	equipableItemSets collectionCache[EquipableItemSetDefinition]
 
 	itemsByHash         hashCache[ItemDefinition]
+	perksByHash         hashCache[PerkDefinition]
 	activitiesByHash    hashCache[ActivityDefinition]
 	activityModesByHash hashCache[ActivityModeDefinition]
 	recordsByHash       hashCache[RecordDefinition]
@@ -213,4 +297,20 @@ func (c *cachedManifestService) GetProgression(ctx context.Context, hash int64) 
 		c.progressions.mu.RUnlock()
 	}
 	return c.progressionsByHash.getOrLoad(ctx, "manifestService.getProgression", hash, c.ManifestService.GetProgression)
+}
+
+func (c *cachedManifestService) GetItemsByIDs(ctx context.Context, ids []int64) (map[string]ItemDefinition, error) {
+	return c.itemsByHash.getOrLoadMany(ctx, "manifestService.getItemsByIDs", ids, nil, c.ManifestService.GetItemsByIDs)
+}
+
+func (c *cachedManifestService) GetPerksByIDs(ctx context.Context, ids []int64) (map[string]PerkDefinition, error) {
+	return c.perksByHash.getOrLoadMany(ctx, "manifestService.getPerksByIDs", ids, &c.perks, c.ManifestService.GetPerksByIDs)
+}
+
+func (c *cachedManifestService) GetActivitiesByIDs(ctx context.Context, ids []int64) (map[string]ActivityDefinition, error) {
+	return c.activitiesByHash.getOrLoadMany(ctx, "manifestService.getActivitiesByIDs", ids, nil, c.ManifestService.GetActivitiesByIDs)
+}
+
+func (c *cachedManifestService) GetActivityModesByIDs(ctx context.Context, ids []int64) (map[string]ActivityModeDefinition, error) {
+	return c.activityModesByHash.getOrLoadMany(ctx, "manifestService.getActivityModesByIDs", ids, &c.activityModes, c.ManifestService.GetActivityModesByIDs)
 }

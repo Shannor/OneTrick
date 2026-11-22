@@ -43,6 +43,7 @@ type Service interface {
 	Merge(ctx context.Context, userID string, targetSnapshotID string, sourceSnapshotIDs []string) (api.CharacterSnapshot, error)
 
 	LookupLink(agg *api.Aggregate, characterID string) *api.SnapshotLink
+	FindBestFit(ctx context.Context, userID, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
 	EnrichInstancePerformance(snapshot *api.CharacterSnapshot, performance api.InstancePerformance) (*api.InstancePerformance, error)
 
 	// Update allows for updating a snapshot document's data.
@@ -76,8 +77,25 @@ func NewService(db *firestore.Client, userService user.Service, d2Service destin
 }
 
 // GenerateHash computes a deterministic SHA-256 hash string for a Loadout based on each item's
-// BaseInfo.InstanceId and sorted Perk hashes, matching OneTrick-Scripts/server-tick's generateHash.
+// BaseInfo.InstanceId and sorted Perk hashes.
 func GenerateHash(loadout api.Loadout) (string, error) {
+	return generateHashWithPerkPrefix(loadout, func(item api.ItemSnapshot) string {
+		return item.InstanceID
+	})
+}
+
+// GenerateLegacyHash computes the historical OneTrick-Scripts/server-tick hash where
+// ItemSnapshot.InstanceID held the itemHash string rather than the 64-bit Bungie instance ID.
+func GenerateLegacyHash(loadout api.Loadout) (string, error) {
+	return generateHashWithPerkPrefix(loadout, func(item api.ItemSnapshot) string {
+		if item.ItemHash != 0 {
+			return strconv.FormatInt(item.ItemHash, 10)
+		}
+		return item.InstanceID
+	})
+}
+
+func generateHashWithPerkPrefix(loadout api.Loadout, perkPrefix func(api.ItemSnapshot) string) (string, error) {
 	var hashing []string
 
 	keys := make([]string, 0, len(loadout))
@@ -95,8 +113,9 @@ func GenerateHash(loadout api.Loadout) (string, error) {
 			return cmp.Compare(a.Hash, b.Hash)
 		})
 
+		prefix := perkPrefix(item)
 		for _, perk := range perks {
-			hashing = append(hashing, fmt.Sprintf("%s-%d", item.InstanceID, perk.Hash))
+			hashing = append(hashing, fmt.Sprintf("%s-%d", prefix, perk.Hash))
 		}
 	}
 	return utils.HashMap(hashing)
@@ -192,13 +211,21 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 		"hash":   snapshot.Hash,
 	})
 
-	existingSnapshot, err := s.store.getByHash(ctx, snapshot.Hash)
+	lookupHashes := []string{snapshot.Hash}
+	if legacyHash, err := GenerateLegacyHash(snapshot.Loadout); err == nil && legacyHash != "" && legacyHash != snapshot.Hash {
+		lookupHashes = append(lookupHashes, legacyHash)
+	}
+
+	existingSnapshot, err := s.store.getByHashes(ctx, lookupHashes)
 	if err != nil {
 		return nil, err
 	}
 	if existingSnapshot != nil {
+		if existingSnapshot.Hash != snapshot.Hash {
+			clog.WithGroupField(ctx, "snapshotService.create", "matchedLegacyHash", true)
+		}
 		if IsArchived(existingSnapshot) {
-			targetSnap, err := s.resolveAutoForwardTarget(ctx, existingSnapshot)
+			targetSnap, err := s.resolveAutoForwardTarget(ctx, "snapshotService.create", existingSnapshot)
 			if err != nil {
 				return nil, err
 			}
@@ -250,7 +277,7 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 	return s.createHistoryEntry(ctx, created)
 }
 
-func (s *service) resolveAutoForwardTarget(ctx context.Context, archived *api.CharacterSnapshot) (*api.CharacterSnapshot, error) {
+func (s *service) resolveAutoForwardTarget(ctx context.Context, group string, archived *api.CharacterSnapshot) (*api.CharacterSnapshot, error) {
 	if !IsArchived(archived) {
 		return nil, nil
 	}
@@ -262,7 +289,7 @@ func (s *service) resolveAutoForwardTarget(ctx context.Context, archived *api.Ch
 	}
 	if err != nil {
 		if errors.Is(err, NotFound) {
-			clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+			clog.WithGroupFields(ctx, group, clog.Fields{
 				"archivedSnapshotId": archived.ID,
 				"missingTargetId":    targetID,
 				"warning":            "auto-forward target missing; restoring archived snapshot",
@@ -398,6 +425,141 @@ func (s *service) LookupLink(agg *api.Aggregate, characterID string) *api.Snapsh
 		return nil
 	}
 	return &link
+}
+
+func (s *service) FindBestFit(
+	ctx context.Context,
+	userID string,
+	characterID string,
+	activityPeriod time.Time,
+	weapons map[string]api.WeaponInstanceMetrics,
+) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
+	minTime := activityPeriod.Add(-1 * time.Hour)
+	maxTime := activityPeriod.Add(15 * time.Minute)
+
+	histories, err := s.store.listHistoriesInWindow(ctx, userID, characterID, minTime, maxTime)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(histories) == 0 {
+		link := api.SnapshotLink{
+			CharacterID:      characterID,
+			ConfidenceLevel:  api.NotFoundConfidenceLevel,
+			ConfidenceSource: api.SystemConfidenceSource,
+			CreatedAt:        time.Now(),
+		}
+		clog.WithGroupFields(ctx, "snapshotService.findBestFit", clog.Fields{
+			"characterId":        characterID,
+			"historiesEvaluated": 0,
+			"confidenceLevel":    string(api.NotFoundConfidenceLevel),
+		})
+		return nil, &link, nil
+	}
+
+	weaponSet := make(map[string]bool, len(weapons))
+	for _, weapon := range weapons {
+		if weapon.ReferenceID != nil {
+			weaponSet[strconv.FormatInt(*weapon.ReferenceID, 10)] = true
+		}
+	}
+
+	// Score candidate histories by weapon matches (Kinetic +2, Energy +2, Power +1),
+	// breaking ties by smallest absolute distance to activityPeriod.
+	var (
+		bestFit      *History
+		bestFitScore = 0
+	)
+	for i := range histories {
+		h := histories[i]
+		weight := 0
+		if weaponSet[h.Meta.KineticID] {
+			weight += 2
+		}
+		if weaponSet[h.Meta.EnergyID] {
+			weight += 2
+		}
+		if weaponSet[h.Meta.PowerID] {
+			weight++
+		}
+		if bestFit == nil && weight > 0 {
+			bestFit = &h
+			bestFitScore = weight
+			continue
+		}
+		if weight > bestFitScore {
+			bestFit = &h
+			bestFitScore = weight
+		}
+		if bestFit != nil && weight == bestFitScore {
+			bestFitDistance := activityPeriod.Sub(bestFit.Timestamp)
+			currentDistance := activityPeriod.Sub(h.Timestamp)
+			if currentDistance.Abs() < bestFitDistance.Abs() {
+				bestFit = &h
+				bestFitScore = weight
+			}
+		}
+	}
+
+	if bestFit == nil {
+		link := api.SnapshotLink{
+			CharacterID:      characterID,
+			ConfidenceLevel:  api.NoMatchConfidenceLevel,
+			ConfidenceSource: api.SystemConfidenceSource,
+			CreatedAt:        time.Now(),
+		}
+		clog.WithGroupFields(ctx, "snapshotService.findBestFit", clog.Fields{
+			"characterId":        characterID,
+			"historiesEvaluated": len(histories),
+			"confidenceLevel":    string(api.NoMatchConfidenceLevel),
+		})
+		return nil, &link, nil
+	}
+
+	level := api.LowConfidenceLevel
+	if bestFitScore >= 4 {
+		level = api.HighConfidenceLevel
+	} else if bestFitScore >= 2 {
+		level = api.MediumConfidenceLevel
+	}
+
+	snap, err := s.store.getDoc(ctx, bestFit.ParentID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resolvedID := bestFit.ParentID
+	var originalSnapshotID *string
+	if IsArchived(snap) {
+		targetSnap, err := s.resolveAutoForwardTarget(ctx, "snapshotService.findBestFit", snap)
+		if err != nil {
+			return nil, nil, err
+		}
+		if targetSnap != nil {
+			clog.WithGroupField(ctx, "snapshotService.findBestFit", "autoForwardedFromId", snap.ID)
+			orig := bestFit.ParentID
+			originalSnapshotID = &orig
+			snap = targetSnap
+			resolvedID = targetSnap.ID
+		}
+	}
+
+	link := api.SnapshotLink{
+		CharacterID:        characterID,
+		ConfidenceLevel:    level,
+		ConfidenceSource:   api.SystemConfidenceSource,
+		CreatedAt:          time.Now(),
+		SnapshotID:         &resolvedID,
+		OriginalSnapshotID: originalSnapshotID,
+	}
+
+	clog.WithGroupFields(ctx, "snapshotService.findBestFit", clog.Fields{
+		"characterId":        characterID,
+		"historiesEvaluated": len(histories),
+		"confidenceLevel":    string(level),
+		"snapshotId":         resolvedID,
+	})
+	return snap, &link, nil
 }
 
 func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, performance api.InstancePerformance) (*api.InstancePerformance, error) {

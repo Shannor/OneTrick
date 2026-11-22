@@ -7,6 +7,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/utils"
 	"sort"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
@@ -35,6 +36,16 @@ type Service interface {
 	// Update allows for updating an aggregate document's data.
 	Update(ctx context.Context, aggregateID string, updateFn func(data map[string]interface{}) error, shouldMerge bool) error
 
+	// UpsertSessionActivity creates a new aggregate document for an activity or merges a character's
+	// snapshot link, performance, and array memberships into an existing aggregate for the same activityId.
+	UpsertSessionActivity(
+		ctx context.Context,
+		characterID string,
+		history api.ActivityHistory,
+		snapshotLink api.SnapshotLink,
+		performance api.InstancePerformance,
+	) (*api.Aggregate, error)
+
 	// RemoveSession removes all references to sessionID from aggregates and deletes orphaned aggregates.
 	RemoveSession(ctx context.Context, sessionID string) error
 
@@ -47,15 +58,115 @@ const (
 )
 
 type service struct {
-	DB *firestore.Client
+	DB    *firestore.Client
+	store aggregateStore
 }
 
 var _ Service = (*service)(nil)
 
 func NewService(db *firestore.Client) Service {
 	return &service{
-		DB: db,
+		DB:    db,
+		store: &firestoreAggregateStore{db: db},
 	}
+}
+
+func (s *service) UpsertSessionActivity(
+	ctx context.Context,
+	characterID string,
+	history api.ActivityHistory,
+	snapshotLink api.SnapshotLink,
+	performance api.InstancePerformance,
+) (*api.Aggregate, error) {
+	now := time.Now()
+	sessionIDs := make([]string, 0, 1)
+	snapshotIDs := make([]string, 0, 1)
+	characterIDs := make([]string, 0, 1)
+
+	if snapshotLink.SessionID != nil && *snapshotLink.SessionID != "" {
+		sessionIDs = append(sessionIDs, *snapshotLink.SessionID)
+	}
+	if snapshotLink.SnapshotID != nil && *snapshotLink.SnapshotID != "" {
+		snapshotIDs = append(snapshotIDs, *snapshotLink.SnapshotID)
+	}
+	if characterID != "" {
+		characterIDs = append(characterIDs, characterID)
+	}
+
+	existing, err := s.store.getByActivityID(ctx, history.InstanceID)
+	if err != nil && !errors.Is(err, NotFound) {
+		return nil, err
+	}
+
+	if existing != nil {
+		var backfillMode *api.GameMode
+		if history.EstimatedGameMode != nil && existing.ActivityDetails.EstimatedGameMode == nil {
+			backfillMode = history.EstimatedGameMode
+		}
+
+		if err := s.store.mergeSessionActivity(
+			ctx,
+			existing.ID,
+			characterID,
+			snapshotLink,
+			performance,
+			sessionIDs,
+			snapshotIDs,
+			characterIDs,
+			backfillMode,
+		); err != nil {
+			return nil, err
+		}
+
+		if existing.SnapshotLinks == nil {
+			existing.SnapshotLinks = make(map[string]api.SnapshotLink)
+		}
+		if existing.Performance == nil {
+			existing.Performance = make(map[string]api.InstancePerformance)
+		}
+		existing.SnapshotLinks[characterID] = snapshotLink
+		existing.Performance[characterID] = performance
+		existing.SessionIds = utils.UnionNonZero(existing.SessionIds, sessionIDs)
+		existing.SnapshotIds = utils.UnionNonZero(existing.SnapshotIds, snapshotIDs)
+		existing.CharacterIds = utils.UnionNonZero(existing.CharacterIds, characterIDs)
+		if backfillMode != nil {
+			existing.ActivityDetails.EstimatedGameMode = backfillMode
+		}
+
+		clog.WithGroupFields(ctx, "aggregateService.upsertSessionActivity", clog.Fields{
+			"aggregateId":     existing.ID,
+			"activityId":      history.InstanceID,
+			"updatedExisting": true,
+		})
+		return existing, nil
+	}
+
+	agg := api.Aggregate{
+		ActivityID:      history.InstanceID,
+		ActivityDetails: history,
+		SnapshotLinks: map[string]api.SnapshotLink{
+			characterID: snapshotLink,
+		},
+		Performance: map[string]api.InstancePerformance{
+			characterID: performance,
+		},
+		SessionIds:   sessionIDs,
+		SnapshotIds:  snapshotIDs,
+		CharacterIds: characterIDs,
+		CreatedAt:    now,
+	}
+
+	created, err := s.store.createAggregate(ctx, agg)
+	if err != nil {
+		return nil, err
+	}
+
+	clog.WithGroupFields(ctx, "aggregateService.upsertSessionActivity", clog.Fields{
+		"aggregateId":     created.ID,
+		"activityId":      history.InstanceID,
+		"updatedExisting": false,
+	})
+	return &created, nil
 }
 
 func (s *service) Update(ctx context.Context, aggregateID string, updateFn func(data map[string]any) error, shouldMerge bool) error {

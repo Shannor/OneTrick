@@ -91,6 +91,18 @@ type ManifestService interface {
 
 	// GetProgression retrieves a single progression definition from the manifest by its hash
 	GetProgression(ctx context.Context, hash int64) (*ProgressionDefinition, error)
+
+	// GetItemsByIDs retrieves item definitions for the given hashes in batched Firestore reads.
+	GetItemsByIDs(ctx context.Context, ids []int64) (map[string]ItemDefinition, error)
+
+	// GetPerksByIDs retrieves perk definitions for the given hashes in batched Firestore reads.
+	GetPerksByIDs(ctx context.Context, ids []int64) (map[string]PerkDefinition, error)
+
+	// GetActivitiesByIDs retrieves activity definitions for the given hashes in batched Firestore reads.
+	GetActivitiesByIDs(ctx context.Context, ids []int64) (map[string]ActivityDefinition, error)
+
+	// GetActivityModesByIDs retrieves activity mode definitions for the given hashes in batched Firestore reads.
+	GetActivityModesByIDs(ctx context.Context, ids []int64) (map[string]ActivityModeDefinition, error)
 }
 type ManifestCollection string
 
@@ -440,4 +452,84 @@ func (m *manifestService) GetProgression(ctx context.Context, hash int64) (*Prog
 	}
 
 	return &result, nil
+}
+
+const manifestBatchSize = 30
+
+func batchedFetch[T any](
+	ctx context.Context,
+	db *firestore.Client,
+	collection ManifestCollection,
+	group string,
+	ids []int64,
+	keyFn func(T) string,
+) (map[string]T, error) {
+	uniqueIDs := utils.UniqueNonZero(ids)
+	if len(uniqueIDs) == 0 {
+		return make(map[string]T), nil
+	}
+	if db == nil {
+		return nil, fmt.Errorf("manifest database client is not configured")
+	}
+
+	col := db.Collection(string(collection))
+	allResults := make([]T, 0, len(uniqueIDs))
+	missingCount := 0
+
+	for _, chunk := range utils.Chunk(uniqueIDs, manifestBatchSize) {
+		docRefs := make([]*firestore.DocumentRef, len(chunk))
+		for i, id := range chunk {
+			docRefs[i] = col.Doc(strconv.FormatInt(id, 10))
+		}
+		docs, err := db.GetAll(ctx, docRefs)
+		if err != nil {
+			return nil, err
+		}
+		for _, doc := range docs {
+			if !doc.Exists() {
+				missingCount++
+			}
+		}
+		chunkResults, err := utils.GetAllToStructs[T](docs)
+		if err != nil {
+			return nil, err
+		}
+		allResults = append(allResults, chunkResults...)
+	}
+
+	clog.WithGroupFields(ctx, group, clog.Fields{
+		"requested": len(uniqueIDs),
+		"returned":  len(allResults),
+	})
+	if missingCount > 0 {
+		clog.WithGroupFields(ctx, group, clog.Fields{
+			"warning":      "some manifest definitions not found",
+			"missingCount": missingCount,
+		})
+	}
+	return utils.ToMap[T, string](allResults, keyFn)
+}
+
+func (m *manifestService) GetItemsByIDs(ctx context.Context, ids []int64) (map[string]ItemDefinition, error) {
+	return batchedFetch[ItemDefinition](ctx, m.db, ItemDefinitionCollection, "manifestService.getItemsByIDs", ids, func(t ItemDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetPerksByIDs(ctx context.Context, ids []int64) (map[string]PerkDefinition, error) {
+	return batchedFetch[PerkDefinition](ctx, m.db, SandboxPerkCollection, "manifestService.getPerksByIDs", ids, func(t PerkDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetActivitiesByIDs(ctx context.Context, ids []int64) (map[string]ActivityDefinition, error) {
+	return batchedFetch[ActivityDefinition](ctx, m.db, ActivityCollection, "manifestService.getActivitiesByIDs", ids, func(t ActivityDefinition) string {
+		return strconv.FormatInt(int64(t.Hash), 10)
+	})
+}
+
+func (m *manifestService) GetActivityModesByIDs(ctx context.Context, ids []int64) (map[string]ActivityModeDefinition, error) {
+	return batchedFetch[ActivityModeDefinition](ctx, m.db, ActivityModeCollection, "manifestService.getActivityModesByIDs", ids, func(t ActivityModeDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
 }

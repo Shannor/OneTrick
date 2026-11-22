@@ -759,7 +759,7 @@ type failingItemSetsManifest struct {
 	ManifestService
 }
 
-func (f *failingItemSetsManifest) GetItems(_ context.Context) (map[string]ItemDefinition, error) {
+func (f *failingItemSetsManifest) GetItemsByIDs(_ context.Context, _ []int64) (map[string]ItemDefinition, error) {
 	return map[string]ItemDefinition{}, nil
 }
 
@@ -767,7 +767,7 @@ func (f *failingItemSetsManifest) GetDamageTypes(_ context.Context) (map[string]
 	return map[string]DamageType{}, nil
 }
 
-func (f *failingItemSetsManifest) GetPerks(_ context.Context) (map[string]PerkDefinition, error) {
+func (f *failingItemSetsManifest) GetPerksByIDs(_ context.Context, _ []int64) (map[string]PerkDefinition, error) {
 	return map[string]PerkDefinition{}, nil
 }
 

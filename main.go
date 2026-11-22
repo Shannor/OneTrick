@@ -63,8 +63,8 @@ func main() {
 	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
 	userService := user.NewUserService(firestore, destinyService)
 	aggregateService := aggregate.NewService(firestore)
-	sessionService := session.NewService(firestore, aggregateService, userService, destinyService)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
+	sessionService := session.NewService(firestore, aggregateService, userService, destinyService, snapshotService, manifestService)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	server := NewServer(
 		destinyService,
