@@ -2804,6 +2804,12 @@ type TrendingTrendingEntry struct {
 	Weight *float64 `json:"weight,omitempty"`
 }
 
+// UserExactSearchRequest defines model for User.ExactSearchRequest.
+type UserExactSearchRequest struct {
+	DisplayName     *string `json:"displayName,omitempty"`
+	DisplayNameCode *int16  `json:"displayNameCode,omitempty"`
+}
+
 // UserGeneralUser defines model for User.GeneralUser.
 type UserGeneralUser struct {
 	About                             *string                `json:"about,omitempty"`
@@ -2965,6 +2971,17 @@ type DestinyProfileResponse struct {
 	ThrottleSeconds *int32                                  `json:"ThrottleSeconds,omitempty"`
 }
 
+// IEnumerableOfUserInfoCard defines model for IEnumerableOfUserInfoCard.
+type IEnumerableOfUserInfoCard struct {
+	DetailedErrorTrace *string             `json:"DetailedErrorTrace,omitempty"`
+	ErrorCode          *int32              `json:"ErrorCode,omitempty"`
+	ErrorStatus        *string             `json:"ErrorStatus,omitempty"`
+	Message            *string             `json:"Message,omitempty"`
+	MessageData        *map[string]string  `json:"MessageData,omitempty"`
+	Response           *[]UserUserInfoCard `json:"Response,omitempty"`
+	ThrottleSeconds    *int32              `json:"ThrottleSeconds,omitempty"`
+}
+
 // UserUserMembershipData defines model for User.UserMembershipData.
 type UserUserMembershipData struct {
 	DetailedErrorTrace *string            `json:"DetailedErrorTrace,omitempty"`
@@ -3010,6 +3027,9 @@ type Destiny2GetItemParams struct {
 	// Components A comma separated list of components to return (as strings or numeric values). See the DestinyComponentType enum for valid components to request. You must request at least one component to receive results.
 	Components *[]int32 `form:"components,omitempty" json:"components,omitempty"`
 }
+
+// Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody defines body for Destiny2SearchDestinyPlayerByBungieName for application/json ContentType.
+type Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody = UserExactSearchRequest
 
 // UserSearchByGlobalNamePostJSONRequestBody defines body for UserSearchByGlobalNamePost for application/json ContentType.
 type UserSearchByGlobalNamePostJSONRequestBody = UserSearchPrefixRequest
@@ -3087,6 +3107,11 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// Destiny2SearchDestinyPlayerByBungieNameWithBody request with any body
+	Destiny2SearchDestinyPlayerByBungieNameWithBody(ctx context.Context, membershipType int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	Destiny2SearchDestinyPlayerByBungieName(ctx context.Context, membershipType int32, body Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// Destiny2GetPostGameCarnageReport request
 	Destiny2GetPostGameCarnageReport(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3106,6 +3131,30 @@ type ClientInterface interface {
 	UserSearchByGlobalNamePostWithBody(ctx context.Context, page int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	UserSearchByGlobalNamePost(ctx context.Context, page int32, body UserSearchByGlobalNamePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) Destiny2SearchDestinyPlayerByBungieNameWithBody(ctx context.Context, membershipType int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDestiny2SearchDestinyPlayerByBungieNameRequestWithBody(c.Server, membershipType, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) Destiny2SearchDestinyPlayerByBungieName(ctx context.Context, membershipType int32, body Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDestiny2SearchDestinyPlayerByBungieNameRequest(c.Server, membershipType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) Destiny2GetPostGameCarnageReport(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -3190,6 +3239,53 @@ func (c *Client) UserSearchByGlobalNamePost(ctx context.Context, page int32, bod
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewDestiny2SearchDestinyPlayerByBungieNameRequest calls the generic Destiny2SearchDestinyPlayerByBungieName builder with application/json body
+func NewDestiny2SearchDestinyPlayerByBungieNameRequest(server string, membershipType int32, body Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDestiny2SearchDestinyPlayerByBungieNameRequestWithBody(server, membershipType, "application/json", bodyReader)
+}
+
+// NewDestiny2SearchDestinyPlayerByBungieNameRequestWithBody generates requests for Destiny2SearchDestinyPlayerByBungieName with any type of body
+func NewDestiny2SearchDestinyPlayerByBungieNameRequestWithBody(server string, membershipType int32, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "membershipType", runtime.ParamLocationPath, membershipType)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/Destiny2/SearchDestinyPlayerByBungieName/%s/", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
 // NewDestiny2GetPostGameCarnageReportRequest generates requests for Destiny2GetPostGameCarnageReport
@@ -3578,6 +3674,11 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// Destiny2SearchDestinyPlayerByBungieNameWithBodyWithResponse request with any body
+	Destiny2SearchDestinyPlayerByBungieNameWithBodyWithResponse(ctx context.Context, membershipType int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*Destiny2SearchDestinyPlayerByBungieNameResponse, error)
+
+	Destiny2SearchDestinyPlayerByBungieNameWithResponse(ctx context.Context, membershipType int32, body Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody, reqEditors ...RequestEditorFn) (*Destiny2SearchDestinyPlayerByBungieNameResponse, error)
+
 	// Destiny2GetPostGameCarnageReportWithResponse request
 	Destiny2GetPostGameCarnageReportWithResponse(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*Destiny2GetPostGameCarnageReportResponse, error)
 
@@ -3597,6 +3698,28 @@ type ClientWithResponsesInterface interface {
 	UserSearchByGlobalNamePostWithBodyWithResponse(ctx context.Context, page int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UserSearchByGlobalNamePostResponse, error)
 
 	UserSearchByGlobalNamePostWithResponse(ctx context.Context, page int32, body UserSearchByGlobalNamePostJSONRequestBody, reqEditors ...RequestEditorFn) (*UserSearchByGlobalNamePostResponse, error)
+}
+
+type Destiny2SearchDestinyPlayerByBungieNameResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *IEnumerableOfUserInfoCard
+}
+
+// Status returns HTTPResponse.Status
+func (r Destiny2SearchDestinyPlayerByBungieNameResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r Destiny2SearchDestinyPlayerByBungieNameResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
 }
 
 type Destiny2GetPostGameCarnageReportResponse struct {
@@ -3731,6 +3854,23 @@ func (r UserSearchByGlobalNamePostResponse) StatusCode() int {
 	return 0
 }
 
+// Destiny2SearchDestinyPlayerByBungieNameWithBodyWithResponse request with arbitrary body returning *Destiny2SearchDestinyPlayerByBungieNameResponse
+func (c *ClientWithResponses) Destiny2SearchDestinyPlayerByBungieNameWithBodyWithResponse(ctx context.Context, membershipType int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*Destiny2SearchDestinyPlayerByBungieNameResponse, error) {
+	rsp, err := c.Destiny2SearchDestinyPlayerByBungieNameWithBody(ctx, membershipType, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDestiny2SearchDestinyPlayerByBungieNameResponse(rsp)
+}
+
+func (c *ClientWithResponses) Destiny2SearchDestinyPlayerByBungieNameWithResponse(ctx context.Context, membershipType int32, body Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody, reqEditors ...RequestEditorFn) (*Destiny2SearchDestinyPlayerByBungieNameResponse, error) {
+	rsp, err := c.Destiny2SearchDestinyPlayerByBungieName(ctx, membershipType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDestiny2SearchDestinyPlayerByBungieNameResponse(rsp)
+}
+
 // Destiny2GetPostGameCarnageReportWithResponse request returning *Destiny2GetPostGameCarnageReportResponse
 func (c *ClientWithResponses) Destiny2GetPostGameCarnageReportWithResponse(ctx context.Context, activityId int64, reqEditors ...RequestEditorFn) (*Destiny2GetPostGameCarnageReportResponse, error) {
 	rsp, err := c.Destiny2GetPostGameCarnageReport(ctx, activityId, reqEditors...)
@@ -3791,6 +3931,32 @@ func (c *ClientWithResponses) UserSearchByGlobalNamePostWithResponse(ctx context
 		return nil, err
 	}
 	return ParseUserSearchByGlobalNamePostResponse(rsp)
+}
+
+// ParseDestiny2SearchDestinyPlayerByBungieNameResponse parses an HTTP response from a Destiny2SearchDestinyPlayerByBungieNameWithResponse call
+func ParseDestiny2SearchDestinyPlayerByBungieNameResponse(rsp *http.Response) (*Destiny2SearchDestinyPlayerByBungieNameResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &Destiny2SearchDestinyPlayerByBungieNameResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest IEnumerableOfUserInfoCard
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseDestiny2GetPostGameCarnageReportResponse parses an HTTP response from a Destiny2GetPostGameCarnageReportWithResponse call

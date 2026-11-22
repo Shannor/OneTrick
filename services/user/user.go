@@ -2,17 +2,16 @@ package user
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"oneTrick/utils"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
-	"github.com/algolia/algoliasearch-client-go/v4/algolia/search"
 	"google.golang.org/api/iterator"
 )
 
@@ -26,17 +25,18 @@ type Service interface {
 	// and updates the user's characterIds field in Firestore.
 	BackfillCharacters(ctx context.Context, userID string) error
 	UpdateCharacters(ctx context.Context, userID string, characters []api.Character) error
+	UpdateSearchFields(ctx context.Context, userID string, displayName string, uniqueName string) error
 	// GetAll returns all users. Used for admin backfills.
 	GetAll(ctx context.Context) ([]User, error)
 	// GetByCharacterID returns the user that owns the provided characterID. If not found returns (nil, nil).
 	GetByCharacterID(ctx context.Context, characterID string) (*User, error)
-	UpdateUserSearch(ctx context.Context) error
-	Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, error)
+	Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, bool, error)
 }
 type userService struct {
-	db           *firestore.Client
-	d2Service    destiny.Service
-	searchClient *search.APIClient
+	db            *firestore.Client
+	d2Service     destiny.Service
+	store         userSearchStore
+	bungieTimeout time.Duration
 }
 
 var _ Service = (*userService)(nil)
@@ -46,11 +46,11 @@ const (
 	characterSubCollection = "characters"
 )
 
-func NewUserService(client *firestore.Client, service destiny.Service, searchClient *search.APIClient) Service {
+func NewUserService(client *firestore.Client, service destiny.Service) Service {
 	return &userService{
-		db:           client,
-		d2Service:    service,
-		searchClient: searchClient,
+		db:        client,
+		d2Service: service,
+		store:     newFirestoreUserSearchStore(client),
 	}
 }
 
@@ -108,6 +108,8 @@ func (s *userService) CreateUser(ctx context.Context, user *User) (*User, error)
 
 	now := time.Now()
 	user.CreatedAt = now
+	user.DisplayNameLower = strings.ToLower(strings.TrimSpace(user.DisplayName))
+	user.UniqueNameLower = strings.ToLower(strings.TrimSpace(user.UniqueName))
 
 	ref := s.db.Collection(userCollection).NewDoc()
 	user.ID = ref.ID
@@ -299,69 +301,20 @@ func (s *userService) GetByCharacterID(ctx context.Context, characterID string) 
 	return u, nil
 }
 
-func (s *userService) UpdateUserSearch(ctx context.Context) error {
-	users, err := s.GetAll(ctx)
+func (s *userService) UpdateSearchFields(ctx context.Context, userID string, displayName string, uniqueName string) error {
+	if userID == "" {
+		return nil
+	}
+	clog.WithGroupField(ctx, "userService.updateSearchFields", "userId", userID)
+	_, err := s.db.Collection(userCollection).Doc(userID).Set(ctx, map[string]any{
+		"displayNameLower": strings.ToLower(strings.TrimSpace(displayName)),
+		"uniqueNameLower":  strings.ToLower(strings.TrimSpace(uniqueName)),
+	}, firestore.MergeAll)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to update user search fields: %w", err)
 	}
-	u := make([]map[string]any, 0)
-	for _, user := range users {
-		alternateNames := make([]string, 0)
-		for _, membership := range user.Memberships {
-			alternateNames = append(alternateNames, membership.DisplayName)
-		}
-		u = append(u, map[string]any{
-			"objectID":            user.ID,
-			"displayName":         user.DisplayName,
-			"uniqueName":          user.UniqueName,
-			"alternateNames":      alternateNames,
-			"bungieID":            user.MemberID,
-			"primaryMembershipID": user.PrimaryMembershipID,
-		})
+	if fsStore, ok := s.store.(*firestoreUserSearchStore); ok && fsStore != nil {
+		fsStore.evictLegacyUser(userID)
 	}
-	// push data to algolia
-	result, err := s.searchClient.SaveObjects("user_index", u)
-	if err != nil {
-		return err
-	}
-	clog.WithGroupFields(ctx, "userService.updateUserSearch", clog.Fields{
-		"userCount":  len(u),
-		"batchCount": len(result),
-	})
 	return nil
-}
-
-func (s *userService) Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, error) {
-	clog.WithGroupFields(ctx, "userService.search", clog.Fields{
-		"query": query,
-		"page":  page,
-	})
-	searchParams := search.SearchParams{
-		SearchParamsObject: search.
-			NewEmptySearchParamsObject().
-			SetQuery(query),
-	}
-	response, err := s.searchClient.SearchSingleIndex(
-		s.searchClient.NewApiSearchSingleIndexRequest("user_index").WithSearchParams(&searchParams),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search algolia: %w", err)
-	}
-	results := make([]api.SearchUserResult, 0, len(response.Hits))
-
-	for _, hit := range response.Hits {
-		var result api.SearchUserResult
-		// Marshal to JSON then unmarshal to struct
-		jsonData, err := json.Marshal(hit)
-		if err != nil {
-			continue // or handle error appropriately
-		}
-		if err := json.Unmarshal(jsonData, &result); err != nil {
-			continue // or handle error appropriately
-		}
-		results = append(results, result)
-	}
-
-	clog.WithGroupField(ctx, "userService.search", "returnedCount", len(results))
-	return results, nil
 }
