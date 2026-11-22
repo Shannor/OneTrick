@@ -77,8 +77,25 @@ func NewService(db *firestore.Client, userService user.Service, d2Service destin
 }
 
 // GenerateHash computes a deterministic SHA-256 hash string for a Loadout based on each item's
-// BaseInfo.InstanceId and sorted Perk hashes, matching OneTrick-Scripts/server-tick's generateHash.
+// BaseInfo.InstanceId and sorted Perk hashes.
 func GenerateHash(loadout api.Loadout) (string, error) {
+	return generateHashWithPerkPrefix(loadout, func(item api.ItemSnapshot) string {
+		return item.InstanceID
+	})
+}
+
+// GenerateLegacyHash computes the historical OneTrick-Scripts/server-tick hash where
+// ItemSnapshot.InstanceID held the itemHash string rather than the 64-bit Bungie instance ID.
+func GenerateLegacyHash(loadout api.Loadout) (string, error) {
+	return generateHashWithPerkPrefix(loadout, func(item api.ItemSnapshot) string {
+		if item.ItemHash != 0 {
+			return strconv.FormatInt(item.ItemHash, 10)
+		}
+		return item.InstanceID
+	})
+}
+
+func generateHashWithPerkPrefix(loadout api.Loadout, perkPrefix func(api.ItemSnapshot) string) (string, error) {
 	var hashing []string
 
 	keys := make([]string, 0, len(loadout))
@@ -96,8 +113,9 @@ func GenerateHash(loadout api.Loadout) (string, error) {
 			return cmp.Compare(a.Hash, b.Hash)
 		})
 
+		prefix := perkPrefix(item)
 		for _, perk := range perks {
-			hashing = append(hashing, fmt.Sprintf("%s-%d", item.InstanceID, perk.Hash))
+			hashing = append(hashing, fmt.Sprintf("%s-%d", prefix, perk.Hash))
 		}
 	}
 	return utils.HashMap(hashing)
@@ -193,11 +211,19 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 		"hash":   snapshot.Hash,
 	})
 
-	existingSnapshot, err := s.store.getByHash(ctx, snapshot.Hash)
+	lookupHashes := []string{snapshot.Hash}
+	if legacyHash, err := GenerateLegacyHash(snapshot.Loadout); err == nil && legacyHash != "" && legacyHash != snapshot.Hash {
+		lookupHashes = append(lookupHashes, legacyHash)
+	}
+
+	existingSnapshot, err := s.store.getByHashes(ctx, lookupHashes)
 	if err != nil {
 		return nil, err
 	}
 	if existingSnapshot != nil {
+		if existingSnapshot.Hash != snapshot.Hash {
+			clog.WithGroupField(ctx, "snapshotService.create", "matchedLegacyHash", true)
+		}
 		if IsArchived(existingSnapshot) {
 			targetSnap, err := s.resolveAutoForwardTarget(ctx, "snapshotService.create", existingSnapshot)
 			if err != nil {
@@ -503,6 +529,7 @@ func (s *service) FindBestFit(
 	}
 
 	resolvedID := bestFit.ParentID
+	var originalSnapshotID *string
 	if IsArchived(snap) {
 		targetSnap, err := s.resolveAutoForwardTarget(ctx, "snapshotService.findBestFit", snap)
 		if err != nil {
@@ -510,17 +537,20 @@ func (s *service) FindBestFit(
 		}
 		if targetSnap != nil {
 			clog.WithGroupField(ctx, "snapshotService.findBestFit", "autoForwardedFromId", snap.ID)
+			orig := bestFit.ParentID
+			originalSnapshotID = &orig
 			snap = targetSnap
 			resolvedID = targetSnap.ID
 		}
 	}
 
 	link := api.SnapshotLink{
-		CharacterID:      characterID,
-		ConfidenceLevel:  level,
-		ConfidenceSource: api.SystemConfidenceSource,
-		CreatedAt:        time.Now(),
-		SnapshotID:       &resolvedID,
+		CharacterID:        characterID,
+		ConfidenceLevel:    level,
+		ConfidenceSource:   api.SystemConfidenceSource,
+		CreatedAt:          time.Now(),
+		SnapshotID:         &resolvedID,
+		OriginalSnapshotID: originalSnapshotID,
 	}
 
 	clog.WithGroupFields(ctx, "snapshotService.findBestFit", clog.Fields{

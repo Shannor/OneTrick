@@ -423,7 +423,13 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 	}
 	activityMode, ok := modes[strconv.Itoa(activity.DirectActivityModeHash)]
 	if !ok && period.ActivityDetails.Mode != nil {
-		activityMode = modes[strconv.Itoa(int(*period.ActivityDetails.Mode))]
+		targetModeType := int(*period.ActivityDetails.Mode)
+		for _, m := range modes {
+			if m.ModeType == targetModeType {
+				activityMode = m
+				break
+			}
+		}
 	}
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
 	if activity.DisplayProperties.Name == "Iron Banner: Tribute" || strings.Contains(strings.ToLower(activity.DisplayProperties.Name), "tribute") {

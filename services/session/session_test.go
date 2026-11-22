@@ -1021,19 +1021,28 @@ func TestComputeSessionSummary(t *testing.T) {
 }
 
 func TestCleanupEmptyCompleted(t *testing.T) {
+	now := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+	recentComplete := now.Add(-5 * time.Minute)
+	oldComplete := now.Add(-20 * time.Minute)
+
 	store := newMemorySessionStore()
 	store.docs["pending-empty"] = &api.Session{ID: "pending-empty", Status: new(api.SessionPending)}
-	store.docs["complete-empty"] = &api.Session{ID: "complete-empty", Status: new(api.SessionComplete)}
-	store.docs["complete-nonempty"] = &api.Session{ID: "complete-nonempty", Status: new(api.SessionComplete), AggregateIDs: []string{"agg-1"}}
+	store.docs["complete-empty-recent"] = &api.Session{ID: "complete-empty-recent", Status: new(api.SessionComplete), CompletedAt: &recentComplete}
+	store.docs["complete-empty-old"] = &api.Session{ID: "complete-empty-old", Status: new(api.SessionComplete), CompletedAt: &oldComplete}
+	store.docs["complete-empty-nil-ts"] = &api.Session{ID: "complete-empty-nil-ts", Status: new(api.SessionComplete)}
+	store.docs["complete-nonempty"] = &api.Session{ID: "complete-nonempty", Status: new(api.SessionComplete), CompletedAt: &oldComplete, AggregateIDs: []string{"agg-1"}}
 
-	svc := &service{store: store}
+	svc := &service{
+		store: store,
+		nowFn: func() time.Time { return now },
+	}
 
 	cleanedDry, err := svc.CleanupEmptyCompleted(clog.NewContext(context.Background()), true)
 	if err != nil {
 		t.Fatalf("CleanupEmptyCompleted dryRun failed: %v", err)
 	}
-	if cleanedDry != 1 {
-		t.Fatalf("expected 1 empty completed session in dryRun, got %d", cleanedDry)
+	if cleanedDry != 2 {
+		t.Fatalf("expected 2 empty completed sessions outside grace window in dryRun, got %d", cleanedDry)
 	}
 	if store.writes.Load() != 0 {
 		t.Fatalf("expected 0 writes in dryRun, got %d", store.writes.Load())
@@ -1043,11 +1052,17 @@ func TestCleanupEmptyCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupEmptyCompleted failed: %v", err)
 	}
-	if cleaned != 1 {
-		t.Fatalf("expected 1 deleted session, got %d", cleaned)
+	if cleaned != 2 {
+		t.Fatalf("expected 2 deleted sessions, got %d", cleaned)
 	}
-	if _, exists := store.docs["complete-empty"]; exists {
-		t.Fatal("expected complete-empty to be deleted")
+	if _, exists := store.docs["complete-empty-old"]; exists {
+		t.Fatal("expected complete-empty-old to be deleted")
+	}
+	if _, exists := store.docs["complete-empty-nil-ts"]; exists {
+		t.Fatal("expected complete-empty-nil-ts to be deleted")
+	}
+	if _, exists := store.docs["complete-empty-recent"]; !exists {
+		t.Fatal("expected complete-empty-recent inside 15m grace window to be preserved")
 	}
 	if _, exists := store.docs["pending-empty"]; !exists {
 		t.Fatal("expected pending-empty to be preserved")
@@ -1329,12 +1344,13 @@ func TestRunTick_RecentlyCompletedLateActivityAndInProcessCompFinalize(t *testin
 		},
 	}
 
+	snapSvc := &fakeSessionSnapshotService{}
 	svc := &service{
 		store:            store,
 		aggregateService: newFakeSessionAggregateService(),
 		userService:      uSvc,
 		d2Service:        d2Svc,
-		snapshotService:  &fakeSessionSnapshotService{},
+		snapshotService:  snapSvc,
 		manifestService:  &fakeSessionManifestService{},
 		nowFn:            func() time.Time { return now },
 	}
@@ -1343,8 +1359,11 @@ func TestRunTick_RecentlyCompletedLateActivityAndInProcessCompFinalize(t *testin
 	if err != nil {
 		t.Fatalf("RunTick failed: %v", err)
 	}
-	if resp.SessionsProcessed != 1 || resp.AggregatesAddedTotal != 1 || resp.CompFinalizedCount != 1 || resp.ErrorsTotal != 0 {
+	if resp.SessionsProcessed != 1 || resp.AggregatesAddedTotal != 1 || resp.CompFinalizedCount != 1 || resp.LoadoutsSaved != 0 || resp.ErrorsTotal != 0 {
 		t.Fatalf("unexpected RunTick response: %+v", resp)
+	}
+	if snapSvc.saveCalls.Load() != 0 {
+		t.Fatalf("expected 0 snapshot Save calls for already-completed session, got %d", snapSvc.saveCalls.Load())
 	}
 
 	ses := store.docs["ses-comp"]
@@ -1395,8 +1414,20 @@ func TestRunTick_StaleAndInactiveLifecycle(t *testing.T) {
 		StartedAt:   now.Add(-3 * time.Hour),
 		Status:      new(api.SessionPending),
 	}
-	store.docs["ses-4-seen-skip"] = &api.Session{
-		ID:                 "ses-4-seen-skip",
+	store.docs["ses-4-inactive-with-aggs"] = &api.Session{
+		ID:           "ses-4-inactive-with-aggs",
+		UserID:       "user-1",
+		CharacterID:  "char-3b",
+		StartedAt:    now.Add(-3 * time.Hour),
+		AggregateIDs: []string{"agg-1"},
+		Status:       new(api.SessionPending),
+		CompTracking: &api.CompTracking{
+			Enabled: true,
+			Start:   &api.CompRankSnapshot{Points: 4500},
+		},
+	}
+	store.docs["ses-5-seen-skip"] = &api.Session{
+		ID:                 "ses-5-seen-skip",
 		UserID:             "user-1",
 		CharacterID:        "char-4",
 		StartedAt:          now.Add(-30 * time.Minute),
@@ -1425,11 +1456,22 @@ func TestRunTick_StaleAndInactiveLifecycle(t *testing.T) {
 		},
 	}
 	d2Svc := &fakeSessionD2Service{
-		snapshots: []*api.CompRankSnapshot{{Points: 4120}},
+		snapshots: []*api.CompRankSnapshot{{Points: 4120}, {Points: 4600}},
 		activitiesByChr: map[string][]api.ActivityHistory{
 			"char-4": {
 				{InstanceID: "act-same", Activity: "Control", Period: now.Add(-10 * time.Minute)},
 			},
+		},
+		activityErrByCh: map[string]error{
+			// Expiring sessions must still expire cleanly even if Bungie activity/loadout calls would error.
+			"char-2": errors.New("no activities found"),
+			"char-3": errors.New("no activities found"),
+		},
+	}
+	snapSvc := &fakeSessionSnapshotService{
+		saveErrByChar: map[string]error{
+			"char-1": errors.New("bungie 503"),
+			"char-3": errors.New("bungie 503"),
 		},
 	}
 
@@ -1438,17 +1480,20 @@ func TestRunTick_StaleAndInactiveLifecycle(t *testing.T) {
 		aggregateService: aggSvc,
 		userService:      uSvc,
 		d2Service:        d2Svc,
-		snapshotService:  &fakeSessionSnapshotService{},
+		snapshotService:  snapSvc,
 		manifestService:  &fakeSessionManifestService{},
 		nowFn:            func() time.Time { return now },
 	}
 
-	resp, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true})
+	resp, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
 	if err != nil {
 		t.Fatalf("RunTick failed: %v", err)
 	}
-	if resp.SessionsStaleEnded != 1 || resp.SessionsStaleDeleted != 1 || resp.SessionsInactiveDeleted != 1 || resp.SessionsSkipped != 1 || resp.CompFinalizedCount != 1 || resp.ErrorsTotal != 0 {
+	if resp.SessionsStaleEnded != 2 || resp.SessionsStaleDeleted != 1 || resp.SessionsInactiveDeleted != 1 || resp.SessionsSkipped != 1 || resp.CompFinalizedCount != 2 || resp.LoadoutsSaved != 1 || resp.ErrorsTotal != 0 {
 		t.Fatalf("unexpected RunTick counts: %+v", resp)
+	}
+	if snapSvc.saveCalls.Load() != 1 {
+		t.Fatalf("expected Save called only for active non-expiring session (1), got %d", snapSvc.saveCalls.Load())
 	}
 
 	ended := store.docs["ses-1-stale-end"]
@@ -1464,11 +1509,18 @@ func TestRunTick_StaleAndInactiveLifecycle(t *testing.T) {
 	if ended.CompTracking == nil || ended.CompTracking.End == nil || *ended.CompTracking.PointDelta != 120 {
 		t.Fatalf("expected comp finalized on auto-end with delta=120, got %+v", ended.CompTracking)
 	}
+	endedInactive := store.docs["ses-4-inactive-with-aggs"]
+	if endedInactive == nil || endedInactive.Status == nil || *endedInactive.Status != api.SessionComplete {
+		t.Fatalf("expected inactive session with aggregates to be completed rather than deleted, got %+v", endedInactive)
+	}
+	if endedInactive.CompTracking == nil || endedInactive.CompTracking.End == nil || *endedInactive.CompTracking.PointDelta != 100 {
+		t.Fatalf("expected comp finalized on ended inactive session with delta=100, got %+v", endedInactive.CompTracking)
+	}
 	if _, exists := store.docs["ses-2-stale-del"]; exists {
 		t.Fatal("expected stale session with 0 aggregates to be deleted")
 	}
 	if _, exists := store.docs["ses-3-inactive-del"]; exists {
-		t.Fatal("expected inactive session to be deleted")
+		t.Fatal("expected inactive session with 0 aggregates to be deleted")
 	}
 }
 

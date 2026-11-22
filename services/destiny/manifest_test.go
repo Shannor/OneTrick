@@ -2,6 +2,7 @@ package destiny
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"oneTrick/clients/bungie"
 	"oneTrick/set"
@@ -57,6 +58,13 @@ func (s *spyManifestService) GetDamageTypes(_ context.Context) (map[string]Damag
 
 func (s *spyManifestService) GetActivityModes(_ context.Context) (map[string]ActivityModeDefinition, error) {
 	s.modesCalls.Add(1)
+	if s.activityModesStore != nil {
+		out := make(map[string]ActivityModeDefinition, len(s.activityModesStore))
+		for id, def := range s.activityModesStore {
+			out[strconv.FormatInt(id, 10)] = def
+		}
+		return out, nil
+	}
 	return map[string]ActivityModeDefinition{"84": {Hash: 84}}, nil
 }
 
@@ -394,6 +402,7 @@ type stubBungieClient struct {
 	bungie.ClientWithResponsesInterface
 	activityResp *bungie.Destiny2GetActivityHistoryResponse
 	itemResps    map[int64]*bungie.Destiny2GetItemResponse
+	itemErrs     map[int64]error
 }
 
 func (c *stubBungieClient) Destiny2GetActivityHistoryWithResponse(
@@ -415,20 +424,30 @@ func (c *stubBungieClient) Destiny2GetItemWithResponse(
 	_ *bungie.Destiny2GetItemParams,
 	_ ...bungie.RequestEditorFn,
 ) (*bungie.Destiny2GetItemResponse, error) {
+	if c.itemErrs != nil {
+		if err, ok := c.itemErrs[itemInstanceId]; ok {
+			return nil, err
+		}
+	}
 	return c.itemResps[itemInstanceId], nil
 }
 
 func TestDestinyService_UsesBatchedManifestLookups(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("getActivity uses GetActivitiesByIDs and GetActivityModesByIDs with mode fallback", func(t *testing.T) {
+	t.Run("getActivity resolves DirectActivityModeHash via GetActivityModesByIDs without passing ModeType enum", func(t *testing.T) {
+		const controlModeHash = 3199098480
 		spy := &spyManifestService{
 			activitiesStore: map[int64]ActivityDefinition{
 				1000: {Hash: 1000, DisplayProperties: ActivityDisplayProperties{Name: "Burnout"}, PgcrImage: "/pgcr.jpg"},
-				2000: {Hash: 2000, DisplayProperties: ActivityDisplayProperties{Name: "Control: Matchmade"}, DirectActivityModeHash: 0},
+				2000: {Hash: 2000, DisplayProperties: ActivityDisplayProperties{Name: "Control: Matchmade"}, DirectActivityModeHash: controlModeHash},
 			},
 			activityModesStore: map[int64]ActivityModeDefinition{
-				10: {Hash: 10, DisplayProperties: ModeDisplayProperties{Name: "Control", Icon: "/control.png"}},
+				controlModeHash: {
+					Hash:              controlModeHash,
+					ModeType:          int(bungie.CurrentActivityModeTypeControl),
+					DisplayProperties: ModeDisplayProperties{Name: "Control", Icon: "/control.png"},
+				},
 			},
 		}
 		refID := uint32(1000)
@@ -472,8 +491,69 @@ func TestDestinyService_UsesBatchedManifestLookups(t *testing.T) {
 		if len(spy.activitiesByIDsRequests) != 1 || len(spy.activityModesByIDsReqs) != 1 {
 			t.Fatalf("expected 1 batched call each, got activities=%d modes=%d", len(spy.activitiesByIDsRequests), len(spy.activityModesByIDsReqs))
 		}
+		if !slices.Equal(spy.activityModesByIDsReqs[0], []int64{controlModeHash}) {
+			t.Fatalf("expected GetActivityModesByIDs called only with DirectActivityModeHash [%d], got %v", controlModeHash, spy.activityModesByIDsReqs[0])
+		}
 		if spy.modesCalls.Load() != 0 {
 			t.Fatalf("expected full-collection GetActivityModes never called, got %d", spy.modesCalls.Load())
+		}
+	})
+
+	t.Run("getActivity falls back to cached GetActivityModes by ModeType when DirectActivityModeHash is 0", func(t *testing.T) {
+		const controlModeHash = 3199098480
+		spy := &spyManifestService{
+			activitiesStore: map[int64]ActivityDefinition{
+				1000: {Hash: 1000, DisplayProperties: ActivityDisplayProperties{Name: "Burnout"}, PgcrImage: "/pgcr.jpg"},
+				2000: {Hash: 2000, DisplayProperties: ActivityDisplayProperties{Name: "Control: Matchmade"}, DirectActivityModeHash: 0},
+			},
+			activityModesStore: map[int64]ActivityModeDefinition{
+				controlModeHash: {
+					Hash:              controlModeHash,
+					ModeType:          int(bungie.CurrentActivityModeTypeControl),
+					DisplayProperties: ModeDisplayProperties{Name: "Control", Icon: "/control.png"},
+				},
+			},
+		}
+		refID := uint32(1000)
+		dirHash := uint32(2000)
+		instID := "99999"
+		mode := int32(bungie.CurrentActivityModeTypeControl)
+		period := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+		activities := []bungie.StatsPeriodGroup{
+			{
+				Period: &period,
+				ActivityDetails: &bungie.HistoricalStatsActivity{
+					ReferenceId:          &refID,
+					DirectorActivityHash: &dirHash,
+					InstanceId:           &instID,
+					Mode:                 &mode,
+				},
+			},
+		}
+		svc := &service{
+			ManifestService: spy,
+			Client: &stubBungieClient{
+				activityResp: &bungie.Destiny2GetActivityHistoryResponse{
+					HTTPResponse: &http.Response{StatusCode: http.StatusOK},
+					JSON200: &bungie.DestinyActivityHistoryResults{
+						Response: &bungie.DestinyHistoricalStatsDestinyActivityHistoryResults{Activities: &activities},
+					},
+				},
+			},
+		}
+
+		got, err := svc.GetAllPVPActivity(ctx, "123", 3, "456", 10, 0)
+		if err != nil {
+			t.Fatalf("GetAllPVPActivity failed: %v", err)
+		}
+		if len(got) != 1 || got[0].ActivityIcon != "https://www.bungie.net/control.png" {
+			t.Fatalf("expected fallback icon resolved via ModeType, got %+v", got)
+		}
+		if len(spy.activityModesByIDsReqs) != 1 || len(spy.activityModesByIDsReqs[0]) != 0 {
+			t.Fatalf("expected GetActivityModesByIDs called with empty slice (no enum ints), got %v", spy.activityModesByIDsReqs)
+		}
+		if spy.modesCalls.Load() != 1 {
+			t.Fatalf("expected 1 cached GetActivityModes fallback call, got %d", spy.modesCalls.Load())
 		}
 	})
 
@@ -577,6 +657,22 @@ func TestDestinyService_UsesBatchedManifestLookups(t *testing.T) {
 		}
 		if len(spy.itemsByIDsRequests) != 1 || len(spy.perksByIDsRequests) != 1 {
 			t.Fatalf("expected 1 batched GetItemsByIDs & GetPerksByIDs call, got items=%d perks=%d", len(spy.itemsByIDsRequests), len(spy.perksByIDsRequests))
+		}
+	})
+
+	t.Run("buildLoadout returns error on transient GetItemDetails failure instead of partial loadout", func(t *testing.T) {
+		helmInst := "111"
+		svc := &service{
+			ManifestService: &spyManifestService{},
+			Client: &stubBungieClient{
+				itemErrs: map[int64]error{
+					111: errors.New("bungie 503"),
+				},
+			},
+		}
+		_, _, err := svc.buildLoadout(ctx, 1, 3, []bungie.ItemComponent{{ItemInstanceId: &helmInst}}, map[string]StatDefinition{})
+		if err == nil {
+			t.Fatal("expected buildLoadout to return error when GetItemDetails fails")
 		}
 	})
 

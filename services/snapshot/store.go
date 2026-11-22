@@ -18,7 +18,7 @@ import (
 // without requiring a live Firestore emulator.
 type snapshotStore interface {
 	createSnapshotDoc(ctx context.Context, snap api.CharacterSnapshot) (api.CharacterSnapshot, error)
-	getByHash(ctx context.Context, hash string) (*api.CharacterSnapshot, error)
+	getByHashes(ctx context.Context, hashes []string) (*api.CharacterSnapshot, error)
 	getDoc(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error)
 	getRawDoc(ctx context.Context, snapshotID string) (map[string]any, error)
 	setRawDoc(ctx context.Context, snapshotID string, data map[string]any) error
@@ -55,13 +55,26 @@ func (f *firestoreStore) createSnapshotDoc(ctx context.Context, snap api.Charact
 	return snap, nil
 }
 
-func (f *firestoreStore) getByHash(ctx context.Context, hash string) (*api.CharacterSnapshot, error) {
-	clog.WithGroupField(ctx, "snapshotService.getByHash", "hash", hash)
-	og := api.CharacterSnapshot{}
-	docs, err := f.db.Collection(collection).
-		Where("hash", "==", hash).
-		Limit(1).
-		Documents(ctx).GetAll()
+func (f *firestoreStore) getByHashes(ctx context.Context, hashes []string) (*api.CharacterSnapshot, error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+	clog.WithGroupField(ctx, "snapshotService.getByHash", "hash", hashes[0])
+
+	var (
+		docs []*firestore.DocumentSnapshot
+		err  error
+	)
+	if len(hashes) == 1 {
+		docs, err = f.db.Collection(collection).
+			Where("hash", "==", hashes[0]).
+			Limit(1).
+			Documents(ctx).GetAll()
+	} else {
+		docs, err = f.db.Collection(collection).
+			Where("hash", "in", hashes).
+			Documents(ctx).GetAll()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -69,14 +82,30 @@ func (f *firestoreStore) getByHash(ctx context.Context, hash string) (*api.Chara
 		clog.WithGroupField(ctx, "snapshotService.getByHash", "found", false)
 		return nil, nil
 	}
-	if err := docs[0].DataTo(&og); err != nil {
-		return nil, err
+
+	byHash := make(map[string]api.CharacterSnapshot, len(docs))
+	for _, doc := range docs {
+		var snap api.CharacterSnapshot
+		if err := doc.DataTo(&snap); err != nil {
+			return nil, err
+		}
+		if _, exists := byHash[snap.Hash]; !exists {
+			byHash[snap.Hash] = snap
+		}
 	}
-	clog.WithGroupFields(ctx, "snapshotService.getByHash", clog.Fields{
-		"found":      true,
-		"snapshotId": og.ID,
-	})
-	return &og, nil
+
+	for _, h := range hashes {
+		if snap, ok := byHash[h]; ok {
+			clog.WithGroupFields(ctx, "snapshotService.getByHash", clog.Fields{
+				"found":      true,
+				"snapshotId": snap.ID,
+			})
+			return &snap, nil
+		}
+	}
+
+	clog.WithGroupField(ctx, "snapshotService.getByHash", "found", false)
+	return nil, nil
 }
 
 func (f *firestoreStore) getDoc(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, error) {

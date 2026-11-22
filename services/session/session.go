@@ -491,10 +491,14 @@ func (s service) CleanupEmptyCompleted(ctx context.Context, dryRun bool) (int, e
 		return 0, fmt.Errorf("failed to fetch completed sessions for cleanup: %w", err)
 	}
 
+	graceCutoff := s.now().Add(-completedGracePeriod)
 	deletedCount := 0
 	rollupErr := clog.LoopRollup(ctx, "sessionService.cleanupEmptyItem", sessions, func(iterCtx context.Context, _ int, ses api.Session) error {
 		clog.WithGroupField(iterCtx, "session", "sessionId", ses.ID)
 		if len(ses.AggregateIDs) == 0 {
+			if ses.CompletedAt != nil && ses.CompletedAt.After(graceCutoff) {
+				return nil
+			}
 			if !dryRun {
 				if err := s.store.deleteDoc(iterCtx, ses.ID); err != nil {
 					return fmt.Errorf("failed to delete empty completed session %s: %w", ses.ID, err)
@@ -586,42 +590,6 @@ func (s service) RunTick(ctx context.Context, opts TickOptions) (*api.SessionTic
 			}()
 		}
 
-		if s.userService == nil || s.d2Service == nil {
-			resp.SessionsErrored++
-			resp.ErrorsTotal++
-			return fmt.Errorf("session tick dependencies not configured")
-		}
-
-		pmID, membershipType, err := s.userService.GetPrimaryMembership(iterCtx, ses.UserID)
-		if err != nil {
-			resp.SessionsErrored++
-			resp.ErrorsTotal++
-			return fmt.Errorf("failed to fetch membership type for session %s: %w", ses.ID, err)
-		}
-		membershipID := strconv.FormatInt(pmID, 10)
-
-		if !opts.SkipSave && !opts.DryRun {
-			if s.snapshotService == nil {
-				resp.LoadoutsFailed++
-				resp.ErrorsTotal++
-				return fmt.Errorf("snapshot service not configured for session %s", ses.ID)
-			}
-			if _, err := s.snapshotService.Save(iterCtx, ses.UserID, membershipID, ses.CharacterID); err != nil {
-				resp.LoadoutsFailed++
-				resp.ErrorsTotal++
-				return fmt.Errorf("failed to save loadout for session %s: %w", ses.ID, err)
-			}
-			resp.LoadoutsSaved++
-		}
-
-		rawActivities, err := s.d2Service.GetAllPVPActivity(iterCtx, membershipID, membershipType, ses.CharacterID, 5, 0)
-		if err != nil {
-			resp.SessionsErrored++
-			resp.ErrorsTotal++
-			return fmt.Errorf("failed to get activities for session %s: %w", ses.ID, err)
-		}
-		activityHistories := filterTickActivities(rawActivities)
-
 		if !isCompleted && IsStaleSession(ses, cand.updatedAt, now) {
 			if !opts.DryRun {
 				if err := s.endOrDeleteSession(iterCtx, ses); err != nil {
@@ -647,9 +615,50 @@ func (s service) RunTick(ctx context.Context, opts TickOptions) (*api.SessionTic
 					return fmt.Errorf("failed to process inactive session %s: %w", ses.ID, err)
 				}
 			}
-			resp.SessionsInactiveDeleted++
+			if len(ses.AggregateIDs) == 0 {
+				resp.SessionsInactiveDeleted++
+			} else {
+				resp.SessionsStaleEnded++
+				queueCompFinalize(ses)
+			}
 			return nil
 		}
+
+		if s.userService == nil || s.d2Service == nil {
+			resp.SessionsErrored++
+			resp.ErrorsTotal++
+			return fmt.Errorf("session tick dependencies not configured")
+		}
+
+		pmID, membershipType, err := s.userService.GetPrimaryMembership(iterCtx, ses.UserID)
+		if err != nil {
+			resp.SessionsErrored++
+			resp.ErrorsTotal++
+			return fmt.Errorf("failed to fetch membership type for session %s: %w", ses.ID, err)
+		}
+		membershipID := strconv.FormatInt(pmID, 10)
+
+		if !isCompleted && !opts.SkipSave && !opts.DryRun {
+			if s.snapshotService == nil {
+				resp.LoadoutsFailed++
+				resp.ErrorsTotal++
+				return fmt.Errorf("snapshot service not configured for session %s", ses.ID)
+			}
+			if _, err := s.snapshotService.Save(iterCtx, ses.UserID, membershipID, ses.CharacterID); err != nil {
+				resp.LoadoutsFailed++
+				resp.ErrorsTotal++
+				return fmt.Errorf("failed to save loadout for session %s: %w", ses.ID, err)
+			}
+			resp.LoadoutsSaved++
+		}
+
+		rawActivities, err := s.d2Service.GetAllPVPActivity(iterCtx, membershipID, membershipType, ses.CharacterID, 5, 0)
+		if err != nil {
+			resp.SessionsErrored++
+			resp.ErrorsTotal++
+			return fmt.Errorf("failed to get activities for session %s: %w", ses.ID, err)
+		}
+		activityHistories := filterTickActivities(rawActivities)
 
 		if len(activityHistories) == 0 {
 			resp.SessionsSkipped++

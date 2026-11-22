@@ -145,21 +145,36 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		return nil, fmt.Errorf("cannot enhance activities: %v", err)
 	}
 
-	modeIDs := make([]int64, 0, len(activities)+len(periods))
+	modeIDs := make([]int64, 0, len(activities))
 	for _, act := range activities {
 		if act.DirectActivityModeHash != 0 {
 			modeIDs = append(modeIDs, int64(act.DirectActivityModeHash))
-		}
-	}
-	for _, p := range periods {
-		if p.ActivityDetails != nil && p.ActivityDetails.Mode != nil && *p.ActivityDetails.Mode != 0 {
-			modeIDs = append(modeIDs, int64(*p.ActivityDetails.Mode))
 		}
 	}
 
 	modes, err := a.ManifestService.GetActivityModesByIDs(ctx, modeIDs)
 	if err != nil {
 		return nil, fmt.Errorf("cannot enhance activities: %v", err)
+	}
+
+	needsModeTypeFallback := false
+	for _, p := range periods {
+		if p.ActivityDetails == nil || p.ActivityDetails.DirectorActivityHash == nil || p.ActivityDetails.Mode == nil || *p.ActivityDetails.Mode == 0 {
+			continue
+		}
+		act, ok := activities[strconv.Itoa(int(*p.ActivityDetails.DirectorActivityHash))]
+		if !ok {
+			continue
+		}
+		if _, found := modes[strconv.Itoa(act.DirectActivityModeHash)]; !found {
+			needsModeTypeFallback = true
+			break
+		}
+	}
+	if needsModeTypeFallback {
+		if allModes, modeErr := a.ManifestService.GetActivityModes(ctx); modeErr == nil {
+			modes = allModes
+		}
 	}
 
 	history := TransformPeriodGroups(periods, activities, modes)
@@ -452,8 +467,11 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 			continue
 		}
 		d, err := a.GetItemDetails(ctx, membershipID, membershipType, *item.ItemInstanceId)
-		if err != nil || d == nil {
-			continue
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to fetch item details for instance %s: %w", *item.ItemInstanceId, err)
+		}
+		if d == nil {
+			return nil, nil, fmt.Errorf("empty item details for instance %s", *item.ItemInstanceId)
 		}
 		if d.Item != nil && d.Item.ItemComponent != nil &&
 			d.Item.ItemComponent.OverrideStyleItemHash == nil &&

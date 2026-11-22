@@ -85,11 +85,13 @@ func (m *memSnapshotStore) createSnapshotDoc(_ context.Context, snap api.Charact
 	return snap, nil
 }
 
-func (m *memSnapshotStore) getByHash(_ context.Context, hash string) (*api.CharacterSnapshot, error) {
-	for _, doc := range m.docs {
-		if doc.Hash == hash {
-			cp := cloneSnapshot(doc)
-			return &cp, nil
+func (m *memSnapshotStore) getByHashes(_ context.Context, hashes []string) (*api.CharacterSnapshot, error) {
+	for _, hash := range hashes {
+		for _, doc := range m.docs {
+			if doc.Hash == hash {
+				cp := cloneSnapshot(doc)
+				return &cp, nil
+			}
 		}
 	}
 	return nil, nil
@@ -1213,8 +1215,8 @@ func TestFindBestFit(t *testing.T) {
 				if snap == nil || snap.ID != "snap-1" {
 					t.Fatalf("expected snap-1, got %+v", snap)
 				}
-				if link == nil || link.ConfidenceLevel != tc.want || link.SnapshotID == nil || *link.SnapshotID != "snap-1" {
-					t.Fatalf("expected confidence %s snap-1, got %+v", tc.want, link)
+				if link == nil || link.ConfidenceLevel != tc.want || link.SnapshotID == nil || *link.SnapshotID != "snap-1" || link.OriginalSnapshotID != nil {
+					t.Fatalf("expected confidence %s snap-1 with nil OriginalSnapshotID, got %+v", tc.want, link)
 				}
 			})
 		}
@@ -1241,7 +1243,7 @@ func TestFindBestFit(t *testing.T) {
 		}
 	})
 
-	t.Run("auto-forwards archived matched snapshot to merged target", func(t *testing.T) {
+	t.Run("auto-forwards archived matched snapshot to merged target and preserves OriginalSnapshotID", func(t *testing.T) {
 		targetID := "snap-target"
 		store := newMemSnapshotStore(
 			api.CharacterSnapshot{ID: "snap-archived", UserID: "u1", CharacterID: "c1", MergedIntoID: &targetID},
@@ -1261,6 +1263,9 @@ func TestFindBestFit(t *testing.T) {
 		if link == nil || link.SnapshotID == nil || *link.SnapshotID != targetID || link.ConfidenceLevel != api.HighConfidenceLevel {
 			t.Fatalf("expected link pointing to %q with high confidence, got %+v", targetID, link)
 		}
+		if link.OriginalSnapshotID == nil || *link.OriginalSnapshotID != "snap-archived" {
+			t.Fatalf("expected OriginalSnapshotID='snap-archived', got %v", link.OriginalSnapshotID)
+		}
 	})
 
 	t.Run("restores archived snapshot when auto-forward target is missing", func(t *testing.T) {
@@ -1279,8 +1284,132 @@ func TestFindBestFit(t *testing.T) {
 		if snap == nil || snap.ID != "snap-archived" || IsArchived(snap) {
 			t.Fatalf("expected restored snap-archived, got %+v", snap)
 		}
-		if link == nil || link.SnapshotID == nil || *link.SnapshotID != "snap-archived" {
-			t.Fatalf("expected link to snap-archived, got %+v", link)
+		if link == nil || link.SnapshotID == nil || *link.SnapshotID != "snap-archived" || link.OriginalSnapshotID != nil {
+			t.Fatalf("expected link to snap-archived with nil OriginalSnapshotID, got %+v", link)
+		}
+	})
+}
+
+func TestCreate_LegacyServerTickHashFallback(t *testing.T) {
+	ctx := context.Background()
+
+	loadout := api.Loadout{
+		strconv.Itoa(destiny.Kinetic): {
+			InstanceID: "6917529027641081234",
+			ItemHash:   123456789,
+			ItemProperties: api.ItemProperties{
+				BaseInfo: api.BaseItemInfo{
+					InstanceId: "6917529027641081234",
+					ItemHash:   123456789,
+				},
+				Perks: []api.Perk{{Hash: 999111, Name: "Opening Shot"}},
+			},
+		},
+	}
+
+	canonicalHash, err := GenerateHash(loadout)
+	if err != nil {
+		t.Fatalf("GenerateHash failed: %v", err)
+	}
+	legacyHash, err := GenerateLegacyHash(loadout)
+	if err != nil {
+		t.Fatalf("GenerateLegacyHash failed: %v", err)
+	}
+	if canonicalHash == legacyHash {
+		t.Fatalf("expected canonical and legacy hashes to differ for perked loadout, both=%s", canonicalHash)
+	}
+
+	t.Run("reuses existing server-tick legacy snapshot and backfills armorSetBonuses without duplicating", func(t *testing.T) {
+		store := newMemSnapshotStore(api.CharacterSnapshot{
+			ID:          "snap-legacy",
+			UserID:      "u1",
+			CharacterID: "c1",
+			Hash:        legacyHash,
+			Loadout:     loadout,
+		})
+		svc := &service{store: store}
+
+		bonuses := []api.ArmorSetBonus{{SetHash: 500001, SetName: "Techsec", ActiveCount: 2}}
+		id, err := svc.create(ctx, "u1", api.CharacterSnapshot{
+			UserID:          "u1",
+			CharacterID:     "c1",
+			Loadout:         loadout,
+			ArmorSetBonuses: &bonuses,
+		})
+		if err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if id == nil || *id != "snap-legacy" {
+			t.Fatalf("expected existing legacy snapshot ID 'snap-legacy', got %v", id)
+		}
+		if len(store.docs) != 1 {
+			t.Fatalf("expected no duplicate snapshot created, got %d docs", len(store.docs))
+		}
+		if got := store.docs["snap-legacy"]; got.ArmorSetBonuses == nil || len(*got.ArmorSetBonuses) != 1 {
+			t.Fatalf("expected armorSetBonuses backfilled on legacy snapshot, got %+v", got.ArmorSetBonuses)
+		}
+		if len(store.histories["snap-legacy"]) != 1 {
+			t.Fatalf("expected 1 history entry recorded on snap-legacy, got %d", len(store.histories["snap-legacy"]))
+		}
+	})
+
+	t.Run("auto-forwards archived server-tick legacy snapshot to merged target", func(t *testing.T) {
+		targetID := "snap-target"
+		store := newMemSnapshotStore(
+			api.CharacterSnapshot{
+				ID:           "snap-legacy-archived",
+				UserID:       "u1",
+				CharacterID:  "c1",
+				Hash:         legacyHash,
+				MergedIntoID: &targetID,
+				Loadout:      loadout,
+			},
+			api.CharacterSnapshot{
+				ID:          targetID,
+				UserID:      "u1",
+				CharacterID: "c1",
+				Hash:        "some-other-hash",
+				Loadout:     loadout,
+			},
+		)
+		svc := &service{store: store}
+
+		id, err := svc.create(ctx, "u1", api.CharacterSnapshot{
+			UserID:      "u1",
+			CharacterID: "c1",
+			Loadout:     loadout,
+		})
+		if err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if id == nil || *id != targetID {
+			t.Fatalf("expected auto-forwarded target %q, got %v", targetID, id)
+		}
+		if len(store.docs) != 2 {
+			t.Fatalf("expected no duplicate snapshot created, got %d docs", len(store.docs))
+		}
+		if len(store.histories[targetID]) != 1 {
+			t.Fatalf("expected 1 history entry on target %q, got %d", targetID, len(store.histories[targetID]))
+		}
+	})
+
+	t.Run("prefers canonical hash snapshot when both canonical and legacy snapshots exist", func(t *testing.T) {
+		store := newMemSnapshotStore(
+			api.CharacterSnapshot{ID: "snap-legacy", UserID: "u1", CharacterID: "c1", Hash: legacyHash, Loadout: loadout},
+			api.CharacterSnapshot{ID: "snap-canonical", UserID: "u1", CharacterID: "c1", Hash: canonicalHash, Loadout: loadout},
+		)
+		svc := &service{store: store}
+
+		id, err := svc.create(ctx, "u1", api.CharacterSnapshot{
+			UserID:      "u1",
+			CharacterID: "c1",
+			Loadout:     loadout,
+		})
+		if err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if id == nil || *id != "snap-canonical" {
+			t.Fatalf("expected canonical snapshot 'snap-canonical', got %v", id)
 		}
 	})
 }
