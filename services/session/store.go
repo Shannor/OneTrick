@@ -13,8 +13,11 @@ import (
 )
 
 type tickCandidate struct {
-	session   api.Session
-	updatedAt *time.Time
+	session                api.Session
+	updatedAt              *time.Time
+	lastSnapshotID         string
+	lastSnapshotHash       string
+	lastSnapshotRecordedAt time.Time
 }
 
 type sessionStore interface {
@@ -23,6 +26,7 @@ type sessionStore interface {
 	getActiveDoc(ctx context.Context, userID, characterID string) (*api.Session, error)
 	getDoc(ctx context.Context, sessionID string) (*api.Session, error)
 	listDocs(ctx context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error)
+	listCompletedInWindow(ctx context.Context, since, until time.Time) ([]api.Session, error)
 	getTickCandidates(ctx context.Context, completedSince time.Time) ([]tickCandidate, error)
 	updateFields(ctx context.Context, sessionID string, updates []firestore.Update) error
 	completeDoc(ctx context.Context, sessionID string, completedAt time.Time) error
@@ -30,6 +34,7 @@ type sessionStore interface {
 	updateSummary(ctx context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error
 	updateCompTrackingEnd(ctx context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error
 	setLastActivity(ctx context.Context, sessionID, activityID string, seenAt time.Time) error
+	setLastSnapshot(ctx context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error
 	deleteDoc(ctx context.Context, sessionID string) error
 	addAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 }
@@ -121,6 +126,22 @@ func (f *firestoreStore) listDocs(ctx context.Context, userID, characterID *stri
 	return result, nil
 }
 
+func (f *firestoreStore) listCompletedInWindow(ctx context.Context, since, until time.Time) ([]api.Session, error) {
+	docs, err := f.db.Collection(collection).
+		Where("status", "==", api.SessionComplete).
+		Where("completedAt", ">=", since).
+		Where("completedAt", "<=", until).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query completed sessions in cleanup window: %w", err)
+	}
+	result, err := utils.GetAllToStructs[api.Session](docs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse completed sessions: %w", err)
+	}
+	return result, nil
+}
+
 func (f *firestoreStore) getTickCandidates(ctx context.Context, completedSince time.Time) ([]tickCandidate, error) {
 	orFilter := firestore.OrFilter{
 		Filters: []firestore.EntityFilter{
@@ -152,12 +173,22 @@ func (f *firestoreStore) getTickCandidates(ctx context.Context, completedSince t
 			return nil, err
 		}
 		var meta struct {
-			UpdatedAt *time.Time `firestore:"updatedAt"`
+			UpdatedAt              *time.Time `firestore:"updatedAt"`
+			LastSnapshotID         string     `firestore:"lastSnapshotId"`
+			LastSnapshotHash       string     `firestore:"lastSnapshotHash"`
+			LastSnapshotRecordedAt *time.Time `firestore:"lastSnapshotRecordedAt"`
 		}
 		_ = doc.DataTo(&meta)
+		var lastRecordedAt time.Time
+		if meta.LastSnapshotRecordedAt != nil {
+			lastRecordedAt = *meta.LastSnapshotRecordedAt
+		}
 		candidates = append(candidates, tickCandidate{
-			session:   s,
-			updatedAt: meta.UpdatedAt,
+			session:                s,
+			updatedAt:              meta.UpdatedAt,
+			lastSnapshotID:         meta.LastSnapshotID,
+			lastSnapshotHash:       meta.LastSnapshotHash,
+			lastSnapshotRecordedAt: lastRecordedAt,
 		})
 	}
 	return candidates, nil
@@ -255,6 +286,24 @@ func (f *firestoreStore) setLastActivity(ctx context.Context, sessionID, activit
 		{
 			Path:  "updatedAt",
 			Value: seenAt,
+		},
+	})
+	return err
+}
+
+func (f *firestoreStore) setLastSnapshot(ctx context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
+	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
+		{
+			Path:  "lastSnapshotId",
+			Value: snapshotID,
+		},
+		{
+			Path:  "lastSnapshotHash",
+			Value: snapshotHash,
+		},
+		{
+			Path:  "lastSnapshotRecordedAt",
+			Value: recordedAt,
 		},
 	})
 	return err

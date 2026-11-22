@@ -74,7 +74,9 @@ const (
 	// CutOffDuration is when an inactive or stale pending session is automatically ended or deleted.
 	CutOffDuration           = 2 * time.Hour
 	completedGracePeriod     = 15 * time.Minute
+	emptyCleanupLookback     = 60 * time.Minute
 	activityStartGracePeriod = 15 * time.Minute
+	snapshotHeartbeatPeriod  = 30 * time.Minute
 )
 
 func (s service) now() time.Time {

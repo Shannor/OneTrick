@@ -25,3 +25,17 @@ type MetaData struct {
 	EnergyID  string `json:"energyId" firestore:"energyId"`
 	PowerID   string `json:"powerId" firestore:"powerId"`
 }
+
+type SessionCheckInOptions struct {
+	LastSnapshotID         string
+	LastSnapshotHash       string
+	LastSnapshotRecordedAt time.Time
+	HeartbeatInterval      time.Duration
+}
+
+type SessionCheckInResult struct {
+	SnapshotID      string
+	SnapshotHash    string
+	HistoryRecorded bool
+	RecordedAt      time.Time
+}

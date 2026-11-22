@@ -21,19 +21,28 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 )
 
+type lastSnapshotRecord struct {
+	snapshotID string
+	hash       string
+	recordedAt time.Time
+}
+
 type memorySessionStore struct {
-	mu          sync.Mutex
-	docs        map[string]*api.Session
-	updatedAt   map[string]time.Time
-	seq         int
-	getDocCalls atomic.Int32
-	writes      atomic.Int32
+	mu                       sync.Mutex
+	docs                     map[string]*api.Session
+	updatedAt                map[string]time.Time
+	lastSnapshots            map[string]lastSnapshotRecord
+	seq                      int
+	getDocCalls              atomic.Int32
+	writes                   atomic.Int32
+	lastCompletedWindowCount atomic.Int32
 }
 
 func newMemorySessionStore() *memorySessionStore {
 	return &memorySessionStore{
-		docs:      make(map[string]*api.Session),
-		updatedAt: make(map[string]time.Time),
+		docs:          make(map[string]*api.Session),
+		updatedAt:     make(map[string]time.Time),
+		lastSnapshots: make(map[string]lastSnapshotRecord),
 	}
 }
 
@@ -119,6 +128,26 @@ func (m *memorySessionStore) listDocs(_ context.Context, userID, characterID *st
 	return out, nil
 }
 
+func (m *memorySessionStore) listCompletedInWindow(_ context.Context, since, until time.Time) ([]api.Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]api.Session, 0)
+	for _, s := range m.docs {
+		if s.Status == nil || *s.Status != api.SessionComplete {
+			continue
+		}
+		if s.CompletedAt == nil {
+			continue
+		}
+		if s.CompletedAt.Before(since) || s.CompletedAt.After(until) {
+			continue
+		}
+		out = append(out, cloneSession(s))
+	}
+	m.lastCompletedWindowCount.Store(int32(len(out)))
+	return out, nil
+}
+
 func (m *memorySessionStore) getTickCandidates(_ context.Context, completedSince time.Time) ([]tickCandidate, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -141,9 +170,13 @@ func (m *memorySessionStore) getTickCandidates(_ context.Context, completedSince
 			t := ts
 			upd = &t
 		}
+		rec := m.lastSnapshots[id]
 		out = append(out, tickCandidate{
-			session:   cloneSession(s),
-			updatedAt: upd,
+			session:                cloneSession(s),
+			updatedAt:              upd,
+			lastSnapshotID:         rec.snapshotID,
+			lastSnapshotHash:       rec.hash,
+			lastSnapshotRecordedAt: rec.recordedAt,
 		})
 	}
 	return out, nil
@@ -235,12 +268,28 @@ func (m *memorySessionStore) setLastActivity(_ context.Context, sessionID, activ
 	return nil
 }
 
+func (m *memorySessionStore) setLastSnapshot(_ context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writes.Add(1)
+	if _, ok := m.docs[sessionID]; !ok {
+		return ErrNotFound
+	}
+	m.lastSnapshots[sessionID] = lastSnapshotRecord{
+		snapshotID: snapshotID,
+		hash:       snapshotHash,
+		recordedAt: recordedAt,
+	}
+	return nil
+}
+
 func (m *memorySessionStore) deleteDoc(_ context.Context, sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
 	delete(m.docs, sessionID)
 	delete(m.updatedAt, sessionID)
+	delete(m.lastSnapshots, sessionID)
 	return nil
 }
 
@@ -324,6 +373,7 @@ type fakeSessionSnapshotService struct {
 	writes        atomic.Int32
 	saveCalls     atomic.Int32
 	saveErrByChar map[string]error
+	checkInFn     func(userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error)
 	findBestFitFn func(userID, characterID string, period time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
 	enrichFn      func(snap *api.CharacterSnapshot, perf api.InstancePerformance) (*api.InstancePerformance, error)
 }
@@ -335,6 +385,27 @@ func (f *fakeSessionSnapshotService) Save(_ context.Context, _, _, characterID s
 	}
 	f.writes.Add(1)
 	return &api.CharacterSnapshot{ID: "snap-" + characterID}, nil
+}
+
+func (f *fakeSessionSnapshotService) SaveSessionCheckIn(_ context.Context, userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+	f.saveCalls.Add(1)
+	if err, ok := f.saveErrByChar[characterID]; ok && err != nil {
+		return snapshot.SessionCheckInResult{}, err
+	}
+	if f.checkInFn != nil {
+		res, err := f.checkInFn(userID, membershipID, characterID, opts)
+		if err == nil && res.HistoryRecorded {
+			f.writes.Add(1)
+		}
+		return res, err
+	}
+	f.writes.Add(1)
+	return snapshot.SessionCheckInResult{
+		SnapshotID:      "snap-" + characterID,
+		SnapshotHash:    "hash-" + characterID,
+		HistoryRecorded: true,
+		RecordedAt:      time.Now(),
+	}, nil
 }
 
 func (f *fakeSessionSnapshotService) FindBestFit(_ context.Context, userID, characterID string, activityPeriod time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
@@ -1023,14 +1094,17 @@ func TestComputeSessionSummary(t *testing.T) {
 func TestCleanupEmptyCompleted(t *testing.T) {
 	now := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
 	recentComplete := now.Add(-5 * time.Minute)
-	oldComplete := now.Add(-20 * time.Minute)
+	inWindowComplete := now.Add(-20 * time.Minute)
+	historicalComplete := now.Add(-90 * time.Minute)
 
 	store := newMemorySessionStore()
 	store.docs["pending-empty"] = &api.Session{ID: "pending-empty", Status: new(api.SessionPending)}
 	store.docs["complete-empty-recent"] = &api.Session{ID: "complete-empty-recent", Status: new(api.SessionComplete), CompletedAt: &recentComplete}
-	store.docs["complete-empty-old"] = &api.Session{ID: "complete-empty-old", Status: new(api.SessionComplete), CompletedAt: &oldComplete}
+	store.docs["complete-empty-in-window"] = &api.Session{ID: "complete-empty-in-window", Status: new(api.SessionComplete), CompletedAt: &inWindowComplete}
+	store.docs["complete-empty-historical"] = &api.Session{ID: "complete-empty-historical", Status: new(api.SessionComplete), CompletedAt: &historicalComplete}
 	store.docs["complete-empty-nil-ts"] = &api.Session{ID: "complete-empty-nil-ts", Status: new(api.SessionComplete)}
-	store.docs["complete-nonempty"] = &api.Session{ID: "complete-nonempty", Status: new(api.SessionComplete), CompletedAt: &oldComplete, AggregateIDs: []string{"agg-1"}}
+	store.docs["complete-nonempty-in-window"] = &api.Session{ID: "complete-nonempty-in-window", Status: new(api.SessionComplete), CompletedAt: &inWindowComplete, AggregateIDs: []string{"agg-1"}}
+	store.docs["complete-nonempty-historical"] = &api.Session{ID: "complete-nonempty-historical", Status: new(api.SessionComplete), CompletedAt: &historicalComplete, AggregateIDs: []string{"agg-2"}}
 
 	svc := &service{
 		store: store,
@@ -1041,8 +1115,11 @@ func TestCleanupEmptyCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupEmptyCompleted dryRun failed: %v", err)
 	}
-	if cleanedDry != 2 {
-		t.Fatalf("expected 2 empty completed sessions outside grace window in dryRun, got %d", cleanedDry)
+	if cleanedDry != 1 {
+		t.Fatalf("expected 1 empty completed session in cleanup window in dryRun, got %d", cleanedDry)
+	}
+	if store.lastCompletedWindowCount.Load() != 2 {
+		t.Fatalf("expected bounded query to read only 2 in-window sessions, got %d", store.lastCompletedWindowCount.Load())
 	}
 	if store.writes.Load() != 0 {
 		t.Fatalf("expected 0 writes in dryRun, got %d", store.writes.Load())
@@ -1052,23 +1129,29 @@ func TestCleanupEmptyCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CleanupEmptyCompleted failed: %v", err)
 	}
-	if cleaned != 2 {
-		t.Fatalf("expected 2 deleted sessions, got %d", cleaned)
+	if cleaned != 1 {
+		t.Fatalf("expected 1 deleted session, got %d", cleaned)
 	}
-	if _, exists := store.docs["complete-empty-old"]; exists {
-		t.Fatal("expected complete-empty-old to be deleted")
-	}
-	if _, exists := store.docs["complete-empty-nil-ts"]; exists {
-		t.Fatal("expected complete-empty-nil-ts to be deleted")
+	if _, exists := store.docs["complete-empty-in-window"]; exists {
+		t.Fatal("expected complete-empty-in-window to be deleted")
 	}
 	if _, exists := store.docs["complete-empty-recent"]; !exists {
 		t.Fatal("expected complete-empty-recent inside 15m grace window to be preserved")
 	}
+	if _, exists := store.docs["complete-nonempty-in-window"]; !exists {
+		t.Fatal("expected complete-nonempty-in-window to be preserved")
+	}
+	if _, exists := store.docs["complete-nonempty-historical"]; !exists {
+		t.Fatal("expected complete-nonempty-historical outside lookback window to be untouched")
+	}
+	if _, exists := store.docs["complete-empty-historical"]; !exists {
+		t.Fatal("expected complete-empty-historical outside 60m lookback window not to be scanned")
+	}
+	if _, exists := store.docs["complete-empty-nil-ts"]; !exists {
+		t.Fatal("expected complete-empty-nil-ts without completedAt not to be scanned")
+	}
 	if _, exists := store.docs["pending-empty"]; !exists {
 		t.Fatal("expected pending-empty to be preserved")
-	}
-	if _, exists := store.docs["complete-nonempty"]; !exists {
-		t.Fatal("expected complete-nonempty to be preserved")
 	}
 }
 
@@ -1618,5 +1701,120 @@ func TestRunTick_MissingPerformanceWarningAndPartialFailureResilience(t *testing
 		t.Fatal("expected canonical FieldBag warning to propagate from missing performance entry")
 	}
 	assertAllWarningsAreStrings(t, bag.Attrs())
+}
+
+func TestRunTick_SnapshotHistoryThrottling(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+	now := t0
+
+	store := newMemorySessionStore()
+	store.docs["ses-throttle"] = &api.Session{
+		ID:          "ses-throttle",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		StartedAt:   t0,
+		Status:      new(api.SessionPending),
+	}
+
+	uSvc := &fakeSessionUserService{
+		u: &user.User{
+			ID:                  "user-1",
+			PrimaryMembershipID: "12345",
+			Memberships:         []user.Membership{{ID: "12345", Type: 3}},
+		},
+	}
+
+	currentHash := "hash-loadout-a"
+	currentSnapID := "snap-a"
+	var seenOpts []snapshot.SessionCheckInOptions
+
+	snapSvc := &fakeSessionSnapshotService{
+		checkInFn: func(_, _, _ string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+			seenOpts = append(seenOpts, opts)
+			if opts.LastSnapshotID != "" &&
+				opts.LastSnapshotHash == currentHash &&
+				!opts.LastSnapshotRecordedAt.IsZero() &&
+				now.Sub(opts.LastSnapshotRecordedAt) < opts.HeartbeatInterval {
+				return snapshot.SessionCheckInResult{
+					SnapshotID:      opts.LastSnapshotID,
+					SnapshotHash:    currentHash,
+					HistoryRecorded: false,
+					RecordedAt:      opts.LastSnapshotRecordedAt,
+				}, nil
+			}
+			return snapshot.SessionCheckInResult{
+				SnapshotID:      currentSnapID,
+				SnapshotHash:    currentHash,
+				HistoryRecorded: true,
+				RecordedAt:      now,
+			}, nil
+		},
+	}
+
+	svc := &service{
+		store:            store,
+		aggregateService: newFakeSessionAggregateService(),
+		userService:      uSvc,
+		d2Service:        &fakeSessionD2Service{},
+		snapshotService:  snapSvc,
+		manifestService:  &fakeSessionManifestService{},
+		nowFn:            func() time.Time { return now },
+	}
+
+	// Tick 1 (t=0m): initial session check-in records history and persists last-snapshot metadata.
+	resp1, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
+	if err != nil {
+		t.Fatalf("Tick 1 failed: %v", err)
+	}
+	if resp1.LoadoutsSaved != 1 || snapSvc.writes.Load() != 1 || store.writes.Load() != 1 {
+		t.Fatalf("Tick 1 expected 1 loadout save & 1 store write, got resp=%+v snapWrites=%d storeWrites=%d", resp1, snapSvc.writes.Load(), store.writes.Load())
+	}
+	if seenOpts[0].HeartbeatInterval != snapshotHeartbeatPeriod || seenOpts[0].LastSnapshotHash != "" {
+		t.Fatalf("Tick 1 unexpected checkIn options: %+v", seenOpts[0])
+	}
+	if rec := store.lastSnapshots["ses-throttle"]; rec.snapshotID != "snap-a" || rec.hash != "hash-loadout-a" || !rec.recordedAt.Equal(t0) {
+		t.Fatalf("Tick 1 expected persisted lastSnapshot metadata, got %+v", rec)
+	}
+
+	// Tick 2 (t=10m, unchanged loadout): skips history and skips session store writes.
+	now = t0.Add(10 * time.Minute)
+	resp2, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
+	if err != nil {
+		t.Fatalf("Tick 2 failed: %v", err)
+	}
+	if resp2.LoadoutsSaved != 0 || snapSvc.writes.Load() != 1 || store.writes.Load() != 1 {
+		t.Fatalf("Tick 2 expected throttled skip (0 new writes), got resp=%+v snapWrites=%d storeWrites=%d", resp2, snapSvc.writes.Load(), store.writes.Load())
+	}
+	if seenOpts[1].LastSnapshotID != "snap-a" || seenOpts[1].LastSnapshotHash != "hash-loadout-a" || !seenOpts[1].LastSnapshotRecordedAt.Equal(t0) {
+		t.Fatalf("Tick 2 expected prior snapshot metadata passed in, got %+v", seenOpts[1])
+	}
+
+	// Tick 3 (t=15m, loadout hash changes): immediately records new history and updates metadata.
+	now = t0.Add(15 * time.Minute)
+	currentHash = "hash-loadout-b"
+	currentSnapID = "snap-b"
+	resp3, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
+	if err != nil {
+		t.Fatalf("Tick 3 failed: %v", err)
+	}
+	if resp3.LoadoutsSaved != 1 || snapSvc.writes.Load() != 2 || store.writes.Load() != 2 {
+		t.Fatalf("Tick 3 expected immediate save on hash change, got resp=%+v snapWrites=%d storeWrites=%d", resp3, snapSvc.writes.Load(), store.writes.Load())
+	}
+	if rec := store.lastSnapshots["ses-throttle"]; rec.snapshotID != "snap-b" || rec.hash != "hash-loadout-b" || !rec.recordedAt.Equal(now) {
+		t.Fatalf("Tick 3 expected updated lastSnapshot metadata, got %+v", rec)
+	}
+
+	// Tick 4 (t=45m, 30m after Tick 3, unchanged loadout): emits 30m heartbeat write.
+	now = t0.Add(45 * time.Minute)
+	resp4, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
+	if err != nil {
+		t.Fatalf("Tick 4 failed: %v", err)
+	}
+	if resp4.LoadoutsSaved != 1 || snapSvc.writes.Load() != 3 || store.writes.Load() != 3 {
+		t.Fatalf("Tick 4 expected heartbeat save at >=30m, got resp=%+v snapWrites=%d storeWrites=%d", resp4, snapSvc.writes.Load(), store.writes.Load())
+	}
+	if rec := store.lastSnapshots["ses-throttle"]; !rec.recordedAt.Equal(now) {
+		t.Fatalf("Tick 4 expected updated recordedAt=%v, got %+v", now, rec)
+	}
 }
 

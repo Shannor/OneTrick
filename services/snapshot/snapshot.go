@@ -26,6 +26,10 @@ type Service interface {
 	// snapshot data on success and an error if the generating or save to the DB fails
 	Save(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error)
 
+	// SaveSessionCheckIn checks the character's current equipped loadout during an active session
+	// and writes a history entry only when the loadout hash changed or the heartbeat interval elapsed.
+	SaveSessionCheckIn(ctx context.Context, userID, membershipID, characterID string, opts SessionCheckInOptions) (SessionCheckInResult, error)
+
 	// GetAllByCharacter retrieves all active (non-archived) snapshots for a given user and character with pagination.
 	// Snapshots are returned in reverse chronological order based on their timestamp.
 	GetAllByCharacter(ctx context.Context, userID string, characterID string, count int, offset int) ([]api.CharacterSnapshot, error)
@@ -63,9 +67,17 @@ type service struct {
 	UserService      user.Service
 	D2Service        destiny.Service
 	aggregateService aggregate.Service
+	nowFn            func() time.Time
 }
 
 var _ Service = (*service)(nil)
+
+func (s *service) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
+}
 
 func NewService(db *firestore.Client, userService user.Service, d2Service destiny.Service, aggregateService aggregate.Service) Service {
 	return &service{
@@ -241,7 +253,7 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 
 		if (existingSnapshot.ArmorSetBonuses == nil || len(*existingSnapshot.ArmorSetBonuses) == 0) &&
 			snapshot.ArmorSetBonuses != nil && len(*snapshot.ArmorSetBonuses) > 0 {
-			if err := s.store.updateArmorSetBonuses(ctx, existingSnapshot.ID, *snapshot.ArmorSetBonuses, time.Now()); err != nil {
+			if err := s.store.updateArmorSetBonuses(ctx, existingSnapshot.ID, *snapshot.ArmorSetBonuses, s.now()); err != nil {
 				clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
 					"warning":         "failed to backfill armor set bonuses on existing snapshot",
 					"setBonusesError": err.Error(),
@@ -260,7 +272,7 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 	}
 
 	snapshot.UserID = userID
-	now := time.Now()
+	now := s.now()
 	snapshot.CreatedAt = now
 	snapshot.UpdatedAt = now
 	if snapshot.Name == "" {
@@ -294,7 +306,7 @@ func (s *service) resolveAutoForwardTarget(ctx context.Context, group string, ar
 				"missingTargetId":    targetID,
 				"warning":            "auto-forward target missing; restoring archived snapshot",
 			})
-			_ = s.store.clearMergeArchiveFields(ctx, archived.ID, time.Now())
+			_ = s.store.clearMergeArchiveFields(ctx, archived.ID, s.now())
 			archived.MergedIntoID = nil
 			archived.MergedAt = nil
 			return nil, nil
@@ -308,7 +320,7 @@ func (s *service) resolveAutoForwardTarget(ctx context.Context, group string, ar
 }
 
 func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapshot) (*string, error) {
-	now := time.Now()
+	now := s.now()
 	history := History{
 		ParentID:    og.ID,
 		UserID:      og.UserID,
@@ -662,6 +674,75 @@ func (s *service) Save(ctx context.Context, userID, membershipID, characterID st
 		data.ID = *id
 	}
 	return data, nil
+}
+
+func shouldThrottleCheckIn(opts SessionCheckInOptions, currentHash string, now time.Time) bool {
+	if opts.HeartbeatInterval <= 0 || opts.LastSnapshotID == "" || opts.LastSnapshotHash == "" || opts.LastSnapshotRecordedAt.IsZero() {
+		return false
+	}
+	if opts.LastSnapshotHash != currentHash {
+		return false
+	}
+	elapsed := now.Sub(opts.LastSnapshotRecordedAt)
+	return elapsed >= 0 && elapsed < opts.HeartbeatInterval
+}
+
+func (s *service) SaveSessionCheckIn(ctx context.Context, userID, membershipID, characterID string, opts SessionCheckInOptions) (SessionCheckInResult, error) {
+	clog.WithGroupFields(ctx, "snapshotService.saveSessionCheckIn", clog.Fields{
+		"userId":       userID,
+		"membershipId": membershipID,
+		"characterId":  characterID,
+	})
+	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID)
+	if err != nil {
+		return SessionCheckInResult{}, fmt.Errorf("failed to build data: %w", err)
+	}
+	if data == nil {
+		return SessionCheckInResult{}, fmt.Errorf("failed to generate snapshot")
+	}
+
+	hash, err := GenerateHash(data.Loadout)
+	if err != nil {
+		return SessionCheckInResult{}, fmt.Errorf("failed to hash loadout: %w", err)
+	}
+	data.Hash = hash
+
+	now := s.now()
+	if shouldThrottleCheckIn(opts, hash, now) {
+		clog.WithGroupFields(ctx, "snapshotService.saveSessionCheckIn", clog.Fields{
+			"snapshotId":             opts.LastSnapshotID,
+			"hash":                   hash,
+			"historyRecorded":        false,
+			"sinceLastRecordSeconds": int64(now.Sub(opts.LastSnapshotRecordedAt).Seconds()),
+		})
+		return SessionCheckInResult{
+			SnapshotID:      opts.LastSnapshotID,
+			SnapshotHash:    hash,
+			HistoryRecorded: false,
+			RecordedAt:      opts.LastSnapshotRecordedAt,
+		}, nil
+	}
+
+	id, err := s.create(ctx, userID, *data)
+	if err != nil {
+		return SessionCheckInResult{}, fmt.Errorf("failed to create snapshot: %w", err)
+	}
+	snapshotID := ""
+	if id != nil {
+		snapshotID = *id
+	}
+	recordedAt := s.now()
+	clog.WithGroupFields(ctx, "snapshotService.saveSessionCheckIn", clog.Fields{
+		"snapshotId":      snapshotID,
+		"hash":            hash,
+		"historyRecorded": true,
+	})
+	return SessionCheckInResult{
+		SnapshotID:      snapshotID,
+		SnapshotHash:    hash,
+		HistoryRecorded: true,
+		RecordedAt:      recordedAt,
+	}, nil
 }
 
 func (s *service) Merge(ctx context.Context, userID string, targetSnapshotID string, sourceSnapshotIDs []string) (api.CharacterSnapshot, error) {
