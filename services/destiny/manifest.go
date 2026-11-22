@@ -456,37 +456,6 @@ func (m *manifestService) GetProgression(ctx context.Context, hash int64) (*Prog
 
 const manifestBatchSize = 30
 
-func normalizeUniqueIDs(ids []int64) []int64 {
-	if len(ids) == 0 {
-		return nil
-	}
-	seen := make(map[int64]struct{}, len(ids))
-	unique := make([]int64, 0, len(ids))
-	for _, id := range ids {
-		if id == 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		unique = append(unique, id)
-	}
-	return unique
-}
-
-func chunkIDs(ids []int64, size int) [][]int64 {
-	if len(ids) == 0 || size <= 0 {
-		return nil
-	}
-	chunks := make([][]int64, 0, (len(ids)+size-1)/size)
-	for i := 0; i < len(ids); i += size {
-		end := min(i+size, len(ids))
-		chunks = append(chunks, ids[i:end])
-	}
-	return chunks
-}
-
 func batchedFetch[T any](
 	ctx context.Context,
 	db *firestore.Client,
@@ -495,7 +464,7 @@ func batchedFetch[T any](
 	ids []int64,
 	keyFn func(T) string,
 ) (map[string]T, error) {
-	uniqueIDs := normalizeUniqueIDs(ids)
+	uniqueIDs := utils.UniqueNonZero(ids)
 	if len(uniqueIDs) == 0 {
 		return make(map[string]T), nil
 	}
@@ -507,7 +476,7 @@ func batchedFetch[T any](
 	allResults := make([]T, 0, len(uniqueIDs))
 	missingCount := 0
 
-	for _, chunk := range chunkIDs(uniqueIDs, manifestBatchSize) {
+	for _, chunk := range utils.Chunk(uniqueIDs, manifestBatchSize) {
 		docRefs := make([]*firestore.DocumentRef, len(chunk))
 		for i, id := range chunk {
 			docRefs[i] = col.Doc(strconv.FormatInt(id, 10))

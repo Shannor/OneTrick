@@ -6,6 +6,7 @@ import (
 	"math"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
+	"oneTrick/set"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,27 +14,17 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 )
 
+const (
+	topWeaponsLimit      = 5
+	uniqueWeaponKillsKey = "uniqueWeaponKills"
+	unknownWeaponLabel   = "Unknown Weapon"
+	bungieAssetBaseURL   = "https://www.bungie.net"
+)
+
 func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*api.SessionSummary, error) {
 	if len(ses.AggregateIDs) == 0 {
-		emptyModes := make([]string, 0)
-		emptyWeapons := make([]api.SessionWeaponSummary, 0)
-		zero := 0
-		zeroF := 0.0
-		return &api.SessionSummary{
-			TotalMatches: &zero,
-			Wins:         &zero,
-			Losses:       &zero,
-			WinRate:      &zeroF,
-			Kills:        &zero,
-			Deaths:       &zero,
-			Assists:      &zero,
-			KDRatio:      &zeroF,
-			KDARatio:     &zeroF,
-			ModesPlayed:  &emptyModes,
-			TopWeapons:   &emptyWeapons,
-		}, nil
+		return emptySessionSummary(), nil
 	}
-
 	if s.aggregateService == nil {
 		return nil, fmt.Errorf("aggregate service is not configured")
 	}
@@ -43,201 +34,130 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 		return nil, fmt.Errorf("failed to fetch aggregates for session %s: %w", ses.ID, err)
 	}
 
-	totalMatches := len(aggregates)
-	wins := 0
-	kills := 0
-	deaths := 0
-	assists := 0
-
-	modesMap := make(map[string]struct{})
-	var modesOrder []string
-
-	type weaponInfo struct {
-		hash         int64
-		kills        int
-		fallbackName string
-		fallbackIcon string
-	}
-	weaponKillsMap := make(map[int64]*weaponInfo)
-	var missingModeActivityHashes []int64
-
+	acc := newSummaryAccumulator(len(aggregates))
 	for _, agg := range aggregates {
-		if agg.ActivityDetails.Mode != nil && *agg.ActivityDetails.Mode != "" {
-			modeName := *agg.ActivityDetails.Mode
-			if _, exists := modesMap[modeName]; !exists {
-				modesMap[modeName] = struct{}{}
-				modesOrder = append(modesOrder, modeName)
-			}
-		} else if agg.ActivityDetails.ActivityHash != 0 {
-			missingModeActivityHashes = append(missingModeActivityHashes, agg.ActivityDetails.ActivityHash)
-		} else if agg.ActivityDetails.ReferenceID != 0 {
-			missingModeActivityHashes = append(missingModeActivityHashes, agg.ActivityDetails.ReferenceID)
-		}
-
-		perf, ok := agg.Performance[ses.CharacterID]
-		if !ok {
-			continue
-		}
-
-		if perf.PlayerStats.Standing != nil && perf.PlayerStats.Standing.Value != nil && *perf.PlayerStats.Standing.Value == 0 {
-			wins++
-		}
-		if perf.PlayerStats.Kills != nil && perf.PlayerStats.Kills.Value != nil {
-			kills += int(*perf.PlayerStats.Kills.Value)
-		}
-		if perf.PlayerStats.Deaths != nil && perf.PlayerStats.Deaths.Value != nil {
-			deaths += int(*perf.PlayerStats.Deaths.Value)
-		}
-		if perf.PlayerStats.Assists != nil && perf.PlayerStats.Assists.Value != nil {
-			assists += int(*perf.PlayerStats.Assists.Value)
-		}
-
-		for mapKey, weaponMetrics := range perf.Weapons {
-			var refID int64
-			if weaponMetrics.ReferenceID != nil && *weaponMetrics.ReferenceID != 0 {
-				refID = *weaponMetrics.ReferenceID
-			} else if parsed, err := strconv.ParseInt(mapKey, 10, 64); err == nil {
-				refID = parsed
-			}
-			if refID == 0 {
-				continue
-			}
-
-			wKills := 0
-			if weaponMetrics.Stats != nil {
-				for statKey, statVal := range *weaponMetrics.Stats {
-					if statKey == "uniqueWeaponKills" || (statVal.Name != nil && *statVal.Name == "uniqueWeaponKills") {
-						if statVal.Basic.Value != nil {
-							wKills += int(*statVal.Basic.Value)
-						}
-					}
-				}
-			}
-
-			info, exists := weaponKillsMap[refID]
-			if !exists {
-				info = &weaponInfo{hash: refID}
-				weaponKillsMap[refID] = info
-			}
-			info.kills += wKills
-
-			if weaponMetrics.Display != nil {
-				if info.fallbackName == "" && weaponMetrics.Display.Name != "" {
-					info.fallbackName = weaponMetrics.Display.Name
-				}
-				if info.fallbackIcon == "" && weaponMetrics.Display.Icon != nil {
-					info.fallbackIcon = *weaponMetrics.Display.Icon
-				}
-			}
-		}
+		acc.addAggregate(agg, ses.CharacterID)
 	}
 
-	if len(missingModeActivityHashes) > 0 && s.manifestService != nil {
-		actDefs, err := s.manifestService.GetActivitiesByIDs(ctx, missingModeActivityHashes)
-		if err == nil && len(actDefs) > 0 {
-			var modeIDs []int64
-			for _, def := range actDefs {
-				if def.DirectActivityModeHash != 0 {
-					modeIDs = append(modeIDs, int64(def.DirectActivityModeHash))
-				}
-				for _, mHash := range def.ActivityModeHashes {
-					modeIDs = append(modeIDs, int64(mHash))
-				}
-			}
-			if len(modeIDs) > 0 {
-				modeDefs, err := s.manifestService.GetActivityModesByIDs(ctx, modeIDs)
-				if err == nil {
-					for _, mDef := range modeDefs {
-						name := mDef.DisplayProperties.Name
-						if name != "" {
-							if _, exists := modesMap[name]; !exists {
-								modesMap[name] = struct{}{}
-								modesOrder = append(modesOrder, name)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	losses := totalMatches - wins
-	var winRate, kdRatio, kdaRatio float64
-	if totalMatches > 0 {
-		winRate = math.Round((float64(wins)/float64(totalMatches))*100) / 100
-		denom := float64(deaths)
-		if denom < 1 {
-			denom = 1
-		}
-		kdRatio = math.Round((float64(kills)/denom)*100) / 100
-		kdaRatio = math.Round(((float64(kills)+float64(assists)*0.5)/denom)*100) / 100
-	}
-
-	weaponHashes := make([]int64, 0, len(weaponKillsMap))
-	for h := range weaponKillsMap {
-		weaponHashes = append(weaponHashes, h)
-	}
-
-	itemDefs := make(map[string]destiny.ItemDefinition)
-	if len(weaponHashes) > 0 && s.manifestService != nil {
-		if fetched, err := s.manifestService.GetItemsByIDs(ctx, weaponHashes); err == nil {
-			itemDefs = fetched
-		}
-	}
-
-	topWeapons := make([]api.SessionWeaponSummary, 0, len(weaponKillsMap))
-	for hash, info := range weaponKillsMap {
-		name := info.fallbackName
-		icon := info.fallbackIcon
-
-		if def, found := itemDefs[strconv.FormatInt(hash, 10)]; found {
-			if def.DisplayProperties.Name != "" {
-				name = def.DisplayProperties.Name
-			}
-			if def.DisplayProperties.Icon != "" {
-				icon = def.DisplayProperties.Icon
-			}
-		}
-
-		if name == "" {
-			name = "Unknown Weapon"
-		}
-		if icon != "" && !strings.HasPrefix(icon, "http") {
-			icon = fmt.Sprintf("https://www.bungie.net%s", icon)
-		}
-
-		wName := name
-		wIcon := icon
-		wKills := info.kills
-		topWeapons = append(topWeapons, api.SessionWeaponSummary{
-			Name:  &wName,
-			Icon:  &wIcon,
-			Kills: &wKills,
-		})
-	}
-
-	sort.Slice(topWeapons, func(i, j int) bool {
-		ki, kj := *topWeapons[i].Kills, *topWeapons[j].Kills
-		if ki != kj {
-			return ki > kj
-		}
-		return *topWeapons[i].Name < *topWeapons[j].Name
-	})
-
-	if len(topWeapons) > 5 {
-		topWeapons = topWeapons[:5]
-	}
-
-	if modesOrder == nil {
-		modesOrder = make([]string, 0)
-	}
+	s.resolveMissingModes(ctx, acc)
+	topWeapons := s.buildTopWeapons(ctx, acc)
+	summary := acc.buildSummary(topWeapons)
 
 	clog.WithGroupFields(ctx, "sessionService.computeSummary", clog.Fields{
 		"sessionId":    ses.ID,
-		"totalMatches": totalMatches,
-		"wins":         wins,
-		"losses":       losses,
+		"totalMatches": *summary.TotalMatches,
+		"wins":         *summary.Wins,
+		"losses":       *summary.Losses,
 	})
+	return summary, nil
+}
+
+func (s service) UpdateSessionSummary(ctx context.Context, sessionID string, summary *api.SessionSummary) error {
+	clog.WithGroupField(ctx, "sessionService.updateSummary", "sessionId", sessionID)
+	return s.store.updateSummary(ctx, sessionID, summary, s.now())
+}
+
+type summaryAccumulator struct {
+	totalMatches      int
+	wins              int
+	kills             int
+	deaths            int
+	assists           int
+	modes             *set.OrderedSet[string]
+	missingModeHashes []int64
+	weapons           map[int64]*weaponTally
+}
+
+func newSummaryAccumulator(totalMatches int) *summaryAccumulator {
+	return &summaryAccumulator{
+		totalMatches: totalMatches,
+		modes:        set.NewOrdered[string](),
+		weapons:      make(map[int64]*weaponTally),
+	}
+}
+
+func (a *summaryAccumulator) addAggregate(agg api.Aggregate, characterID string) {
+	a.recordMode(agg.ActivityDetails)
+
+	perf, ok := agg.Performance[characterID]
+	if !ok {
+		return
+	}
+	a.recordPlayerStats(perf.PlayerStats)
+	a.recordWeapons(perf.Weapons)
+}
+
+func (a *summaryAccumulator) recordMode(details api.ActivityHistory) {
+	switch {
+	case details.Mode != nil && *details.Mode != "":
+		a.addMode(*details.Mode)
+	case details.ActivityHash != 0:
+		a.missingModeHashes = append(a.missingModeHashes, details.ActivityHash)
+	case details.ReferenceID != 0:
+		a.missingModeHashes = append(a.missingModeHashes, details.ReferenceID)
+	}
+}
+
+func (a *summaryAccumulator) addMode(name string) {
+	if name != "" {
+		a.modes.Add(name)
+	}
+}
+
+func (a *summaryAccumulator) recordPlayerStats(stats api.PlayerStats) {
+	if isWin(stats) {
+		a.wins++
+	}
+	a.kills += statInt(stats.Kills)
+	a.deaths += statInt(stats.Deaths)
+	a.assists += statInt(stats.Assists)
+}
+
+func (a *summaryAccumulator) recordWeapons(weapons map[string]api.WeaponInstanceMetrics) {
+	for mapKey, metrics := range weapons {
+		refID := resolveWeaponRefID(mapKey, metrics)
+		if refID == 0 {
+			continue
+		}
+		tally := a.weaponTally(refID)
+		tally.kills += weaponKillCount(metrics)
+		tally.mergeFallbackDisplay(metrics.Display)
+	}
+}
+
+func (a *summaryAccumulator) weaponTally(refID int64) *weaponTally {
+	tally, exists := a.weapons[refID]
+	if !exists {
+		tally = &weaponTally{hash: refID}
+		a.weapons[refID] = tally
+	}
+	return tally
+}
+
+func (a *summaryAccumulator) weaponHashes() []int64 {
+	hashes := make([]int64, 0, len(a.weapons))
+	for h := range a.weapons {
+		hashes = append(hashes, h)
+	}
+	return hashes
+}
+
+func (a *summaryAccumulator) buildSummary(topWeapons []api.SessionWeaponSummary) *api.SessionSummary {
+	totalMatches := a.totalMatches
+	wins := a.wins
+	losses := totalMatches - wins
+	kills := a.kills
+	deaths := a.deaths
+	assists := a.assists
+	modes := a.modes.ToSlice()
+
+	var winRate, kdRatio, kdaRatio float64
+	if totalMatches > 0 {
+		winRate = round2(float64(wins) / float64(totalMatches))
+		denom := max(float64(deaths), 1.0)
+		kdRatio = round2(float64(kills) / denom)
+		kdaRatio = round2((float64(kills) + float64(assists)*0.5) / denom)
+	}
 
 	return &api.SessionSummary{
 		TotalMatches: &totalMatches,
@@ -249,12 +169,161 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 		Assists:      &assists,
 		KDRatio:      &kdRatio,
 		KDARatio:     &kdaRatio,
-		ModesPlayed:  &modesOrder,
+		ModesPlayed:  &modes,
 		TopWeapons:   &topWeapons,
-	}, nil
+	}
 }
 
-func (s service) UpdateSessionSummary(ctx context.Context, sessionID string, summary *api.SessionSummary) error {
-	clog.WithGroupField(ctx, "sessionService.updateSummary", "sessionId", sessionID)
-	return s.store.updateSummary(ctx, sessionID, summary, s.now())
+type weaponTally struct {
+	hash         int64
+	kills        int
+	fallbackName string
+	fallbackIcon string
+}
+
+func (w *weaponTally) mergeFallbackDisplay(display *api.Display) {
+	if display == nil {
+		return
+	}
+	if w.fallbackName == "" && display.Name != "" {
+		w.fallbackName = display.Name
+	}
+	if w.fallbackIcon == "" && display.Icon != nil {
+		w.fallbackIcon = *display.Icon
+	}
+}
+
+func (w *weaponTally) toSummary(defs map[string]destiny.ItemDefinition) api.SessionWeaponSummary {
+	name := w.fallbackName
+	icon := w.fallbackIcon
+
+	if def, found := defs[strconv.FormatInt(w.hash, 10)]; found {
+		if def.DisplayProperties.Name != "" {
+			name = def.DisplayProperties.Name
+		}
+		if def.DisplayProperties.Icon != "" {
+			icon = def.DisplayProperties.Icon
+		}
+	}
+
+	if name == "" {
+		name = unknownWeaponLabel
+	}
+	icon = formatBungieIconURL(icon)
+	kills := w.kills
+
+	return api.SessionWeaponSummary{
+		Name:  &name,
+		Icon:  &icon,
+		Kills: &kills,
+	}
+}
+
+func (s service) resolveMissingModes(ctx context.Context, acc *summaryAccumulator) {
+	if len(acc.missingModeHashes) == 0 || s.manifestService == nil {
+		return
+	}
+	actDefs, err := s.manifestService.GetActivitiesByIDs(ctx, acc.missingModeHashes)
+	if err != nil || len(actDefs) == 0 {
+		return
+	}
+
+	var modeIDs []int64
+	for _, def := range actDefs {
+		if def.DirectActivityModeHash != 0 {
+			modeIDs = append(modeIDs, int64(def.DirectActivityModeHash))
+		}
+		for _, mHash := range def.ActivityModeHashes {
+			modeIDs = append(modeIDs, int64(mHash))
+		}
+	}
+	if len(modeIDs) == 0 {
+		return
+	}
+
+	modeDefs, err := s.manifestService.GetActivityModesByIDs(ctx, modeIDs)
+	if err != nil {
+		return
+	}
+	for _, mDef := range modeDefs {
+		acc.addMode(mDef.DisplayProperties.Name)
+	}
+}
+
+func (s service) buildTopWeapons(ctx context.Context, acc *summaryAccumulator) []api.SessionWeaponSummary {
+	itemDefs := make(map[string]destiny.ItemDefinition)
+	if hashes := acc.weaponHashes(); len(hashes) > 0 && s.manifestService != nil {
+		if fetched, err := s.manifestService.GetItemsByIDs(ctx, hashes); err == nil {
+			itemDefs = fetched
+		}
+	}
+
+	topWeapons := make([]api.SessionWeaponSummary, 0, len(acc.weapons))
+	for _, tally := range acc.weapons {
+		topWeapons = append(topWeapons, tally.toSummary(itemDefs))
+	}
+
+	sort.Slice(topWeapons, func(i, j int) bool {
+		ki, kj := *topWeapons[i].Kills, *topWeapons[j].Kills
+		if ki != kj {
+			return ki > kj
+		}
+		return *topWeapons[i].Name < *topWeapons[j].Name
+	})
+
+	if len(topWeapons) > topWeaponsLimit {
+		topWeapons = topWeapons[:topWeaponsLimit]
+	}
+	return topWeapons
+}
+
+func emptySessionSummary() *api.SessionSummary {
+	return newSummaryAccumulator(0).buildSummary(make([]api.SessionWeaponSummary, 0))
+}
+
+func isWin(stats api.PlayerStats) bool {
+	return stats.Standing != nil && stats.Standing.Value != nil && *stats.Standing.Value == 0
+}
+
+func statInt(pair *api.StatsValuePair) int {
+	if pair == nil || pair.Value == nil {
+		return 0
+	}
+	return int(*pair.Value)
+}
+
+func resolveWeaponRefID(mapKey string, metrics api.WeaponInstanceMetrics) int64 {
+	if metrics.ReferenceID != nil && *metrics.ReferenceID != 0 {
+		return *metrics.ReferenceID
+	}
+	parsed, err := strconv.ParseInt(mapKey, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func weaponKillCount(metrics api.WeaponInstanceMetrics) int {
+	if metrics.Stats == nil {
+		return 0
+	}
+	kills := 0
+	for statKey, statVal := range *metrics.Stats {
+		isKillStat := statKey == uniqueWeaponKillsKey || (statVal.Name != nil && *statVal.Name == uniqueWeaponKillsKey)
+		if isKillStat && statVal.Basic.Value != nil {
+			kills += int(*statVal.Basic.Value)
+		}
+	}
+	return kills
+}
+
+func formatBungieIconURL(icon string) string {
+	if icon != "" && !strings.HasPrefix(icon, "http") {
+		return bungieAssetBaseURL + icon
+	}
+	return icon
+}
+
+func round2(v float64) float64 {
+	return math.Round(v*100) / 100
 }

@@ -29,16 +29,16 @@ type spyManifestService struct {
 	progressionCalls       atomic.Int32
 	damageTypesCalls       atomic.Int32
 
-	mu                        sync.Mutex
-	itemsByIDsRequests        [][]int64
-	perksByIDsRequests        [][]int64
-	activitiesByIDsRequests   [][]int64
-	activityModesByIDsReqs    [][]int64
-	itemsStore                map[int64]ItemDefinition
-	perksStore                map[int64]PerkDefinition
-	activitiesStore           map[int64]ActivityDefinition
-	activityModesStore        map[int64]ActivityModeDefinition
-	equipableItemSetsStore    map[string]EquipableItemSetDefinition
+	mu                      sync.Mutex
+	itemsByIDsRequests      [][]int64
+	perksByIDsRequests      [][]int64
+	activitiesByIDsRequests [][]int64
+	activityModesByIDsReqs  [][]int64
+	itemsStore              map[int64]ItemDefinition
+	perksStore              map[int64]PerkDefinition
+	activitiesStore         map[int64]ActivityDefinition
+	activityModesStore      map[int64]ActivityModeDefinition
+	equipableItemSetsStore  map[string]EquipableItemSetDefinition
 }
 
 func (s *spyManifestService) GetClasses(_ context.Context) (map[string]ClassDefinition, error) {
@@ -290,25 +290,6 @@ func TestCachedManifestServiceWrapper(t *testing.T) {
 	}
 	if spy.progressionCalls.Load() != 1 {
 		t.Fatalf("expected GetProgression(2083746873) to resolve from cached progressions without additional inner GetProgression call, got %d calls", spy.progressionCalls.Load())
-	}
-}
-
-func TestNormalizeAndChunkIDs(t *testing.T) {
-	got := normalizeUniqueIDs([]int64{0, 10, 20, 10, 0, 30})
-	if !slices.Equal(got, []int64{10, 20, 30}) {
-		t.Fatalf("unexpected normalized IDs: %v", got)
-	}
-	if len(normalizeUniqueIDs([]int64{0, 0})) != 0 {
-		t.Fatalf("expected empty slice for all-zero IDs")
-	}
-
-	ids := make([]int64, 65)
-	for i := range ids {
-		ids[i] = int64(i + 1)
-	}
-	chunks := chunkIDs(ids, manifestBatchSize)
-	if len(chunks) != 3 || len(chunks[0]) != 30 || len(chunks[1]) != 30 || len(chunks[2]) != 5 {
-		t.Fatalf("expected chunks of [30, 30, 5], got lens [%d, %d, %d]", len(chunks[0]), len(chunks[1]), len(chunks[2]))
 	}
 }
 

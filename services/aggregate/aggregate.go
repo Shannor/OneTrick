@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/utils"
-	"slices"
 	"sort"
 	"time"
 
@@ -57,90 +56,6 @@ type Service interface {
 const (
 	collection = "aggregates"
 )
-
-type aggregateStore interface {
-	getByActivityID(ctx context.Context, activityID string) (*api.Aggregate, error)
-	mergeSessionActivity(
-		ctx context.Context,
-		aggregateID string,
-		characterID string,
-		snapshotLink api.SnapshotLink,
-		performance api.InstancePerformance,
-		sessionIDs, snapshotIDs, characterIDs []string,
-		estimatedGameMode *api.GameMode,
-	) error
-	createAggregate(ctx context.Context, agg api.Aggregate) (api.Aggregate, error)
-}
-
-type firestoreAggregateStore struct {
-	db *firestore.Client
-}
-
-func (f *firestoreAggregateStore) getByActivityID(ctx context.Context, activityID string) (*api.Aggregate, error) {
-	iter := f.db.Collection(collection).
-		Where("activityId", "==", activityID).
-		Limit(1).
-		Documents(ctx)
-	for {
-		doc, err := iter.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		var agg api.Aggregate
-		if err := doc.DataTo(&agg); err != nil {
-			return nil, err
-		}
-		return &agg, nil
-	}
-	return nil, NotFound
-}
-
-func (f *firestoreAggregateStore) mergeSessionActivity(
-	ctx context.Context,
-	aggregateID string,
-	characterID string,
-	snapshotLink api.SnapshotLink,
-	performance api.InstancePerformance,
-	sessionIDs, snapshotIDs, characterIDs []string,
-	estimatedGameMode *api.GameMode,
-) error {
-	updates := map[string]any{
-		"snapshotLinks": map[string]any{
-			characterID: snapshotLink,
-		},
-		"performance": map[string]any{
-			characterID: performance,
-		},
-	}
-	if len(sessionIDs) > 0 {
-		updates["sessionIds"] = firestore.ArrayUnion(toInterfaceSlice(sessionIDs)...)
-	}
-	if len(snapshotIDs) > 0 {
-		updates["snapshotIds"] = firestore.ArrayUnion(toInterfaceSlice(snapshotIDs)...)
-	}
-	if len(characterIDs) > 0 {
-		updates["characterIds"] = firestore.ArrayUnion(toInterfaceSlice(characterIDs)...)
-	}
-	if estimatedGameMode != nil {
-		updates["activityHistory"] = map[string]any{
-			"estimatedGameMode": *estimatedGameMode,
-		}
-	}
-	_, err := f.db.Collection(collection).Doc(aggregateID).Set(ctx, updates, firestore.MergeAll)
-	return err
-}
-
-func (f *firestoreAggregateStore) createAggregate(ctx context.Context, agg api.Aggregate) (api.Aggregate, error) {
-	ref := f.db.Collection(collection).NewDoc()
-	agg.ID = ref.ID
-	if _, err := ref.Set(ctx, agg); err != nil {
-		return api.Aggregate{}, err
-	}
-	return agg, nil
-}
 
 type service struct {
 	DB    *firestore.Client
@@ -211,9 +126,9 @@ func (s *service) UpsertSessionActivity(
 		}
 		existing.SnapshotLinks[characterID] = snapshotLink
 		existing.Performance[characterID] = performance
-		existing.SessionIds = unionStrings(existing.SessionIds, sessionIDs)
-		existing.SnapshotIds = unionStrings(existing.SnapshotIds, snapshotIDs)
-		existing.CharacterIds = unionStrings(existing.CharacterIds, characterIDs)
+		existing.SessionIds = utils.UnionNonZero(existing.SessionIds, sessionIDs)
+		existing.SnapshotIds = utils.UnionNonZero(existing.SnapshotIds, snapshotIDs)
+		existing.CharacterIds = utils.UnionNonZero(existing.CharacterIds, characterIDs)
 		if backfillMode != nil {
 			existing.ActivityDetails.EstimatedGameMode = backfillMode
 		}
@@ -252,17 +167,6 @@ func (s *service) UpsertSessionActivity(
 		"updatedExisting": false,
 	})
 	return &created, nil
-}
-
-func unionStrings(base, additions []string) []string {
-	out := slices.Clone(base)
-	for _, add := range additions {
-		if add == "" || slices.Contains(out, add) {
-			continue
-		}
-		out = append(out, add)
-	}
-	return out
 }
 
 func (s *service) Update(ctx context.Context, aggregateID string, updateFn func(data map[string]any) error, shouldMerge bool) error {

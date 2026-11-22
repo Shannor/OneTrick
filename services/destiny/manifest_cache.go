@@ -2,6 +2,7 @@ package destiny
 
 import (
 	"context"
+	"oneTrick/utils"
 	"strconv"
 	"sync"
 
@@ -97,7 +98,7 @@ func (c *hashCache[T]) getOrLoadMany(
 	colCache *collectionCache[T],
 	loader func(context.Context, []int64) (map[string]T, error),
 ) (map[string]T, error) {
-	uniqueIDs := normalizeUniqueIDs(ids)
+	uniqueIDs := utils.UniqueNonZero(ids)
 	if len(uniqueIDs) == 0 {
 		return make(map[string]T), nil
 	}

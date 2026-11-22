@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/utils"
 	"slices"
 	"testing"
 )
@@ -144,9 +145,9 @@ func (m *memAggregateStore) mergeSessionActivity(
 	}
 	doc.SnapshotLinks[characterID] = snapshotLink
 	doc.Performance[characterID] = performance
-	doc.SessionIds = unionStrings(doc.SessionIds, sessionIDs)
-	doc.SnapshotIds = unionStrings(doc.SnapshotIds, snapshotIDs)
-	doc.CharacterIds = unionStrings(doc.CharacterIds, characterIDs)
+	doc.SessionIds = utils.UnionNonZero(doc.SessionIds, sessionIDs)
+	doc.SnapshotIds = utils.UnionNonZero(doc.SnapshotIds, snapshotIDs)
+	doc.CharacterIds = utils.UnionNonZero(doc.CharacterIds, characterIDs)
 	if estimatedGameMode != nil {
 		doc.ActivityDetails.EstimatedGameMode = estimatedGameMode
 	}
