@@ -31,6 +31,7 @@ type snapshotStore interface {
 	updateMergedFromIDs(ctx context.Context, targetID string, mergedFromIDs []string, updatedAt time.Time) error
 	clearMergeArchiveFields(ctx context.Context, snapshotID string, updatedAt time.Time) error
 	removeMergedFromID(ctx context.Context, targetID, sourceID string) error
+	updateArmorSetBonuses(ctx context.Context, snapshotID string, bonuses []api.ArmorSetBonus, updatedAt time.Time) error
 	deleteSnapshotAndHistory(ctx context.Context, snapshotID string) error
 }
 
@@ -224,6 +225,14 @@ func (f *firestoreStore) removeMergedFromID(ctx context.Context, targetID, sourc
 	if status.Code(err) == codes.NotFound {
 		return nil
 	}
+	return err
+}
+
+func (f *firestoreStore) updateArmorSetBonuses(ctx context.Context, snapshotID string, bonuses []api.ArmorSetBonus, updatedAt time.Time) error {
+	_, err := f.db.Collection(collection).Doc(snapshotID).Update(ctx, []firestore.Update{
+		{Path: "armorSetBonuses", Value: bonuses},
+		{Path: "updatedAt", Value: updatedAt},
+	})
 	return err
 }
 

@@ -1,8 +1,10 @@
 package destiny
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"strconv"
@@ -567,7 +569,7 @@ func TestGenerateArmorSetBonuses(t *testing.T) {
 			Hash: 9104,
 			DisplayProperties: DamageTypeDisplayProperties{
 				Name:        "Bushido 4pc",
-				Description: "Damage resist",
+				Description: "",
 				Icon:        "",
 			},
 		},
@@ -627,7 +629,7 @@ func TestGenerateArmorSetBonuses(t *testing.T) {
 		}
 	})
 
-	t.Run("4-piece unlocks sorted 2pc and 4pc perks", func(t *testing.T) {
+	t.Run("4-piece unlocks sorted 2pc and 4pc perks and omits empty description and iconPath", func(t *testing.T) {
 		loadout := api.Loadout{
 			helmetKey:    makeArmor(101),
 			gauntletsKey: makeArmor(102),
@@ -640,6 +642,21 @@ func TestGenerateArmorSetBonuses(t *testing.T) {
 		}
 		if got[0].ActivePerks[0].RequiredSetCount != 2 || got[0].ActivePerks[1].RequiredSetCount != 4 {
 			t.Fatalf("expected activePerks sorted by requiredSetCount asc, got %+v", got[0].ActivePerks)
+		}
+
+		bushido4 := api.Loadout{
+			helmetKey:    makeArmor(201),
+			gauntletsKey: makeArmor(202),
+			chestKey:     makeArmor(203),
+			legKey:       makeArmor(204),
+		}
+		gotBushido := generateArmorSetBonuses(context.Background(), bushido4, itemSets, perks)
+		if len(gotBushido) != 1 || len(gotBushido[0].ActivePerks) != 2 {
+			t.Fatalf("expected 2 Bushido perks, got %+v", gotBushido)
+		}
+		p4 := gotBushido[0].ActivePerks[1]
+		if p4.Description != nil || p4.IconPath != nil {
+			t.Fatalf("expected empty description and iconPath to remain nil, got desc=%v icon=%v", p4.Description, p4.IconPath)
 		}
 	})
 
@@ -691,7 +708,7 @@ func TestGenerateArmorSetBonuses(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to BaseInfo.EquipableItemSetHash and logs clog warning on missing perk", func(t *testing.T) {
+	t.Run("falls back to BaseInfo.EquipableItemSetHash and logs string clog warning on missing perk", func(t *testing.T) {
 		fallbackSetHash := setBHash
 		loadout := api.Loadout{
 			helmetKey: {
@@ -714,10 +731,28 @@ func TestGenerateArmorSetBonuses(t *testing.T) {
 		if got != nil {
 			t.Fatalf("expected nil bonuses when unlocked perk is missing from manifest, got %+v", got)
 		}
-		if !clog.BagFromContext(ctx).HasWarning() {
+		bag := clog.BagFromContext(ctx)
+		if !bag.HasWarning() {
 			t.Fatal("expected clog warning when set bonus perk hash is missing from d2SandboxPerks")
 		}
+		parsed := marshalFieldBag(t, bag)
+		dsGroup, _ := parsed["destinyService"].(map[string]any)
+		genGroup, _ := dsGroup["generateArmorSetBonuses"].(map[string]any)
+		if w, ok := genGroup["warning"].(string); !ok || w == "" {
+			t.Fatalf("expected plain string warning for monitor-logs compatibility, got %#v", genGroup["warning"])
+		}
 	})
+}
+
+func marshalFieldBag(t *testing.T, bag *clog.FieldBag) map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).LogAttrs(context.Background(), slog.LevelInfo, "test", bag.Attrs()...)
+	var parsed map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("failed to unmarshal FieldBag JSON: %v", err)
+	}
+	return parsed
 }
 
 type failingItemSetsManifest struct {
@@ -756,7 +791,17 @@ func TestBuildLoadout_DegradesGracefullyWhenEquipableItemSetsFails(t *testing.T)
 	if bonuses != nil {
 		t.Fatalf("expected nil armorSetBonuses on GetEquipableItemSets failure, got %+v", bonuses)
 	}
-	if !clog.BagFromContext(ctx).HasWarning() {
+	bag := clog.BagFromContext(ctx)
+	if !bag.HasWarning() {
 		t.Fatal("expected clog warning when GetEquipableItemSets fails")
+	}
+	parsed := marshalFieldBag(t, bag)
+	dsGroup, _ := parsed["destinyService"].(map[string]any)
+	buildGroup, _ := dsGroup["buildLoadout"].(map[string]any)
+	if w, ok := buildGroup["warning"].(string); !ok || w == "" {
+		t.Fatalf("expected plain string warning in buildLoadout, got %#v", buildGroup["warning"])
+	}
+	if errStr, ok := buildGroup["itemSetsError"].(string); !ok || errStr == "" {
+		t.Fatalf("expected itemSetsError recorded in buildLoadout, got %#v", buildGroup["itemSetsError"])
 	}
 }

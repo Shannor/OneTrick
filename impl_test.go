@@ -1226,6 +1226,16 @@ func TestRunSessionTickHandler(t *testing.T) {
 		if sesMock.capturedOpts.DryRun || sesMock.capturedOpts.SkipSave {
 			t.Fatalf("expected default options for nil body, got %+v", sesMock.capturedOpts)
 		}
+
+		// Empty HTTP body rejected with 400 per OpenAPI required requestBody
+		reqEmpty := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", nil)
+		reqEmpty.Header.Set("Content-Type", "application/json")
+		reqEmpty.Header.Set("X-Internal-API-Key", "secret-tick-key")
+		wEmpty := httptest.NewRecorder()
+		r.ServeHTTP(wEmpty, reqEmpty)
+		if wEmpty.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request when required JSON body is omitted, got %d: %s", wEmpty.Code, wEmpty.Body.String())
+		}
 	})
 
 	t.Run("explicit dryRun and skipSave options are forwarded and enriched via clog", func(t *testing.T) {

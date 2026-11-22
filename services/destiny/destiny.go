@@ -415,8 +415,9 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 
 	itemSets, err := a.ManifestService.GetEquipableItemSets(ctx)
 	if err != nil {
-		clog.WithGroupField(ctx, "destinyService.buildLoadout", "warning", clog.Fields{
-			"type": "equipable_item_sets",
+		clog.WithGroupFields(ctx, "destinyService.buildLoadout", clog.Fields{
+			"warning":       "failed to get equipable item sets",
+			"itemSetsError": err.Error(),
 		})
 		itemSets = nil
 	}

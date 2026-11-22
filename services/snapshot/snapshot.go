@@ -212,6 +212,19 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 			}
 		}
 
+		if (existingSnapshot.ArmorSetBonuses == nil || len(*existingSnapshot.ArmorSetBonuses) == 0) &&
+			snapshot.ArmorSetBonuses != nil && len(*snapshot.ArmorSetBonuses) > 0 {
+			if err := s.store.updateArmorSetBonuses(ctx, existingSnapshot.ID, *snapshot.ArmorSetBonuses, time.Now()); err != nil {
+				clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+					"warning":         "failed to backfill armor set bonuses on existing snapshot",
+					"setBonusesError": err.Error(),
+				})
+			} else {
+				existingSnapshot.ArmorSetBonuses = snapshot.ArmorSetBonuses
+				clog.WithGroupField(ctx, "snapshotService.create", "backfilledArmorSetBonuses", true)
+			}
+		}
+
 		clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
 			"snapshotId": existingSnapshot.ID,
 			"isExisting": true,

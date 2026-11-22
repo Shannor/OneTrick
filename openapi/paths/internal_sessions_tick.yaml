@@ -9,7 +9,8 @@ post:
       schema:
         type: string
   requestBody:
-    required: false
+    required: true
+    description: JSON options object (pass `{}` to run with default options)
     content:
       application/json:
         schema:

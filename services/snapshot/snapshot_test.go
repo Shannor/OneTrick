@@ -220,6 +220,18 @@ func (m *memSnapshotStore) removeMergedFromID(_ context.Context, targetID, sourc
 	return nil
 }
 
+func (m *memSnapshotStore) updateArmorSetBonuses(_ context.Context, snapshotID string, bonuses []api.ArmorSetBonus, updatedAt time.Time) error {
+	doc, ok := m.docs[snapshotID]
+	if !ok {
+		return NotFound
+	}
+	cloned := cloneSnapshot(api.CharacterSnapshot{ArmorSetBonuses: &bonuses})
+	doc.ArmorSetBonuses = cloned.ArmorSetBonuses
+	doc.UpdatedAt = updatedAt
+	m.docs[snapshotID] = doc
+	return nil
+}
+
 func (m *memSnapshotStore) deleteSnapshotAndHistory(_ context.Context, snapshotID string) error {
 	delete(m.docs, snapshotID)
 	delete(m.histories, snapshotID)
@@ -1065,6 +1077,42 @@ func TestCloneSnapshotAndSaveRoundTripArmorSetBonuses(t *testing.T) {
 		}
 		if saved.ArmorSetBonuses != nil {
 			t.Fatalf("expected nil ArmorSetBonuses when empty, got %+v", saved.ArmorSetBonuses)
+		}
+	})
+
+	t.Run("Save self-heals missing ArmorSetBonuses on existing snapshot hash match", func(t *testing.T) {
+		now := time.Now()
+		store := newMemSnapshotStore()
+		d2Fake := &fakeSnapshotD2Service{
+			loadout: loadout,
+			stats:   map[string]api.ClassStat{},
+			bonuses: nil,
+			ts:      &now,
+		}
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service:   d2Fake,
+		}
+
+		initial, err := svc.Save(context.Background(), "user-1", "4611686018467484863", "char-1")
+		if err != nil {
+			t.Fatalf("initial Save failed: %v", err)
+		}
+		if initial.ArmorSetBonuses != nil {
+			t.Fatalf("expected nil ArmorSetBonuses on initial degraded save, got %+v", initial.ArmorSetBonuses)
+		}
+
+		d2Fake.bonuses = bonuses
+		healed, err := svc.Save(context.Background(), "user-1", "4611686018467484863", "char-1")
+		if err != nil {
+			t.Fatalf("second Save failed: %v", err)
+		}
+		if healed.ID != initial.ID {
+			t.Fatalf("expected hash match to reuse snapshot %q, got %q", initial.ID, healed.ID)
+		}
+		if healed.ArmorSetBonuses == nil || len(*healed.ArmorSetBonuses) != 2 {
+			t.Fatalf("expected self-healed ArmorSetBonuses on reused snapshot, got %+v", healed.ArmorSetBonuses)
 		}
 	})
 }

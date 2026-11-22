@@ -834,8 +834,8 @@ func generateArmorSetBonuses(
 			}
 			perkDef, ok := perks[strconv.FormatInt(setPerk.SandboxPerkHash, 10)]
 			if !ok {
-				clog.WithGroupField(ctx, "destinyService.generateArmorSetBonuses", "warning", clog.Fields{
-					"type":     "missing_set_bonus_perk",
+				clog.WithGroupFields(ctx, "destinyService.generateArmorSetBonuses", clog.Fields{
+					"warning":  "missing set bonus perk in manifest",
 					"setHash":  setHash,
 					"perkHash": setPerk.SandboxPerkHash,
 				})
@@ -845,12 +845,15 @@ func generateArmorSetBonuses(
 			if perkDef.DisplayProperties.Icon != "" {
 				iconPath = new(setBaseBungieURL(&perkDef.DisplayProperties.Icon))
 			}
-			desc := perkDef.DisplayProperties.Description
+			var desc *string
+			if perkDef.DisplayProperties.Description != "" {
+				desc = new(perkDef.DisplayProperties.Description)
+			}
 			activePerks = append(activePerks, api.ArmorSetBonusPerk{
 				RequiredSetCount: setPerk.RequiredSetCount,
 				Hash:             setPerk.SandboxPerkHash,
 				Name:             perkDef.DisplayProperties.Name,
-				Description:      &desc,
+				Description:      desc,
 				IconPath:         iconPath,
 			})
 		}
