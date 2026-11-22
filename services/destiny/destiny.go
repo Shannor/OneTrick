@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/ptr"
 	"oneTrick/set"
 	"slices"
 	"strconv"
@@ -105,9 +104,9 @@ func getActivity(a *service, ctx context.Context, membershipID string, membershi
 		mID,
 		cID,
 		&bungie.Destiny2GetActivityHistoryParams{
-			Count: ptr.Of(int32(count)),
-			Mode:  ptr.Of(int32(mode)),
-			Page:  ptr.Of(int32(page)),
+			Count: new(int32(count)),
+			Mode:  new(int32(mode)),
+			Page:  new(int32(page)),
 		},
 	)
 	if err != nil {

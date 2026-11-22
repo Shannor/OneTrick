@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/generator"
-	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
@@ -71,9 +70,9 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 		UserID:       userID,
 		StartedAt:    time.Now(),
 		CharacterID:  characterID,
-		Name:         ptr.Of(generator.SessionName()),
+		Name:         new(generator.SessionName()),
 		AggregateIDs: make([]string, 0),
-		Status:       ptr.Of(api.SessionPending),
+		Status:       new(api.SessionPending),
 		StartedBy:    &startedBy,
 	}
 
@@ -247,7 +246,7 @@ func (s service) Complete(ctx context.Context, ID string) error {
 			return fmt.Errorf("failed to complete session: %w", err)
 		}
 		session.CompletedAt = &completedAt
-		session.Status = ptr.Of(api.SessionComplete)
+		session.Status = new(api.SessionComplete)
 	} else {
 		clog.WithGroupField(ctx, "sessionService.complete", "warning", "session already completed")
 	}

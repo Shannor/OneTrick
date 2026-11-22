@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
-	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/utils"
@@ -41,7 +40,7 @@ func newMemSnapshotStore(initial ...api.CharacterSnapshot) *memSnapshotStore {
 func cloneSnapshot(s api.CharacterSnapshot) api.CharacterSnapshot {
 	out := s
 	if s.MergedIntoID != nil {
-		out.MergedIntoID = ptr.Of(*s.MergedIntoID)
+		out.MergedIntoID = new(*s.MergedIntoID)
 	}
 	if s.MergedAt != nil {
 		t := *s.MergedAt
@@ -141,7 +140,7 @@ func (m *memSnapshotStore) archiveSource(_ context.Context, sourceID, targetID s
 	if !ok {
 		return NotFound
 	}
-	doc.MergedIntoID = ptr.Of(targetID)
+	doc.MergedIntoID = new(targetID)
 	t := mergedAt
 	doc.MergedAt = &t
 	doc.UpdatedAt = mergedAt
@@ -155,7 +154,7 @@ func (m *memSnapshotStore) repointArchivedChild(_ context.Context, childID, targ
 	if !ok {
 		return nil
 	}
-	doc.MergedIntoID = ptr.Of(targetID)
+	doc.MergedIntoID = new(targetID)
 	doc.UpdatedAt = updatedAt
 	m.docs[childID] = doc
 	return nil
@@ -472,7 +471,7 @@ func TestServiceMergeSoftArchiveFlattenAndAggregateDeduplication(t *testing.T) {
 		SnapshotLinks: map[string]api.SnapshotLink{
 			"char-1": {
 				CharacterID: "char-1",
-				SnapshotID:  ptr.Of("snap-a"),
+				SnapshotID:  new("snap-a"),
 			},
 		},
 	})
@@ -562,7 +561,7 @@ func TestCreateAutoForwardsArchivedHashAndHandlesDeletedTargetFallback(t *testin
 		CharacterID:  "char-1",
 		Hash:         hashA,
 		Loadout:      loadoutA,
-		MergedIntoID: ptr.Of("snap-b"),
+		MergedIntoID: new("snap-b"),
 		MergedAt:     &now,
 	}
 	snapB := api.CharacterSnapshot{
@@ -571,7 +570,7 @@ func TestCreateAutoForwardsArchivedHashAndHandlesDeletedTargetFallback(t *testin
 		CharacterID:   "char-1",
 		Hash:          hashB,
 		Loadout:       loadoutB,
-		MergedFromIDs: ptr.Of([]string{"snap-a"}),
+		MergedFromIDs: new([]string{"snap-a"}),
 	}
 
 	store := newMemSnapshotStore(snapA, snapB)
@@ -622,21 +621,21 @@ func TestDeleteCleansUpMergeRelationships(t *testing.T) {
 		ID:           "snap-a",
 		UserID:       "user-1",
 		CharacterID:  "char-1",
-		MergedIntoID: ptr.Of("snap-c"),
+		MergedIntoID: new("snap-c"),
 		MergedAt:     &now,
 	}
 	snapB := api.CharacterSnapshot{
 		ID:           "snap-b",
 		UserID:       "user-1",
 		CharacterID:  "char-1",
-		MergedIntoID: ptr.Of("snap-c"),
+		MergedIntoID: new("snap-c"),
 		MergedAt:     &now,
 	}
 	snapC := api.CharacterSnapshot{
 		ID:            "snap-c",
 		UserID:        "user-1",
 		CharacterID:   "char-1",
-		MergedFromIDs: ptr.Of([]string{"snap-a", "snap-b"}),
+		MergedFromIDs: new([]string{"snap-a", "snap-b"}),
 	}
 
 	store := newMemSnapshotStore(snapA, snapB, snapC)
@@ -880,5 +879,3 @@ func TestCanMergeServerTickVsBackendEffectiveInstanceID(t *testing.T) {
 		t.Fatal("expected two server-tick snapshots with different weapon rolls of the same itemHash NOT to be mergeable")
 	}
 }
-
-

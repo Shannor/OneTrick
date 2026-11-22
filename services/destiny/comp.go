@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/ptr"
 	"time"
 
 	clog "github.com/Shannor/canonical-logger"
@@ -63,20 +62,20 @@ func extractCompetitiveRank(
 				stepIndexPtr = &idx
 				if progDef != nil && idx >= 0 && idx < len(progDef.Steps) {
 					if progDef.Steps[idx].StepName != "" {
-						divisionNamePtr = ptr.Of(progDef.Steps[idx].StepName)
+						divisionNamePtr = new(progDef.Steps[idx].StepName)
 					}
 					if progDef.Steps[idx].Icon != "" {
-						iconPtr = ptr.Of(progDef.Steps[idx].Icon)
+						iconPtr = new(progDef.Steps[idx].Icon)
 					}
 				}
 			}
 			if divisionNamePtr == nil {
 				if step := progDef.StepForPoints(points); step != nil {
 					if step.StepName != "" {
-						divisionNamePtr = ptr.Of(step.StepName)
+						divisionNamePtr = new(step.StepName)
 					}
 					if step.Icon != "" {
-						iconPtr = ptr.Of(step.Icon)
+						iconPtr = new(step.Icon)
 					}
 				}
 			}
@@ -87,7 +86,7 @@ func extractCompetitiveRank(
 				StepIndex:    stepIndexPtr,
 				DivisionName: divisionNamePtr,
 				Icon:         iconPtr,
-				RecordedAt:   ptr.Of(recordedAt),
+				RecordedAt:   new(recordedAt),
 			}, nil
 		}
 	}
@@ -100,10 +99,10 @@ func extractCompetitiveRank(
 				var divisionNamePtr, iconPtr *string
 				if step := progDef.StepForPoints(points); step != nil {
 					if step.StepName != "" {
-						divisionNamePtr = ptr.Of(step.StepName)
+						divisionNamePtr = new(step.StepName)
 					}
 					if step.Icon != "" {
-						iconPtr = ptr.Of(step.Icon)
+						iconPtr = new(step.Icon)
 					}
 				}
 				clog.WithGroupField(ctx, "destinyService.getCompetitiveRank", "source", "metrics")
@@ -111,7 +110,7 @@ func extractCompetitiveRank(
 					Points:       points,
 					DivisionName: divisionNamePtr,
 					Icon:         iconPtr,
-					RecordedAt:   ptr.Of(recordedAt),
+					RecordedAt:   new(recordedAt),
 				}, nil
 			}
 		}

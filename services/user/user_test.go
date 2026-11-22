@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"oneTrick/api"
-	"oneTrick/ptr"
 	"oneTrick/services/destiny"
 	"reflect"
 	"strconv"
@@ -184,12 +183,12 @@ func TestUserServiceSearch(t *testing.T) {
 			results: []api.SearchUserResult{
 				{
 					IsRecorded:            false,
-					BungieNetMembershipID: ptr.Of("bnet-99"),
+					BungieNetMembershipID: new("bnet-99"),
 					PrimaryMembershipID:   "pm-99",
-					PrimaryMembershipType: ptr.Of(int64(2)),
+					PrimaryMembershipType: new(int64(2)),
 					DisplayName:           "RandomGuardian",
 					UniqueName:            "RandomGuardian#9999",
-					IconPath:              ptr.Of("/icons/psn.png"),
+					IconPath:              new("/icons/psn.png"),
 					AlternateNames:        []string{"RandomPSN"},
 				},
 			},
@@ -239,7 +238,7 @@ func TestUserServiceSearch(t *testing.T) {
 			results: []api.SearchUserResult{
 				{
 					IsRecorded:            false,
-					BungieNetMembershipID: ptr.Of("bnet-unrec-1"),
+					BungieNetMembershipID: new("bnet-unrec-1"),
 					PrimaryMembershipID:   "pm-unrec-1",
 					DisplayName:           "GuardianAlpha",
 					UniqueName:            "GuardianAlpha#1111",
@@ -247,12 +246,12 @@ func TestUserServiceSearch(t *testing.T) {
 				},
 				{
 					IsRecorded:            false,
-					BungieNetMembershipID: ptr.Of("bnet-rec"),
+					BungieNetMembershipID: new("bnet-rec"),
 					PrimaryMembershipID:   "pm-rec",
-					PrimaryMembershipType: ptr.Of(int64(3)),
+					PrimaryMembershipType: new(int64(3)),
 					DisplayName:           "Guardian",
 					UniqueName:            "Guardian#4321",
-					IconPath:              ptr.Of("/icons/steam.png"),
+					IconPath:              new("/icons/steam.png"),
 					AlternateNames:        []string{"GuardianSteam"},
 				},
 			},

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"oneTrick/clients/bungie"
-	"oneTrick/ptr"
 	"reflect"
 	"testing"
 )
@@ -56,49 +55,49 @@ func TestSearchPrefixMappingAndFiltering(t *testing.T) {
 			HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 			JSON200: &bungie.UserSearchResponse{
 				SearchResponse: &bungie.SearchResponse{
-					HasMore: ptr.Of(true),
+					HasMore: new(true),
 					SearchResults: &[]bungie.UserSearchDetail{
 						{
-							BungieNetMembershipId:       ptr.Of("999001"),
-							BungieGlobalDisplayName:     ptr.Of("Weegee"),
-							BungieGlobalDisplayNameCode: ptr.Of(int16(42)),
+							BungieNetMembershipId:       new("999001"),
+							BungieGlobalDisplayName:     new("Weegee"),
+							BungieGlobalDisplayNameCode: new(int16(42)),
 							DestinyMemberships: &[]bungie.UserUserInfoCard{
 								{
-									MembershipId:              ptr.Of("4611686018467484863"),
-									MembershipType:            ptr.Of(int32(3)),
-									DisplayName:               ptr.Of("WeegeeSteam"),
-									IconPath:                  ptr.Of("/img/theme/bungienet/icons/steamLogo.png"),
-									CrossSaveOverride:         ptr.Of(int32(0)),
+									MembershipId:              new("4611686018467484863"),
+									MembershipType:            new(int32(3)),
+									DisplayName:               new("WeegeeSteam"),
+									IconPath:                  new("/img/theme/bungienet/icons/steamLogo.png"),
+									CrossSaveOverride:         new(int32(0)),
 									ApplicableMembershipTypes: &[]int32{3},
 								},
 								{
-									MembershipId:              ptr.Of("4611686018400000001"),
-									MembershipType:            ptr.Of(int32(1)),
-									DisplayName:               ptr.Of("WeegeeXbox"),
-									CrossSaveOverride:         ptr.Of(int32(3)),
+									MembershipId:              new("4611686018400000001"),
+									MembershipType:            new(int32(1)),
+									DisplayName:               new("WeegeeXbox"),
+									CrossSaveOverride:         new(int32(3)),
 									ApplicableMembershipTypes: &[]int32{},
 								},
 								{
-									MembershipId:              ptr.Of("4611686018400000002"),
-									MembershipType:            ptr.Of(int32(2)),
-									DisplayName:               ptr.Of("WeegeeSteam"),
-									CrossSaveOverride:         ptr.Of(int32(3)),
+									MembershipId:              new("4611686018400000002"),
+									MembershipType:            new(int32(2)),
+									DisplayName:               new("WeegeeSteam"),
+									CrossSaveOverride:         new(int32(3)),
 									ApplicableMembershipTypes: &[]int32{},
 								},
 							},
 						},
 						{
 							// Bungie.net account with zero Destiny memberships should be filtered out.
-							BungieNetMembershipId:       ptr.Of("999002"),
-							BungieGlobalDisplayName:     ptr.Of("WeegeeNoD2"),
-							BungieGlobalDisplayNameCode: ptr.Of(int16(1234)),
+							BungieNetMembershipId:       new("999002"),
+							BungieGlobalDisplayName:     new("WeegeeNoD2"),
+							BungieGlobalDisplayNameCode: new(int16(1234)),
 							DestinyMemberships:          &[]bungie.UserUserInfoCard{},
 						},
 						{
 							// Nil DestinyMemberships should also be filtered out.
-							BungieNetMembershipId:       ptr.Of("999003"),
-							BungieGlobalDisplayName:     ptr.Of("WeegeeNilD2"),
-							BungieGlobalDisplayNameCode: ptr.Of(int16(5678)),
+							BungieNetMembershipId:       new("999003"),
+							BungieGlobalDisplayName:     new("WeegeeNilD2"),
+							BungieGlobalDisplayNameCode: new(int16(5678)),
 							DestinyMemberships:          nil,
 						},
 					},
@@ -160,25 +159,25 @@ func TestSearchCrossSavePrimaryMembershipResolution(t *testing.T) {
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.UserSearchResponse{
 					SearchResponse: &bungie.SearchResponse{
-						HasMore: ptr.Of(false),
+						HasMore: new(false),
 						SearchResults: &[]bungie.UserSearchDetail{
 							{
-								BungieGlobalDisplayName:     ptr.Of("CrossSaver"),
-								BungieGlobalDisplayNameCode: ptr.Of(int16(1234)),
+								BungieGlobalDisplayName:     new("CrossSaver"),
+								BungieGlobalDisplayNameCode: new(int16(1234)),
 								DestinyMemberships: &[]bungie.UserUserInfoCard{
 									{
-										MembershipId:              ptr.Of("xbox-overridden"),
-										MembershipType:            ptr.Of(int32(1)),
-										CrossSaveOverride:         ptr.Of(int32(3)),
+										MembershipId:              new("xbox-overridden"),
+										MembershipType:            new(int32(1)),
+										CrossSaveOverride:         new(int32(3)),
 										ApplicableMembershipTypes: &[]int32{},
-										DisplayName:               ptr.Of("XboxName"),
+										DisplayName:               new("XboxName"),
 									},
 									{
-										MembershipId:              ptr.Of("steam-primary"),
-										MembershipType:            ptr.Of(int32(3)),
-										CrossSaveOverride:         ptr.Of(int32(3)),
+										MembershipId:              new("steam-primary"),
+										MembershipType:            new(int32(3)),
+										CrossSaveOverride:         new(int32(3)),
 										ApplicableMembershipTypes: &[]int32{1, 3},
-										DisplayName:               ptr.Of("SteamName"),
+										DisplayName:               new("SteamName"),
 									},
 								},
 							},
@@ -210,20 +209,20 @@ func TestSearchCrossSavePrimaryMembershipResolution(t *testing.T) {
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.UserSearchResponse{
 					SearchResponse: &bungie.SearchResponse{
-						HasMore: ptr.Of(false),
+						HasMore: new(false),
 						SearchResults: &[]bungie.UserSearchDetail{
 							{
-								BungieGlobalDisplayName: ptr.Of("FallbackUser"),
+								BungieGlobalDisplayName: new("FallbackUser"),
 								DestinyMemberships: &[]bungie.UserUserInfoCard{
 									{
-										MembershipId:   ptr.Of("first-psn"),
-										MembershipType: ptr.Of(int32(2)),
-										DisplayName:    ptr.Of("FirstPSN"),
+										MembershipId:   new("first-psn"),
+										MembershipType: new(int32(2)),
+										DisplayName:    new("FirstPSN"),
 									},
 									{
-										MembershipId:   ptr.Of("second-steam"),
-										MembershipType: ptr.Of(int32(3)),
-										DisplayName:    ptr.Of("SecondSteam"),
+										MembershipId:   new("second-steam"),
+										MembershipType: new(int32(3)),
+										DisplayName:    new("SecondSteam"),
 									},
 								},
 							},
@@ -257,35 +256,35 @@ func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.UserSearchResponse{
 					SearchResponse: &bungie.SearchResponse{
-						HasMore: ptr.Of(true),
+						HasMore: new(true),
 						SearchResults: &[]bungie.UserSearchDetail{
 							{
-								BungieGlobalDisplayName:     ptr.Of("Guardian"),
-								BungieGlobalDisplayNameCode: ptr.Of(int16(1234)),
+								BungieGlobalDisplayName:     new("Guardian"),
+								BungieGlobalDisplayNameCode: new(int16(1234)),
 								DestinyMemberships: &[]bungie.UserUserInfoCard{
-									{MembershipId: ptr.Of("m1"), MembershipType: ptr.Of(int32(3)), DisplayName: ptr.Of("G1")},
+									{MembershipId: new("m1"), MembershipType: new(int32(3)), DisplayName: new("G1")},
 								},
 							},
 							{
-								BungieGlobalDisplayName:     ptr.Of("guardian"),
-								BungieGlobalDisplayNameCode: ptr.Of(int16(1299)),
+								BungieGlobalDisplayName:     new("guardian"),
+								BungieGlobalDisplayNameCode: new(int16(1299)),
 								DestinyMemberships: &[]bungie.UserUserInfoCard{
-									{MembershipId: ptr.Of("m2"), MembershipType: ptr.Of(int32(1)), DisplayName: ptr.Of("G2")},
+									{MembershipId: new("m2"), MembershipType: new(int32(1)), DisplayName: new("G2")},
 								},
 							},
 							{
 								// Prefix matches "Guardian" and code matches "12", but displayName != "Guardian".
-								BungieGlobalDisplayName:     ptr.Of("GuardianAngel"),
-								BungieGlobalDisplayNameCode: ptr.Of(int16(1255)),
+								BungieGlobalDisplayName:     new("GuardianAngel"),
+								BungieGlobalDisplayNameCode: new(int16(1255)),
 								DestinyMemberships: &[]bungie.UserUserInfoCard{
-									{MembershipId: ptr.Of("m-angel"), MembershipType: ptr.Of(int32(3)), DisplayName: ptr.Of("Angel")},
+									{MembershipId: new("m-angel"), MembershipType: new(int32(3)), DisplayName: new("Angel")},
 								},
 							},
 							{
-								BungieGlobalDisplayName:     ptr.Of("Guardian"),
-								BungieGlobalDisplayNameCode: ptr.Of(int16(9876)),
+								BungieGlobalDisplayName:     new("Guardian"),
+								BungieGlobalDisplayNameCode: new(int16(9876)),
 								DestinyMemberships: &[]bungie.UserUserInfoCard{
-									{MembershipId: ptr.Of("m3"), MembershipType: ptr.Of(int32(2)), DisplayName: ptr.Of("G3")},
+									{MembershipId: new("m3"), MembershipType: new(int32(2)), DisplayName: new("G3")},
 								},
 							},
 						},
@@ -321,16 +320,16 @@ func TestSearchDiscriminatorParsingAndFiltering(t *testing.T) {
 			exactResp: &bungie.Destiny2SearchDestinyPlayerByBungieNameResponse{
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.IEnumerableOfUserInfoCard{
-					ErrorCode: ptr.Of(int32(1)),
+					ErrorCode: new(int32(1)),
 					Response: &[]bungie.UserUserInfoCard{
 						{
-							MembershipId:                ptr.Of("4611686018467484863"),
-							MembershipType:              ptr.Of(int32(3)),
-							DisplayName:                 ptr.Of("ExactSteam"),
-							BungieGlobalDisplayName:     ptr.Of("Guardian"),
-							BungieGlobalDisplayNameCode: ptr.Of(int16(42)),
-							IconPath:                    ptr.Of("/icons/steam.png"),
-							CrossSaveOverride:           ptr.Of(int32(3)),
+							MembershipId:                new("4611686018467484863"),
+							MembershipType:              new(int32(3)),
+							DisplayName:                 new("ExactSteam"),
+							BungieGlobalDisplayName:     new("Guardian"),
+							BungieGlobalDisplayNameCode: new(int16(42)),
+							IconPath:                    new("/icons/steam.png"),
+							CrossSaveOverride:           new(int32(3)),
 							ApplicableMembershipTypes:   &[]int32{1, 3},
 						},
 					},
@@ -429,9 +428,9 @@ func TestSearchHandles503AndBungie200ErrorEnvelopes(t *testing.T) {
 			exactResp: &bungie.Destiny2SearchDestinyPlayerByBungieNameResponse{
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.IEnumerableOfUserInfoCard{
-					ErrorCode:   ptr.Of(int32(5)),
-					ErrorStatus: ptr.Of("SystemDisabled"),
-					Message:     ptr.Of("This system is temporarily disabled for maintenance."),
+					ErrorCode:   new(int32(5)),
+					ErrorStatus: new("SystemDisabled"),
+					Message:     new("This system is temporarily disabled for maintenance."),
 					Response:    nil,
 				},
 			},
@@ -448,7 +447,7 @@ func TestSearchHandles503AndBungie200ErrorEnvelopes(t *testing.T) {
 			exactResp: &bungie.Destiny2SearchDestinyPlayerByBungieNameResponse{
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.IEnumerableOfUserInfoCard{
-					ErrorCode: ptr.Of(int32(1)),
+					ErrorCode: new(int32(1)),
 					Response:  nil,
 				},
 			},
@@ -465,9 +464,9 @@ func TestSearchHandles503AndBungie200ErrorEnvelopes(t *testing.T) {
 			globalResp: &bungie.UserSearchByGlobalNamePostResponse{
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.UserSearchResponse{
-					ErrorCode:   ptr.Of(int32(36)),
-					ErrorStatus: ptr.Of("ThrottleLimitExceededMinutes"),
-					Message:     ptr.Of("Throttle limit exceeded"),
+					ErrorCode:   new(int32(36)),
+					ErrorStatus: new("ThrottleLimitExceededMinutes"),
+					Message:     new("Throttle limit exceeded"),
 				},
 			},
 		}
@@ -483,9 +482,9 @@ func TestSearchHandles503AndBungie200ErrorEnvelopes(t *testing.T) {
 			globalResp: &bungie.UserSearchByGlobalNamePostResponse{
 				HTTPResponse: &http.Response{StatusCode: http.StatusOK},
 				JSON200: &bungie.UserSearchResponse{
-					ErrorCode:   ptr.Of(int32(5)),
-					ErrorStatus: ptr.Of("SystemDisabled"),
-					Message:     ptr.Of("Maintenance"),
+					ErrorCode:   new(int32(5)),
+					ErrorStatus: new("SystemDisabled"),
+					Message:     new("Maintenance"),
 				},
 			},
 		}

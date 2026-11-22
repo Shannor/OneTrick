@@ -3,7 +3,6 @@ package user
 import (
 	"context"
 	"oneTrick/api"
-	"oneTrick/ptr"
 	"oneTrick/utils"
 	"slices"
 	"strings"
@@ -558,18 +557,18 @@ func userToSearchResult(u User) api.SearchUserResult {
 	}
 	res := api.SearchUserResult{
 		IsRecorded:          true,
-		UserID:              ptr.Of(u.ID),
+		UserID:              new(u.ID),
 		PrimaryMembershipID: u.PrimaryMembershipID,
 		DisplayName:         u.DisplayName,
 		UniqueName:          uniqueName,
 		AlternateNames:      collectUserAlternateNames(u.Memberships),
-		Characters:          ptr.Of(chars),
+		Characters:          new(chars),
 	}
 	if u.MemberID != "" {
-		res.BungieNetMembershipID = ptr.Of(u.MemberID)
+		res.BungieNetMembershipID = new(u.MemberID)
 	}
 	if mType := resolveUserPrimaryMembershipType(u); mType > 0 {
-		res.PrimaryMembershipType = ptr.Of(mType)
+		res.PrimaryMembershipType = new(mType)
 	}
 	return res
 }
@@ -584,7 +583,7 @@ func mergeSearchResults(a api.SearchUserResult, b api.SearchUserResult) api.Sear
 		out.IsRecorded = true
 	}
 	if (out.UserID == nil || *out.UserID == "") && b.UserID != nil && *b.UserID != "" {
-		out.UserID = ptr.Of(*b.UserID)
+		out.UserID = new(*b.UserID)
 	}
 	if out.Characters == nil && b.Characters != nil {
 		out.Characters = b.Characters
@@ -593,13 +592,13 @@ func mergeSearchResults(a api.SearchUserResult, b api.SearchUserResult) api.Sear
 		out.PrimaryMembershipID = b.PrimaryMembershipID
 	}
 	if out.PrimaryMembershipType == nil && b.PrimaryMembershipType != nil {
-		out.PrimaryMembershipType = ptr.Of(*b.PrimaryMembershipType)
+		out.PrimaryMembershipType = new(*b.PrimaryMembershipType)
 	}
 	if (out.BungieNetMembershipID == nil || *out.BungieNetMembershipID == "") && b.BungieNetMembershipID != nil && *b.BungieNetMembershipID != "" {
-		out.BungieNetMembershipID = ptr.Of(*b.BungieNetMembershipID)
+		out.BungieNetMembershipID = new(*b.BungieNetMembershipID)
 	}
 	if (out.IconPath == nil || *out.IconPath == "") && b.IconPath != nil && *b.IconPath != "" {
-		out.IconPath = ptr.Of(*b.IconPath)
+		out.IconPath = new(*b.IconPath)
 	}
 	if out.DisplayName == "" && b.DisplayName != "" {
 		out.DisplayName = b.DisplayName

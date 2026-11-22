@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
-	"oneTrick/ptr"
 	"strconv"
 	"strings"
 
@@ -50,7 +49,7 @@ func (a *service) Search(ctx context.Context, prefix string, page int32) ([]api.
 		return a.searchExactBungieName(ctx, namePart, codePart)
 	}
 
-	body := bungie.UserSearchPrefixRequest{DisplayNamePrefix: ptr.Of(namePart)}
+	body := bungie.UserSearchPrefixRequest{DisplayNamePrefix: new(namePart)}
 	resp, err := a.Client.UserSearchByGlobalNamePostWithResponse(ctx, page, body)
 	if err != nil {
 		return nil, false, err
@@ -105,8 +104,8 @@ func (a *service) searchExactBungieName(ctx context.Context, namePart string, co
 	}
 
 	body := bungie.Destiny2SearchDestinyPlayerByBungieNameJSONRequestBody{
-		DisplayName:     ptr.Of(namePart),
-		DisplayNameCode: ptr.Of(int16(codeNum)),
+		DisplayName:     new(namePart),
+		DisplayNameCode: new(int16(codeNum)),
 	}
 	resp, err := a.Client.Destiny2SearchDestinyPlayerByBungieNameWithResponse(ctx, bungieMembershipTypeAll, body)
 	if err != nil {
@@ -201,13 +200,13 @@ func transformUserSearchDetail(detail bungie.UserSearchDetail) (api.SearchUserRe
 		AlternateNames:      collectAlternateNames(*detail.DestinyMemberships),
 	}
 	if primary.MembershipType != nil {
-		result.PrimaryMembershipType = ptr.Of(int64(*primary.MembershipType))
+		result.PrimaryMembershipType = new(int64(*primary.MembershipType))
 	}
 	if detail.BungieNetMembershipId != nil && *detail.BungieNetMembershipId != "" {
-		result.BungieNetMembershipID = ptr.Of(*detail.BungieNetMembershipId)
+		result.BungieNetMembershipID = new(*detail.BungieNetMembershipId)
 	}
 	if primary.IconPath != nil && *primary.IconPath != "" {
-		result.IconPath = ptr.Of(*primary.IconPath)
+		result.IconPath = new(*primary.IconPath)
 	}
 
 	return result, true
@@ -240,10 +239,10 @@ func transformUserInfoCards(cards []bungie.UserUserInfoCard) (api.SearchUserResu
 		AlternateNames:      collectAlternateNames(cards),
 	}
 	if primary.MembershipType != nil {
-		result.PrimaryMembershipType = ptr.Of(int64(*primary.MembershipType))
+		result.PrimaryMembershipType = new(int64(*primary.MembershipType))
 	}
 	if primary.IconPath != nil && *primary.IconPath != "" {
-		result.IconPath = ptr.Of(*primary.IconPath)
+		result.IconPath = new(*primary.IconPath)
 	}
 
 	return result, true

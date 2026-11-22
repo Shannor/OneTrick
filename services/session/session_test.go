@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"oneTrick/api"
-	"oneTrick/ptr"
 	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"slices"
@@ -87,7 +86,7 @@ func (m *memorySessionStore) completeDoc(_ context.Context, sessionID string, co
 		return ErrNotFound
 	}
 	s.CompletedAt = &completedAt
-	s.Status = ptr.Of(api.SessionComplete)
+	s.Status = new(api.SessionComplete)
 	return nil
 }
 
@@ -152,17 +151,17 @@ func TestSessionSorting(t *testing.T) {
 		{
 			ID:        "1",
 			StartedAt: now.Add(-2 * time.Hour),
-			Status:    ptr.Of(api.SessionComplete),
+			Status:    new(api.SessionComplete),
 		},
 		{
 			ID:        "2",
 			StartedAt: now,
-			Status:    ptr.Of(api.SessionPending),
+			Status:    new(api.SessionPending),
 		},
 		{
 			ID:        "3",
 			StartedAt: now.Add(-1 * time.Hour),
-			Status:    ptr.Of(api.SessionComplete),
+			Status:    new(api.SessionComplete),
 		},
 	}
 
@@ -183,21 +182,21 @@ func TestSessionSorting(t *testing.T) {
 
 func TestSessionWithSummary(t *testing.T) {
 	summary := api.SessionSummary{
-		TotalMatches: ptr.Of(5),
-		Wins:         ptr.Of(3),
-		Losses:       ptr.Of(2),
-		WinRate:      ptr.Of(0.60),
-		Kills:        ptr.Of(45),
-		Deaths:       ptr.Of(25),
-		Assists:      ptr.Of(15),
-		KDRatio:      ptr.Of(1.80),
-		KDARatio:     ptr.Of(2.10),
-		ModesPlayed:  ptr.Of([]string{"Control", "Trials of Osiris"}),
-		TopWeapons: ptr.Of([]api.SessionWeaponSummary{
+		TotalMatches: new(5),
+		Wins:         new(3),
+		Losses:       new(2),
+		WinRate:      new(0.60),
+		Kills:        new(45),
+		Deaths:       new(25),
+		Assists:      new(15),
+		KDRatio:      new(1.80),
+		KDARatio:     new(2.10),
+		ModesPlayed:  new([]string{"Control", "Trials of Osiris"}),
+		TopWeapons: new([]api.SessionWeaponSummary{
 			{
-				Name:  ptr.Of("Igneous Hammer"),
-				Icon:  ptr.Of("/img/igneous.png"),
-				Kills: ptr.Of(20),
+				Name:  new("Igneous Hammer"),
+				Icon:  new("/img/igneous.png"),
+				Kills: new(20),
 			},
 		}),
 	}
@@ -241,17 +240,17 @@ func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testin
 		snapshots: []*api.CompRankSnapshot{
 			{
 				Points:       5820,
-				StepIndex:    ptr.Of(21),
-				DivisionName: ptr.Of("Platinum III"),
-				Icon:         ptr.Of("/icons/plat.png"),
-				RecordedAt:   ptr.Of(time.Now().UTC()),
+				StepIndex:    new(21),
+				DivisionName: new("Platinum III"),
+				Icon:         new("/icons/plat.png"),
+				RecordedAt:   new(time.Now().UTC()),
 			},
 			{
 				Points:       6045,
-				StepIndex:    ptr.Of(22),
-				DivisionName: ptr.Of("Platinum II"),
-				Icon:         ptr.Of("/icons/plat.png"),
-				RecordedAt:   ptr.Of(time.Now().UTC()),
+				StepIndex:    new(22),
+				DivisionName: new("Platinum II"),
+				Icon:         new("/icons/plat.png"),
+				RecordedAt:   new(time.Now().UTC()),
 			},
 		},
 	}
@@ -362,4 +361,3 @@ func TestSessionService_StartWarnsWhenCompServicesMissing(t *testing.T) {
 		t.Fatal("expected canonical FieldBag warning when competitive rank services are not configured")
 	}
 }
-
