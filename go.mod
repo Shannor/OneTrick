@@ -5,7 +5,6 @@ go 1.26.4
 require (
 	cloud.google.com/go/firestore v1.18.0
 	github.com/Shannor/canonical-logger v0.6.0
-	github.com/algolia/algoliasearch-client-go/v4 v4.31.0
 	github.com/fatih/structs v1.1.0
 	github.com/getkin/kin-openapi v0.131.0
 	github.com/gin-contrib/cors v1.7.3

@@ -14,6 +14,8 @@ type User struct {
 	PrimaryMembershipID   string          `json:"primaryMembershipId" firestore:"primaryMembershipId"`
 	UniqueName            string          `json:"uniqueName" firestore:"uniqueName"`
 	DisplayName           string          `json:"displayName" firestore:"displayName"`
+	DisplayNameLower      string          `json:"displayNameLower,omitempty" firestore:"displayNameLower"`
+	UniqueNameLower       string          `json:"uniqueNameLower,omitempty" firestore:"uniqueNameLower"`
 	Memberships           []Membership    `json:"memberships" firestore:"memberships"`
 	CreatedAt             time.Time       `json:"createdAt" firestore:"createdAt"`
 	CharacterIDs          []string        `json:"characterIDs" firestore:"characterIds"`

@@ -14,6 +14,7 @@ import (
 	"oneTrick/services/user"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -421,17 +422,31 @@ func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObj
 }
 
 func (s Server) Search(ctx context.Context, request api.SearchRequestObject) (api.SearchResponseObject, error) {
+	if request.Body == nil {
+		return api.Search400JSONResponse{Message: "prefix must be non-empty and page must be >= 0"}, nil
+	}
+	prefix := strings.TrimSpace(request.Body.Prefix)
 	clog.WithGroupFields(ctx, "request", clog.Fields{
-		"prefix": request.Body.Prefix,
-		"page":   request.Body.Page,
+		"queryLen": len(prefix),
+		"page":     request.Body.Page,
 	})
-	results, err := s.UserService.Search(ctx, request.Body.Prefix, int(request.Body.Page))
+	if prefix == "" || request.Body.Page < 0 {
+		return api.Search400JSONResponse{Message: "prefix must be non-empty and page must be >= 0"}, nil
+	}
+
+	results, hasMore, err := s.UserService.Search(ctx, prefix, int(request.Body.Page))
 	if err != nil {
-		return nil, err
+		return api.Search500JSONResponse{
+			Message: err.Error(),
+			Status:  api.ErrInternalSystemDown,
+		}, nil
+	}
+	if results == nil {
+		results = []api.SearchUserResult{}
 	}
 	return api.Search200JSONResponse{
 		Results: results,
-		HasMore: false,
+		HasMore: hasMore,
 	}, nil
 }
 
@@ -652,6 +667,17 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 			"membershipId": resp.MembershipID,
 			"isNewUser":    false,
 		})
+		needsDisplayLower := existingUser.DisplayName != "" && existingUser.DisplayNameLower == ""
+		needsUniqueLower := existingUser.UniqueName != "" && existingUser.UniqueNameLower == ""
+		if needsDisplayLower || needsUniqueLower {
+			uID := existingUser.ID
+			dName := existingUser.DisplayName
+			uName := existingUser.UniqueName
+			clog.Go(ctx, "backfill-user-search-fields-bg", func(bgCtx context.Context) error {
+				clog.WithGroupField(bgCtx, "request", "userId", uID)
+				return s.UserService.UpdateSearchFields(bgCtx, uID, dName, uName)
+			})
+		}
 		now := time.Now()
 		result := api.AuthResponse{
 			AccessToken:         resp.AccessToken,

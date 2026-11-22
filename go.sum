@@ -13,8 +13,6 @@ cloud.google.com/go/longrunning v0.6.2/go.mod h1:k/vIs83RN4bE3YCswdXC5PFfWVILjm3
 github.com/RaveNoX/go-jsoncommentstrip v1.0.0/go.mod h1:78ihd09MekBnJnxpICcwzCMzGrKSKYe4AqU6PDYYpjk=
 github.com/Shannor/canonical-logger v0.6.0 h1:gWSbcp446SSRiAwO6jS6uTw4Fmx7n3jzSZxQiOzwYlA=
 github.com/Shannor/canonical-logger v0.6.0/go.mod h1:C4AeWeEtgWWRB4u7bbcdNZoGr5bdFtYibcm3sZQjSkU=
-github.com/algolia/algoliasearch-client-go/v4 v4.31.0 h1:VrzBWfhOySFtdWPJjsizfTBU69w+Swy37t9qVwFJ/nY=
-github.com/algolia/algoliasearch-client-go/v4 v4.31.0/go.mod h1:2bHeze2/5+jvT8IYVq8j2NDLr/4R6erGxgud7ESuXww=
 github.com/apapsch/go-jsonmerge/v2 v2.0.0 h1:axGnT1gRIfimI7gJifB699GoE/oq+F2MU7Dml6nw9rQ=
 github.com/apapsch/go-jsonmerge/v2 v2.0.0/go.mod h1:lvDnEdqiQrp0O42VQGgmlKpxL1AP2+08jFMw88y4klk=
 github.com/bmatcuk/doublestar v1.1.1/go.mod h1:UD6OnuiIn0yFxxA2le/rnRU1G4RaI4UvFv1sNto9p6w=
