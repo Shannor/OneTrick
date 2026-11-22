@@ -402,6 +402,170 @@ func TestCompareSimilarLoadoutTiersAndDiffs(t *testing.T) {
 	})
 }
 
+func TestCompareSimilarLoadoutArmorSetBonuses(t *testing.T) {
+	helmetKey := strconv.FormatUint(uint64(destiny.HelmetArmor), 10)
+	makeSnap := func(exoticHelmHash int64, bonuses []api.ArmorSetBonus) *api.CharacterSnapshot {
+		lo := makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-1", 4001)
+		if exoticHelmHash != 0 {
+			lo[helmetKey] = api.ItemSnapshot{
+				InstanceID: "helm",
+				ItemHash:   exoticHelmHash,
+				ItemProperties: api.ItemProperties{
+					BaseInfo: api.BaseItemInfo{TierType: 6},
+				},
+			}
+		}
+		var bonusesPtr *[]api.ArmorSetBonus
+		if bonuses != nil {
+			bonusesPtr = &bonuses
+		}
+		return &api.CharacterSnapshot{
+			Loadout:         lo,
+			ArmorSetBonuses: bonusesPtr,
+		}
+	}
+
+	setA2pc := api.ArmorSetBonus{
+		SetHash:     1000,
+		SetName:     "Set A",
+		ActiveCount: 2,
+		ActivePerks: []api.ArmorSetBonusPerk{{RequiredSetCount: 2, Hash: 1002, Name: "A 2pc"}},
+	}
+	setA3pc := api.ArmorSetBonus{
+		SetHash:     1000,
+		SetName:     "Set A",
+		ActiveCount: 3,
+		ActivePerks: []api.ArmorSetBonusPerk{{RequiredSetCount: 2, Hash: 1002, Name: "A 2pc"}},
+	}
+	setA4pc := api.ArmorSetBonus{
+		SetHash:     1000,
+		SetName:     "Set A",
+		ActiveCount: 4,
+		ActivePerks: []api.ArmorSetBonusPerk{
+			{RequiredSetCount: 2, Hash: 1002, Name: "A 2pc"},
+			{RequiredSetCount: 4, Hash: 1004, Name: "A 4pc"},
+		},
+	}
+	setA5pc := api.ArmorSetBonus{
+		SetHash:     1000,
+		SetName:     "Set A",
+		ActiveCount: 5,
+		ActivePerks: []api.ArmorSetBonusPerk{
+			{RequiredSetCount: 2, Hash: 1002, Name: "A 2pc"},
+			{RequiredSetCount: 4, Hash: 1004, Name: "A 4pc"},
+		},
+	}
+	setB2pc := api.ArmorSetBonus{
+		SetHash:     2000,
+		SetName:     "Set B",
+		ActiveCount: 2,
+		ActivePerks: []api.ArmorSetBonusPerk{{RequiredSetCount: 2, Hash: 2002, Name: "B 2pc"}},
+	}
+	setB3pc := api.ArmorSetBonus{
+		SetHash:     2000,
+		SetName:     "Set B",
+		ActiveCount: 3,
+		ActivePerks: []api.ArmorSetBonusPerk{{RequiredSetCount: 2, Hash: 2002, Name: "B 2pc"}},
+	}
+	setC2pc := api.ArmorSetBonus{
+		SetHash:     3000,
+		SetName:     "Set C",
+		ActiveCount: 2,
+		ActivePerks: []api.ArmorSetBonusPerk{{RequiredSetCount: 2, Hash: 3002, Name: "C 2pc"}},
+	}
+
+	tests := []struct {
+		name      string
+		target    *api.CharacterSnapshot
+		candidate *api.CharacterSnapshot
+		wantMatch bool
+		wantTier  api.SimilarityTier
+	}{
+		{
+			name:      "none vs none matches",
+			target:    makeSnap(555, nil),
+			candidate: makeSnap(555, nil),
+			wantMatch: true,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "none vs empty slice matches",
+			target:    makeSnap(555, nil),
+			candidate: makeSnap(555, []api.ArmorSetBonus{}),
+			wantMatch: true,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "2pc vs 3pc same set matches",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA2pc}),
+			candidate: makeSnap(555, []api.ArmorSetBonus{setA3pc}),
+			wantMatch: true,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "4pc vs 5pc same set matches",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA4pc}),
+			candidate: makeSnap(555, []api.ArmorSetBonus{setA5pc}),
+			wantMatch: true,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "2pc vs 4pc same set differs without altering SimilarityTier",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA2pc}),
+			candidate: makeSnap(555, []api.ArmorSetBonus{setA4pc}),
+			wantMatch: false,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "dual 2pc Set A + 2pc Set B matches 3pc Set B + 2pc Set A regardless of slice order",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA2pc, setB2pc}),
+			candidate: makeSnap(555, []api.ArmorSetBonus{setB3pc, setA2pc}),
+			wantMatch: true,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "dual 2pc Set A + 2pc Set B differs from single 2pc Set A",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA2pc, setB2pc}),
+			candidate: makeSnap(555, []api.ArmorSetBonus{setA2pc}),
+			wantMatch: false,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "dual 2pc Set A + 2pc Set B differs from 2pc Set A + 2pc Set C",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA2pc, setB2pc}),
+			candidate: makeSnap(555, []api.ArmorSetBonus{setA2pc, setC2pc}),
+			wantMatch: false,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "dual 2pc Set A + 2pc Set B differs from 4pc Set A",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA2pc, setB2pc}),
+			candidate: makeSnap(555, []api.ArmorSetBonus{setA4pc}),
+			wantMatch: false,
+			wantTier:  api.SimilarityTierHigh,
+		},
+		{
+			name:      "matching set bonuses do not upgrade base tier when Exotic armor differs",
+			target:    makeSnap(555, []api.ArmorSetBonus{setA2pc, setB2pc}),
+			candidate: makeSnap(666, []api.ArmorSetBonus{setA2pc, setB2pc}),
+			wantMatch: true,
+			wantTier:  api.SimilarityTierBase,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CompareSimilarLoadout(tt.target, tt.candidate, nil)
+			if got.ArmorSetBonusMatch != tt.wantMatch {
+				t.Fatalf("ArmorSetBonusMatch = %v, want %v", got.ArmorSetBonusMatch, tt.wantMatch)
+			}
+			if got.Tier != tt.wantTier {
+				t.Fatalf("Tier = %q, want %q", got.Tier, tt.wantTier)
+			}
+		})
+	}
+}
+
 func TestComputeSimilarCountsSkipsArchivedAndIncomplete(t *testing.T) {
 	snaps := []api.CharacterSnapshot{
 		{ID: "a", Loadout: makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-1", 4001)},

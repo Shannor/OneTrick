@@ -1,0 +1,26 @@
+type: object
+required:
+  - setHash
+  - setName
+  - activeCount
+  - activePerks
+properties:
+  setHash:
+    type: integer
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: setHash
+  setName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: setName
+  activeCount:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: activeCount
+  activePerks:
+    type: array
+    items:
+      $ref: ./ArmorSetBonusPerk.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: activePerks

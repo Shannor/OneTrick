@@ -7,6 +7,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
+	"oneTrick/services/user"
 	"oneTrick/utils"
 	"os"
 	"slices"
@@ -49,6 +50,28 @@ func cloneSnapshot(s api.CharacterSnapshot) api.CharacterSnapshot {
 	if s.MergedFromIDs != nil {
 		cp := slices.Clone(*s.MergedFromIDs)
 		out.MergedFromIDs = &cp
+	}
+	if s.ArmorSetBonuses != nil {
+		bonuses := make([]api.ArmorSetBonus, len(*s.ArmorSetBonuses))
+		for i, b := range *s.ArmorSetBonuses {
+			bCopy := b
+			if b.ActivePerks != nil {
+				perks := make([]api.ArmorSetBonusPerk, len(b.ActivePerks))
+				for j, p := range b.ActivePerks {
+					pCopy := p
+					if p.Description != nil {
+						pCopy.Description = new(*p.Description)
+					}
+					if p.IconPath != nil {
+						pCopy.IconPath = new(*p.IconPath)
+					}
+					perks[j] = pCopy
+				}
+				bCopy.ActivePerks = perks
+			}
+			bonuses[i] = bCopy
+		}
+		out.ArmorSetBonuses = &bonuses
 	}
 	return out
 }
@@ -194,6 +217,18 @@ func (m *memSnapshotStore) removeMergedFromID(_ context.Context, targetID, sourc
 	})
 	doc.MergedFromIDs = &filtered
 	m.docs[targetID] = doc
+	return nil
+}
+
+func (m *memSnapshotStore) updateArmorSetBonuses(_ context.Context, snapshotID string, bonuses []api.ArmorSetBonus, updatedAt time.Time) error {
+	doc, ok := m.docs[snapshotID]
+	if !ok {
+		return NotFound
+	}
+	cloned := cloneSnapshot(api.CharacterSnapshot{ArmorSetBonuses: &bonuses})
+	doc.ArmorSetBonuses = cloned.ArmorSetBonuses
+	doc.UpdatedAt = updatedAt
+	m.docs[snapshotID] = doc
 	return nil
 }
 
@@ -878,4 +913,206 @@ func TestCanMergeServerTickVsBackendEffectiveInstanceID(t *testing.T) {
 	if CanMerge(serverTickSameRoll, serverTickDiffRoll) {
 		t.Fatal("expected two server-tick snapshots with different weapon rolls of the same itemHash NOT to be mergeable")
 	}
+}
+
+type fakeSnapshotUserService struct {
+	user.Service
+	membershipType int64
+}
+
+func (f *fakeSnapshotUserService) GetMembershipType(_ context.Context, _, _ string) (int64, error) {
+	return f.membershipType, nil
+}
+
+type fakeSnapshotD2Service struct {
+	destiny.Service
+	loadout api.Loadout
+	stats   map[string]api.ClassStat
+	bonuses []api.ArmorSetBonus
+	ts      *time.Time
+}
+
+func (f *fakeSnapshotD2Service) GetLoadout(_ context.Context, _ int64, _ int64, _ string) (api.Loadout, map[string]api.ClassStat, []api.ArmorSetBonus, *time.Time, error) {
+	return f.loadout, f.stats, f.bonuses, f.ts, nil
+}
+
+func TestCloneSnapshotAndSaveRoundTripArmorSetBonuses(t *testing.T) {
+	kineticKey := strconv.Itoa(destiny.Kinetic)
+	energyKey := strconv.Itoa(destiny.Energy)
+	powerKey := strconv.Itoa(destiny.Power)
+
+	loadout := api.Loadout{
+		kineticKey: {
+			ItemHash:   111,
+			InstanceID: "kin-inst",
+			ItemProperties: api.ItemProperties{
+				BaseInfo: api.BaseItemInfo{InstanceId: "kin-inst", ItemHash: 111},
+			},
+		},
+		energyKey: {
+			ItemHash:   222,
+			InstanceID: "en-inst",
+			ItemProperties: api.ItemProperties{
+				BaseInfo: api.BaseItemInfo{InstanceId: "en-inst", ItemHash: 222},
+			},
+		},
+		powerKey: {
+			ItemHash:   333,
+			InstanceID: "pow-inst",
+			ItemProperties: api.ItemProperties{
+				BaseInfo: api.BaseItemInfo{InstanceId: "pow-inst", ItemHash: 333},
+			},
+		},
+	}
+
+	bonuses := []api.ArmorSetBonus{
+		{
+			SetHash:     1000,
+			SetName:     "Techsec Armor",
+			ActiveCount: 2,
+			ActivePerks: []api.ArmorSetBonusPerk{
+				{
+					RequiredSetCount: 2,
+					Hash:             9002,
+					Name:             "Techsec 2pc",
+					Description:      new("Kinetic shield bonus"),
+					IconPath:         new("https://www.bungie.net/icons/techsec2.png"),
+				},
+			},
+		},
+		{
+			SetHash:     2000,
+			SetName:     "Bushido Armor",
+			ActiveCount: 2,
+			ActivePerks: []api.ArmorSetBonusPerk{
+				{
+					RequiredSetCount: 2,
+					Hash:             9102,
+					Name:             "Bushido 2pc",
+					Description:      new("Heal on final blow"),
+				},
+			},
+		},
+	}
+
+	t.Run("cloneSnapshot deep-copies ArmorSetBonuses and ActivePerks", func(t *testing.T) {
+		orig := api.CharacterSnapshot{
+			ID:              "snap-1",
+			ArmorSetBonuses: &bonuses,
+		}
+		cloned := cloneSnapshot(orig)
+		if cloned.ArmorSetBonuses == nil || len(*cloned.ArmorSetBonuses) != 2 {
+			t.Fatalf("expected 2 cloned bonuses, got %+v", cloned.ArmorSetBonuses)
+		}
+		(*cloned.ArmorSetBonuses)[0].SetName = "Mutated"
+		(*cloned.ArmorSetBonuses)[0].ActivePerks[0].Name = "Mutated Perk"
+		*(*cloned.ArmorSetBonuses)[0].ActivePerks[0].Description = "Mutated Desc"
+
+		if (*orig.ArmorSetBonuses)[0].SetName != "Techsec Armor" ||
+			(*orig.ArmorSetBonuses)[0].ActivePerks[0].Name != "Techsec 2pc" ||
+			*(*orig.ArmorSetBonuses)[0].ActivePerks[0].Description != "Kinetic shield bonus" {
+			t.Fatalf("mutating cloned snapshot altered original ArmorSetBonuses: %+v", *orig.ArmorSetBonuses)
+		}
+	})
+
+	t.Run("Save and Get round-trip active ArmorSetBonuses without changing GenerateHash", func(t *testing.T) {
+		now := time.Now()
+		store := newMemSnapshotStore()
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service: &fakeSnapshotD2Service{
+				loadout: loadout,
+				stats:   map[string]api.ClassStat{},
+				bonuses: bonuses,
+				ts:      &now,
+			},
+		}
+
+		expectedHash, err := GenerateHash(loadout)
+		if err != nil {
+			t.Fatalf("GenerateHash failed: %v", err)
+		}
+
+		saved, err := svc.Save(context.Background(), "user-1", "4611686018467484863", "char-1")
+		if err != nil {
+			t.Fatalf("Save failed: %v", err)
+		}
+		if saved.Hash != expectedHash {
+			t.Fatalf("expected hash %q to remain unchanged, got %q", expectedHash, saved.Hash)
+		}
+		if saved.ArmorSetBonuses == nil || len(*saved.ArmorSetBonuses) != 2 {
+			t.Fatalf("expected 2 saved ArmorSetBonuses, got %+v", saved.ArmorSetBonuses)
+		}
+
+		fetched, err := svc.Get(context.Background(), saved.ID)
+		if err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+		if fetched.ArmorSetBonuses == nil || len(*fetched.ArmorSetBonuses) != 2 {
+			t.Fatalf("expected 2 fetched ArmorSetBonuses, got %+v", fetched.ArmorSetBonuses)
+		}
+		if (*fetched.ArmorSetBonuses)[0].SetHash != 1000 || (*fetched.ArmorSetBonuses)[1].SetHash != 2000 {
+			t.Fatalf("unexpected fetched ArmorSetBonuses: %+v", *fetched.ArmorSetBonuses)
+		}
+	})
+
+	t.Run("Save omits empty ArmorSetBonuses as nil", func(t *testing.T) {
+		now := time.Now()
+		store := newMemSnapshotStore()
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service: &fakeSnapshotD2Service{
+				loadout: loadout,
+				stats:   map[string]api.ClassStat{},
+				bonuses: []api.ArmorSetBonus{},
+				ts:      &now,
+			},
+		}
+
+		saved, err := svc.Save(context.Background(), "user-1", "4611686018467484863", "char-1")
+		if err != nil {
+			t.Fatalf("Save failed: %v", err)
+		}
+		if saved.ArmorSetBonuses != nil {
+			t.Fatalf("expected nil ArmorSetBonuses when empty, got %+v", saved.ArmorSetBonuses)
+		}
+	})
+
+	t.Run("Save self-heals missing ArmorSetBonuses on existing snapshot hash match", func(t *testing.T) {
+		now := time.Now()
+		store := newMemSnapshotStore()
+		d2Fake := &fakeSnapshotD2Service{
+			loadout: loadout,
+			stats:   map[string]api.ClassStat{},
+			bonuses: nil,
+			ts:      &now,
+		}
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service:   d2Fake,
+		}
+
+		initial, err := svc.Save(context.Background(), "user-1", "4611686018467484863", "char-1")
+		if err != nil {
+			t.Fatalf("initial Save failed: %v", err)
+		}
+		if initial.ArmorSetBonuses != nil {
+			t.Fatalf("expected nil ArmorSetBonuses on initial degraded save, got %+v", initial.ArmorSetBonuses)
+		}
+
+		d2Fake.bonuses = bonuses
+		healed, err := svc.Save(context.Background(), "user-1", "4611686018467484863", "char-1")
+		if err != nil {
+			t.Fatalf("second Save failed: %v", err)
+		}
+		if healed.ID != initial.ID {
+			t.Fatalf("expected hash match to reuse snapshot %q, got %q", initial.ID, healed.ID)
+		}
+		if healed.ArmorSetBonuses == nil || len(*healed.ArmorSetBonuses) != 2 {
+			t.Fatalf("expected self-healed ArmorSetBonuses on reused snapshot, got %+v", healed.ArmorSetBonuses)
+		}
+	})
 }

@@ -1,0 +1,57 @@
+post:
+  operationId: RunSessionTick
+  description: Execute a synchronous session tick to refresh active sessions, capture loadouts, ingest activity history, and clean up stale sessions
+  parameters:
+    - name: X-Internal-API-Key
+      in: header
+      required: false
+      x-go-name: XInternalAPIKey
+      schema:
+        type: string
+  requestBody:
+    required: true
+    description: JSON options object (pass `{}` to run with default options)
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            dryRun:
+              type: boolean
+              default: false
+              description: Executes read/discovery logic without persisting Firestore mutations
+            skipSave:
+              type: boolean
+              default: false
+              description: Skips live Bungie profile loadout snapshot capture while still processing activity history
+  responses:
+    "200":
+      description: Session tick completed successfully
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/SessionTickResponse.yaml
+    "400":
+      description: Invalid request body
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "401":
+      description: Missing or invalid internal API key
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "404":
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "500":
+      description: Error running session tick
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

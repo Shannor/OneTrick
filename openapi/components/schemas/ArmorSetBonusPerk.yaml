@@ -1,0 +1,27 @@
+type: object
+required:
+  - requiredSetCount
+  - hash
+  - name
+properties:
+  requiredSetCount:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: requiredSetCount
+  hash:
+    type: integer
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: hash
+  name:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: name
+  description:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: "description,omitempty"
+  iconPath:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: "iconPath,omitempty"

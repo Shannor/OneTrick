@@ -58,3 +58,8 @@ properties:
       firestore: styleBasicInfo
   damage:
     $ref: ./DamageInfo.yaml
+  equipableItemSetHash:
+    type: integer
+    format: int64
+    x-oapi-codegen-extra-tags:
+      firestore: "equipableItemSetHash,omitempty"

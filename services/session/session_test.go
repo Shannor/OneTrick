@@ -361,3 +361,24 @@ func TestSessionService_StartWarnsWhenCompServicesMissing(t *testing.T) {
 		t.Fatal("expected canonical FieldBag warning when competitive rank services are not configured")
 	}
 }
+
+func TestSessionService_RunTickScaffolding(t *testing.T) {
+	svc := &service{
+		store: newMemorySessionStore(),
+	}
+	ctx := clog.NewContext(context.Background())
+
+	res, err := svc.RunTick(ctx, TickOptions{DryRun: true, SkipSave: true})
+	if err != nil {
+		t.Fatalf("RunTick failed: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil SessionTickResponse")
+	}
+	if !res.DryRun {
+		t.Fatalf("expected DryRun=true in response, got %+v", res)
+	}
+	if res.DurationMs < 0 {
+		t.Fatalf("expected non-negative DurationMs, got %d", res.DurationMs)
+	}
+}

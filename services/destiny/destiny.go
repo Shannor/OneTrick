@@ -18,7 +18,7 @@ import (
 )
 
 type Service interface {
-	GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error)
+	GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, []api.ArmorSetBonus, *time.Time, error)
 	GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error)
 	GetItemDetails(ctx context.Context, membershipID int64, membershipType int64, weaponInstanceID string) (*bungie.DestinyItem, error)
 	GetPartyMembers(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]bungie.PartyMember, error)
@@ -312,7 +312,7 @@ func (a *service) GetItemDetails(ctx context.Context, membershipID int64, member
 	return response.JSON200.DestinyItem, nil
 }
 
-func (a *service) GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, *time.Time, error) {
+func (a *service) GetLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (api.Loadout, map[string]api.ClassStat, []api.ArmorSetBonus, *time.Time, error) {
 	var components []int32
 	components = append(components, CharactersEquipment, CharactersCode)
 	params := &bungie.Destiny2GetProfileParams{
@@ -320,13 +320,13 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 	}
 	test, err := a.Client.Destiny2GetProfileWithResponse(ctx, int32(membershipType), membershipID, params)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// TODO: Migrate snapshot to include the guns information as it is now, since mods and perks could change on the same gun.
 
 	if test.JSON200 == nil || test.JSON200.Response == nil {
-		return nil, nil, nil, fmt.Errorf("no response found")
+		return nil, nil, nil, nil, fmt.Errorf("no response found")
 	}
 
 	timeStamp := test.JSON200.Response.ResponseMintedTimestamp
@@ -384,30 +384,42 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 		}
 
 	}
-	loadout, err := a.buildLoadout(ctx, membershipID, membershipType, results, statDefinitions)
+	loadout, armorSetBonuses, err := a.buildLoadout(ctx, membershipID, membershipType, results, statDefinitions)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	clog.WithGroupField(ctx, "destinyService.getLoadout", "itemCount", len(loadout))
-	return loadout, stats, timeStamp, nil
+	clog.WithGroupFields(ctx, "destinyService.getLoadout", clog.Fields{
+		"itemCount":          len(loadout),
+		"armorSetBonusCount": len(armorSetBonuses),
+	})
+	return loadout, stats, armorSetBonuses, timeStamp, nil
 }
 
-func (a *service) buildLoadout(ctx context.Context, membershipID int64, membershipType int64, items []bungie.ItemComponent, stats map[string]StatDefinition) (api.Loadout, error) {
+func (a *service) buildLoadout(ctx context.Context, membershipID int64, membershipType int64, items []bungie.ItemComponent, stats map[string]StatDefinition) (api.Loadout, []api.ArmorSetBonus, error) {
 
 	// TODO: Could convert this to build items by ID requests
 	d2Items, err := a.ManifestService.GetItems(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	damageTypes, err := a.ManifestService.GetDamageTypes(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// TODO: Could convert this to build items by ID requests
 	perks, err := a.ManifestService.GetPerks(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	itemSets, err := a.ManifestService.GetEquipableItemSets(ctx)
+	if err != nil {
+		clog.WithGroupFields(ctx, "destinyService.buildLoadout", clog.Fields{
+			"warning":       "failed to get equipable item sets",
+			"itemSetsError": err.Error(),
+		})
+		itemSets = nil
 	}
 
 	loadout := make(api.Loadout)
@@ -430,7 +442,9 @@ func (a *service) buildLoadout(ctx context.Context, membershipID int64, membersh
 		loadout[strconv.FormatInt(snap.ItemProperties.BaseInfo.BucketHash, 10)] = snap
 	}
 
-	return loadout, nil
+	armorSetBonuses := generateArmorSetBonuses(ctx, loadout, itemSets, perks)
+
+	return loadout, armorSetBonuses, nil
 }
 
 func (a *service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {

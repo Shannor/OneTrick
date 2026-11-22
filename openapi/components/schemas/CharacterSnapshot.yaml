@@ -93,3 +93,10 @@ properties:
       type: string
     x-oapi-codegen-extra-tags:
       firestore: "mergedFromIds,omitempty"
+  armorSetBonuses:
+    type: array
+    description: Active Destiny 2 Armor 3.0 set bonuses unlocked by equipped armor pieces
+    items:
+      $ref: ./ArmorSetBonus.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: "armorSetBonuses,omitempty"

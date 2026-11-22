@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	clog "github.com/Shannor/canonical-logger"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-gonic/gin"
 	ginmiddleware "github.com/oapi-codegen/gin-middleware"
@@ -1175,4 +1177,336 @@ func TestSearchEndpoint(t *testing.T) {
 			t.Fatalf("expected 500 Internal Server Error, got %d: %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+type mockTickSessionService struct {
+	session.Service
+	capturedOpts session.TickOptions
+	calls        int
+	result       *api.SessionTickResponse
+	err          error
+}
+
+func (m *mockTickSessionService) RunTick(_ context.Context, opts session.TickOptions) (*api.SessionTickResponse, error) {
+	m.calls++
+	m.capturedOpts = opts
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.result != nil {
+		return m.result, nil
+	}
+	return &api.SessionTickResponse{
+		DryRun:     opts.DryRun,
+		DurationMs: 12,
+	}, nil
+}
+
+func TestRunSessionTickHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	newRouter := func(srv Server) *gin.Engine {
+		r := gin.New()
+		r.ContextWithFallback = true
+		r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+			ErrorHandler: logger.GinValidationErrorHandler,
+			Options: openapi3filter.Options{
+				AuthenticationFunc: validator.Authenticate,
+			},
+		}))
+		h := api.NewStrictHandler(srv, []api.StrictMiddlewareFunc{
+			logger.GinStrictMiddleware[api.StrictHandlerFunc],
+		})
+		api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+			ErrorHandler: logger.GinParamErrorHandler,
+		})
+		return r
+	}
+
+	t.Run("missing or invalid X-Internal-API-Key returns 401", func(t *testing.T) {
+		sesMock := &mockTickSessionService{}
+		r := newRouter(Server{
+			SessionService: sesMock,
+			InternalAPIKey: "secret-tick-key",
+		})
+
+		// Missing header
+		reqMissing := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", strings.NewReader(`{}`))
+		reqMissing.Header.Set("Content-Type", "application/json")
+		wMissing := httptest.NewRecorder()
+		r.ServeHTTP(wMissing, reqMissing)
+		if wMissing.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when key missing, got %d: %s", wMissing.Code, wMissing.Body.String())
+		}
+
+		// Empty header directly on handler -> 401
+		emptyKey := ""
+		emptyResp, err := (Server{
+			SessionService: sesMock,
+			InternalAPIKey: "secret-tick-key",
+		}).RunSessionTick(context.Background(), api.RunSessionTickRequestObject{
+			Params: api.RunSessionTickParams{XInternalAPIKey: &emptyKey},
+		})
+		if err != nil {
+			t.Fatalf("RunSessionTick with empty key returned unexpected error: %v", err)
+		}
+		if _, ok := emptyResp.(api.RunSessionTick401JSONResponse); !ok {
+			t.Fatalf("expected 401 when key empty, got %T", emptyResp)
+		}
+
+		// Invalid key
+		reqBad := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", strings.NewReader(`{}`))
+		reqBad.Header.Set("Content-Type", "application/json")
+		reqBad.Header.Set("X-Internal-API-Key", "wrong-key")
+		wBad := httptest.NewRecorder()
+		r.ServeHTTP(wBad, reqBad)
+		if wBad.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when key invalid, got %d: %s", wBad.Code, wBad.Body.String())
+		}
+
+		// Unconfigured Server.InternalAPIKey
+		rNoServerKey := newRouter(Server{
+			SessionService: sesMock,
+			InternalAPIKey: "",
+		})
+		reqUnconf := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", strings.NewReader(`{}`))
+		reqUnconf.Header.Set("Content-Type", "application/json")
+		reqUnconf.Header.Set("X-Internal-API-Key", "secret-tick-key")
+		wUnconf := httptest.NewRecorder()
+		rNoServerKey.ServeHTTP(wUnconf, reqUnconf)
+		if wUnconf.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when server InternalAPIKey is empty, got %d: %s", wUnconf.Code, wUnconf.Body.String())
+		}
+
+		if sesMock.calls != 0 {
+			t.Fatalf("expected 0 RunTick calls on unauthorized requests, got %d", sesMock.calls)
+		}
+	})
+
+	t.Run("default options via empty JSON object and nil Body return 200", func(t *testing.T) {
+		sesMock := &mockTickSessionService{
+			result: &api.SessionTickResponse{
+				DryRun:            false,
+				TotalSessions:     4,
+				SessionsProcessed: 3,
+				SessionsSkipped:   1,
+				DurationMs:        42,
+			},
+		}
+		srv := Server{
+			SessionService: sesMock,
+			InternalAPIKey: "secret-tick-key",
+		}
+		r := newRouter(srv)
+
+		req := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Internal-API-Key", "secret-tick-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+		if sesMock.capturedOpts.DryRun || sesMock.capturedOpts.SkipSave {
+			t.Fatalf("expected default options (false, false), got %+v", sesMock.capturedOpts)
+		}
+
+		var got api.SessionTickResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if got.TotalSessions != 4 || got.SessionsProcessed != 3 || got.SessionsSkipped != 1 || got.DurationMs != 42 {
+			t.Fatalf("unexpected SessionTickResponse: %+v", got)
+		}
+
+		// Direct call with nil Body
+		key := "secret-tick-key"
+		directResp, err := srv.RunSessionTick(clog.NewContext(context.Background()), api.RunSessionTickRequestObject{
+			Params: api.RunSessionTickParams{XInternalAPIKey: &key},
+			Body:   nil,
+		})
+		if err != nil {
+			t.Fatalf("RunSessionTick with nil body failed: %v", err)
+		}
+		if _, ok := directResp.(api.RunSessionTick200JSONResponse); !ok {
+			t.Fatalf("expected RunSessionTick200JSONResponse, got %T", directResp)
+		}
+		if sesMock.capturedOpts.DryRun || sesMock.capturedOpts.SkipSave {
+			t.Fatalf("expected default options for nil body, got %+v", sesMock.capturedOpts)
+		}
+
+		// Empty HTTP body rejected with 400 per OpenAPI required requestBody
+		reqEmpty := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", nil)
+		reqEmpty.Header.Set("Content-Type", "application/json")
+		reqEmpty.Header.Set("X-Internal-API-Key", "secret-tick-key")
+		wEmpty := httptest.NewRecorder()
+		r.ServeHTTP(wEmpty, reqEmpty)
+		if wEmpty.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request when required JSON body is omitted, got %d: %s", wEmpty.Code, wEmpty.Body.String())
+		}
+	})
+
+	t.Run("explicit dryRun and skipSave options are forwarded and enriched via clog", func(t *testing.T) {
+		sesMock := &mockTickSessionService{
+			result: &api.SessionTickResponse{
+				DryRun:        true,
+				TotalSessions: 2,
+				DurationMs:    15,
+			},
+		}
+		srv := Server{
+			SessionService: sesMock,
+			InternalAPIKey: "secret-tick-key",
+		}
+		r := newRouter(srv)
+
+		req := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", strings.NewReader(`{"dryRun":true,"skipSave":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Internal-API-Key", "secret-tick-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+		if !sesMock.capturedOpts.DryRun || !sesMock.capturedOpts.SkipSave {
+			t.Fatalf("expected TickOptions{DryRun: true, SkipSave: true}, got %+v", sesMock.capturedOpts)
+		}
+
+		// Verify clog enrichment directly
+		ctx := clog.NewContext(context.Background())
+		key := "secret-tick-key"
+		_, err := srv.RunSessionTick(ctx, api.RunSessionTickRequestObject{
+			Params: api.RunSessionTickParams{XInternalAPIKey: &key},
+			Body: &api.RunSessionTickJSONRequestBody{
+				DryRun:   new(true),
+				SkipSave: new(true),
+			},
+		})
+		if err != nil {
+			t.Fatalf("RunSessionTick failed: %v", err)
+		}
+		if !clog.BagFromContext(ctx).HasGroup("request") {
+			t.Fatal("expected request group enriched on clog FieldBag")
+		}
+	})
+
+	t.Run("service error maps to 500 JSON response", func(t *testing.T) {
+		sesMock := &mockTickSessionService{
+			err: fmt.Errorf("firestore unavailable"),
+		}
+		r := newRouter(Server{
+			SessionService: sesMock,
+			InternalAPIKey: "secret-tick-key",
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/internal/sessions/tick", strings.NewReader(`{"dryRun":false}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Internal-API-Key", "secret-tick-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 Internal Server Error, got %d: %s", w.Code, w.Body.String())
+		}
+		var errResp api.OneTrickError
+		if err := json.Unmarshal(w.Body.Bytes(), &errResp); err != nil {
+			t.Fatalf("failed to unmarshal OneTrickError: %v", err)
+		}
+		if !strings.Contains(errResp.Message, "firestore unavailable") {
+			t.Fatalf("expected error message to include service error, got %q", errResp.Message)
+		}
+	})
+}
+
+type mockBackfillSnapshotService struct {
+	snapshot.Service
+	snapshots   []api.CharacterSnapshot
+	updatedData map[string]map[string]any
+}
+
+func (m *mockBackfillSnapshotService) GetAll(_ context.Context) ([]api.CharacterSnapshot, error) {
+	return m.snapshots, nil
+}
+
+func (m *mockBackfillSnapshotService) Update(_ context.Context, snapshotID string, updateFn func(data map[string]any) error) error {
+	data := make(map[string]any)
+	if err := updateFn(data); err != nil {
+		return err
+	}
+	if m.updatedData == nil {
+		m.updatedData = make(map[string]map[string]any)
+	}
+	m.updatedData[snapshotID] = data
+	return nil
+}
+
+type mockBackfillManifestService struct {
+	destiny.ManifestService
+	items map[int64]*destiny.ItemDefinition
+}
+
+func (m *mockBackfillManifestService) GetItem(_ context.Context, hash int64) (*destiny.ItemDefinition, error) {
+	item, ok := m.items[hash]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return item, nil
+}
+
+func TestBackfillSnapshotInfoPopulatesEquipableItemSetHash(t *testing.T) {
+	setHash := int64(500001)
+	snapMock := &mockBackfillSnapshotService{
+		snapshots: []api.CharacterSnapshot{
+			{
+				ID: "snap-1",
+				Loadout: api.Loadout{
+					"3448274439": {
+						ItemHash: 111222,
+						ItemProperties: api.ItemProperties{
+							BaseInfo: api.BaseItemInfo{ItemHash: 111222},
+						},
+					},
+				},
+			},
+		},
+	}
+	manifestMock := &mockBackfillManifestService{
+		items: map[int64]*destiny.ItemDefinition{
+			111222: {
+				Hash:                       111222,
+				ItemTypeDisplayName:        "Helmet",
+				ItemTypeAndTierDisplayName: "Legendary Helmet",
+				Inventory:                  destiny.Inventory{TierType: 5, TierTypeName: "Legendary"},
+				EquippingBlock:             destiny.EquippingBlock{EquipableItemSetHash: &setHash},
+			},
+		},
+	}
+	srv := Server{
+		SnapshotService:   snapMock,
+		D2ManifestService: manifestMock,
+	}
+
+	resp, err := srv.BackfillSnapshotInfo(context.Background(), api.BackfillSnapshotInfoRequestObject{})
+	if err != nil {
+		t.Fatalf("BackfillSnapshotInfo failed: %v", err)
+	}
+	okResp, ok := resp.(api.BackfillSnapshotInfo200JSONResponse)
+	if !ok || okResp.Updated != 1 || okResp.Failed != 0 {
+		t.Fatalf("expected Updated=1 Failed=0, got %+v", resp)
+	}
+	updatedLoadout, ok := snapMock.updatedData["snap-1"]["loadout"].(api.Loadout)
+	if !ok {
+		t.Fatalf("expected updated loadout map, got %T", snapMock.updatedData["snap-1"]["loadout"])
+	}
+	gotHash := updatedLoadout["3448274439"].ItemProperties.BaseInfo.EquipableItemSetHash
+	if gotHash == nil || *gotHash != setHash {
+		t.Fatalf("expected backfilled EquipableItemSetHash=%d, got %v", setHash, gotHash)
+	}
 }

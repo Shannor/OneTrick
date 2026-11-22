@@ -117,6 +117,7 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 			item.ItemProperties.BaseInfo.ItemTypeDisplayName = d2Item.ItemTypeDisplayName
 			item.ItemProperties.BaseInfo.TierType = int32(d2Item.Inventory.TierType)
 			item.ItemProperties.BaseInfo.TierTypeName = d2Item.Inventory.TierTypeName
+			item.ItemProperties.BaseInfo.EquipableItemSetHash = d2Item.EquippingBlock.EquipableItemSetHash
 			snap.Loadout[key] = item
 		}
 		err := s.SnapshotService.Update(ctx, snap.ID, func(data map[string]any) error {
@@ -536,6 +537,37 @@ func (s Server) FinalizeSessionsComp(ctx context.Context, request api.FinalizeSe
 	}
 
 	return api.FinalizeSessionsComp204Response{}, nil
+}
+
+func (s Server) RunSessionTick(ctx context.Context, request api.RunSessionTickRequestObject) (api.RunSessionTickResponseObject, error) {
+	if request.Params.XInternalAPIKey == nil || *request.Params.XInternalAPIKey == "" || s.InternalAPIKey == "" ||
+		subtle.ConstantTimeCompare([]byte(*request.Params.XInternalAPIKey), []byte(s.InternalAPIKey)) != 1 {
+		return api.RunSessionTick401JSONResponse{Message: "unauthorized"}, nil
+	}
+
+	opts := session.TickOptions{}
+	if request.Body != nil {
+		if request.Body.DryRun != nil {
+			opts.DryRun = *request.Body.DryRun
+		}
+		if request.Body.SkipSave != nil {
+			opts.SkipSave = *request.Body.SkipSave
+		}
+	}
+
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"dryRun":   opts.DryRun,
+		"skipSave": opts.SkipSave,
+	})
+
+	result, err := s.SessionService.RunTick(ctx, opts)
+	if err != nil {
+		return api.RunSessionTick500JSONResponse{Message: err.Error()}, nil
+	}
+	if result == nil {
+		return api.RunSessionTick200JSONResponse{DryRun: opts.DryRun}, nil
+	}
+	return api.RunSessionTick200JSONResponse(*result), nil
 }
 
 func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequestObject) (api.UpdateSessionResponseObject, error) {

@@ -65,6 +65,10 @@ type ManifestService interface {
 	// Returns a map with hash values as keys and ProgressionDefinition structs as values
 	GetProgressions(ctx context.Context) (map[string]ProgressionDefinition, error)
 
+	// GetEquipableItemSets retrieves all equipable item set definitions from the manifest
+	// Returns a map with hash values as keys and EquipableItemSetDefinition structs as values
+	GetEquipableItemSets(ctx context.Context) (map[string]EquipableItemSetDefinition, error)
+
 	// GetItem retrieves a single item definition from the manifest by its hash
 	// More efficient than GetItems when only one item is needed
 	// Returns nil and an error if the item isn't found
@@ -104,6 +108,7 @@ const (
 	SandboxPerkCollection           ManifestCollection = "d2SandboxPerks"
 	RecordDefinitionCollection      ManifestCollection = "d2RecordDefinitions"
 	ProgressionDefinitionCollection ManifestCollection = "d2ProgressionDefinitions"
+	EquipableItemSetCollection      ManifestCollection = "d2EquipableItemSets"
 )
 
 // ManifestService provides access to the current Destiny manifest data
@@ -309,6 +314,21 @@ func (m *manifestService) GetProgressions(ctx context.Context) (map[string]Progr
 	}
 	clog.WithGroupField(ctx, "manifestService.getProgressions", "count", len(results))
 	return utils.ToMap[ProgressionDefinition, string](results, func(t ProgressionDefinition) string {
+		return strconv.FormatInt(t.Hash, 10)
+	})
+}
+
+func (m *manifestService) GetEquipableItemSets(ctx context.Context) (map[string]EquipableItemSetDefinition, error) {
+	docs, err := m.db.Collection(string(EquipableItemSetCollection)).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	results, err := utils.GetAllToStructs[EquipableItemSetDefinition](docs)
+	if err != nil {
+		return nil, err
+	}
+	clog.WithGroupField(ctx, "manifestService.getEquipableItemSets", "count", len(results))
+	return utils.ToMap[EquipableItemSetDefinition, string](results, func(t EquipableItemSetDefinition) string {
 		return strconv.FormatInt(t.Hash, 10)
 	})
 }

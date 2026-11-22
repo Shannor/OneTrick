@@ -1,0 +1,53 @@
+type: object
+description: Summary counters and runtime metrics from a session tick execution
+required:
+  - dryRun
+  - totalSessions
+  - sessionsProcessed
+  - sessionsSkipped
+  - sessionsStaleEnded
+  - sessionsStaleDeleted
+  - sessionsInactiveDeleted
+  - sessionsErrored
+  - loadoutsSaved
+  - loadoutsFailed
+  - activitiesFoundTotal
+  - aggregatesAddedTotal
+  - compFinalizedCount
+  - emptySessionsCleaned
+  - errorsTotal
+  - durationMs
+properties:
+  dryRun:
+    type: boolean
+  totalSessions:
+    type: integer
+  sessionsProcessed:
+    type: integer
+  sessionsSkipped:
+    type: integer
+  sessionsStaleEnded:
+    type: integer
+  sessionsStaleDeleted:
+    type: integer
+  sessionsInactiveDeleted:
+    type: integer
+  sessionsErrored:
+    type: integer
+  loadoutsSaved:
+    type: integer
+  loadoutsFailed:
+    type: integer
+  activitiesFoundTotal:
+    type: integer
+  aggregatesAddedTotal:
+    type: integer
+  compFinalizedCount:
+    type: integer
+  emptySessionsCleaned:
+    type: integer
+  errorsTotal:
+    type: integer
+  durationMs:
+    type: integer
+    format: int64

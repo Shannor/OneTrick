@@ -1152,6 +1152,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OneTrickError'
+  /internal/sessions/tick:
+    post:
+      operationId: RunSessionTick
+      description: Execute a synchronous session tick to refresh active sessions, capture loadouts, ingest activity history, and clean up stale sessions
+      parameters:
+        - name: X-Internal-API-Key
+          in: header
+          required: false
+          x-go-name: XInternalAPIKey
+          schema:
+            type: string
+      requestBody:
+        required: true
+        description: JSON options object (pass `{}` to run with default options)
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun:
+                  type: boolean
+                  default: false
+                  description: Executes read/discovery logic without persisting Firestore mutations
+                skipSave:
+                  type: boolean
+                  default: false
+                  description: Skips live Bungie profile loadout snapshot capture while still processing activity history
+      responses:
+        '200':
+          description: Session tick completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTickResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '401':
+          description: Missing or invalid internal API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Error running session tick
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /metrics/best-performing-loadouts:
     get:
       operationId: GetBestPerformingLoadouts
@@ -1868,6 +1926,11 @@ components:
             firestore: styleBasicInfo
         damage:
           $ref: '#/components/schemas/DamageInfo'
+        equipableItemSetHash:
+          type: integer
+          format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: equipableItemSetHash,omitempty
     DamageInfo:
       x-oapi-codegen-extra-tags:
         firestore: damageInfo
@@ -2081,6 +2144,61 @@ components:
         $ref: '#/components/schemas/ItemSnapshot'
       x-oapi-codegen-extra-tags:
         firestore: loadout
+    ArmorSetBonusPerk:
+      type: object
+      required:
+        - requiredSetCount
+        - hash
+        - name
+      properties:
+        requiredSetCount:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: requiredSetCount
+        hash:
+          type: integer
+          format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: hash
+        name:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: name
+        description:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: description,omitempty
+        iconPath:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: iconPath,omitempty
+    ArmorSetBonus:
+      type: object
+      required:
+        - setHash
+        - setName
+        - activeCount
+        - activePerks
+      properties:
+        setHash:
+          type: integer
+          format: int64
+          x-oapi-codegen-extra-tags:
+            firestore: setHash
+        setName:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: setName
+        activeCount:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: activeCount
+        activePerks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArmorSetBonusPerk'
+          x-oapi-codegen-extra-tags:
+            firestore: activePerks
     CharacterSnapshot:
       x-oapi-codegen-extra-tags:
         firestore: characterSnapshot
@@ -2170,6 +2288,13 @@ components:
             type: string
           x-oapi-codegen-extra-tags:
             firestore: mergedFromIds,omitempty
+        armorSetBonuses:
+          type: array
+          description: Active Destiny 2 Armor 3.0 set bonuses unlocked by equipped armor pieces
+          items:
+            $ref: '#/components/schemas/ArmorSetBonus'
+          x-oapi-codegen-extra-tags:
+            firestore: armorSetBonuses,omitempty
     StatsValuePair:
       type: object
       x-oapi-codegen-extra-tags:
@@ -2273,6 +2398,7 @@ components:
         - tier
         - exoticArmorMatch
         - powerWeaponMatch
+        - armorSetBonusMatch
       properties:
         snapshot:
           $ref: '#/components/schemas/CharacterSnapshot'
@@ -2284,6 +2410,9 @@ components:
         powerWeaponMatch:
           type: boolean
           description: True when both snapshots have the same Power weapon equipped
+        armorSetBonusMatch:
+          type: boolean
+          description: True when both snapshots have the same unlocked armor set bonuses (or neither has active set bonuses)
         statDiffs:
           type: object
           description: Non-zero class stat differences (candidate value minus target value) keyed by stat name or hash
@@ -2711,6 +2840,60 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: characterIds
           x-go-name: characterIDs
+    SessionTickResponse:
+      type: object
+      description: Summary counters and runtime metrics from a session tick execution
+      required:
+        - dryRun
+        - totalSessions
+        - sessionsProcessed
+        - sessionsSkipped
+        - sessionsStaleEnded
+        - sessionsStaleDeleted
+        - sessionsInactiveDeleted
+        - sessionsErrored
+        - loadoutsSaved
+        - loadoutsFailed
+        - activitiesFoundTotal
+        - aggregatesAddedTotal
+        - compFinalizedCount
+        - emptySessionsCleaned
+        - errorsTotal
+        - durationMs
+      properties:
+        dryRun:
+          type: boolean
+        totalSessions:
+          type: integer
+        sessionsProcessed:
+          type: integer
+        sessionsSkipped:
+          type: integer
+        sessionsStaleEnded:
+          type: integer
+        sessionsStaleDeleted:
+          type: integer
+        sessionsInactiveDeleted:
+          type: integer
+        sessionsErrored:
+          type: integer
+        loadoutsSaved:
+          type: integer
+        loadoutsFailed:
+          type: integer
+        activitiesFoundTotal:
+          type: integer
+        aggregatesAddedTotal:
+          type: integer
+        compFinalizedCount:
+          type: integer
+        emptySessionsCleaned:
+          type: integer
+        errorsTotal:
+          type: integer
+        durationMs:
+          type: integer
+          format: int64
     FeaturedLoadout:
       description: Featured loadout of the day with associated snapshot, user info, and performance metrics
       type: object

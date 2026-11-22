@@ -212,6 +212,19 @@ func (s *service) create(ctx context.Context, userID string, snapshot api.Charac
 			}
 		}
 
+		if (existingSnapshot.ArmorSetBonuses == nil || len(*existingSnapshot.ArmorSetBonuses) == 0) &&
+			snapshot.ArmorSetBonuses != nil && len(*snapshot.ArmorSetBonuses) > 0 {
+			if err := s.store.updateArmorSetBonuses(ctx, existingSnapshot.ID, *snapshot.ArmorSetBonuses, time.Now()); err != nil {
+				clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
+					"warning":         "failed to backfill armor set bonuses on existing snapshot",
+					"setBonusesError": err.Error(),
+				})
+			} else {
+				existingSnapshot.ArmorSetBonuses = snapshot.ArmorSetBonuses
+				clog.WithGroupField(ctx, "snapshotService.create", "backfilledArmorSetBonuses", true)
+			}
+		}
+
 		clog.WithGroupFields(ctx, "snapshotService.create", clog.Fields{
 			"snapshotId": existingSnapshot.ID,
 			"isExisting": true,
@@ -438,7 +451,7 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("invalid membership id: %w", err)
 	}
 
-	loadout, stats, timestamp, err := s.D2Service.GetLoadout(ctx, memID, membershipType, characterID)
+	loadout, stats, armorSetBonuses, timestamp, err := s.D2Service.GetLoadout(ctx, memID, membershipType, characterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profile data: %w", err)
 	}
@@ -446,12 +459,18 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("failed to fetch timestamp for profile data: %w", err)
 	}
 
+	var bonusesPtr *[]api.ArmorSetBonus
+	if len(armorSetBonuses) > 0 {
+		bonusesPtr = &armorSetBonuses
+	}
+
 	clog.WithGroupField(ctx, "snapshotService.generateSnapshot", "loadoutCount", len(loadout))
 	return &api.CharacterSnapshot{
-		UserID:      userID,
-		CharacterID: characterID,
-		Stats:       new(stats),
-		Loadout:     loadout,
+		UserID:          userID,
+		CharacterID:     characterID,
+		Stats:           new(stats),
+		Loadout:         loadout,
+		ArmorSetBonuses: bonusesPtr,
 	}, nil
 }
 

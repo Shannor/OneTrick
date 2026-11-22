@@ -1,12 +1,17 @@
 package destiny
 
 import (
+	"cmp"
+	"context"
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	clog "github.com/Shannor/canonical-logger"
 )
 
 func setBaseBungieURL(value *string) string {
@@ -137,6 +142,7 @@ func generateBaseInfo(item *bungie.DestinyItem, items map[string]ItemDefinition,
 		ItemTypeDisplayName:        def.ItemTypeDisplayName,
 		TierTypeName:               def.Inventory.TierTypeName,
 		TierType:                   int32(def.Inventory.TierType),
+		EquipableItemSetHash:       def.EquippingBlock.EquipableItemSetHash,
 	}
 
 	if c.OverrideStyleItemHash != nil && *c.OverrideStyleItemHash != 0 {
@@ -767,5 +773,109 @@ func generateClassStats(statDefinitions map[string]StatDefinition, stats map[str
 		}
 		results[key] = i
 	}
+	return results
+}
+
+func generateArmorSetBonuses(
+	ctx context.Context,
+	loadout api.Loadout,
+	itemSets map[string]EquipableItemSetDefinition,
+	perks map[string]PerkDefinition,
+) []api.ArmorSetBonus {
+	if len(loadout) == 0 || len(itemSets) == 0 {
+		return nil
+	}
+
+	armorBuckets := []string{
+		strconv.FormatUint(uint64(HelmetArmor), 10),
+		strconv.FormatUint(uint64(GauntletsArmor), 10),
+		strconv.FormatUint(uint64(ChestArmor), 10),
+		strconv.FormatUint(uint64(LegArmor), 10),
+		strconv.FormatUint(uint64(ClassArmor), 10),
+	}
+
+	itemToSetHash := make(map[int64]int64)
+	for _, setDef := range itemSets {
+		for _, itemHash := range setDef.SetItems {
+			itemToSetHash[itemHash] = setDef.Hash
+		}
+	}
+
+	setCounts := make(map[int64]int)
+	for _, bucketKey := range armorBuckets {
+		itemSnap, ok := loadout[bucketKey]
+		if !ok {
+			continue
+		}
+		setHash, found := itemToSetHash[itemSnap.ItemHash]
+		if !found && itemSnap.ItemProperties.BaseInfo.EquipableItemSetHash != nil {
+			setHash = *itemSnap.ItemProperties.BaseInfo.EquipableItemSetHash
+			found = setHash != 0
+		}
+		if found {
+			setCounts[setHash]++
+		}
+	}
+
+	if len(setCounts) == 0 {
+		return nil
+	}
+
+	var results []api.ArmorSetBonus
+	for setHash, equippedCount := range setCounts {
+		setDef, ok := itemSets[strconv.FormatInt(setHash, 10)]
+		if !ok {
+			continue
+		}
+		var activePerks []api.ArmorSetBonusPerk
+		for _, setPerk := range setDef.SetPerks {
+			if setPerk.RequiredSetCount <= 0 || equippedCount < setPerk.RequiredSetCount {
+				continue
+			}
+			perkDef, ok := perks[strconv.FormatInt(setPerk.SandboxPerkHash, 10)]
+			if !ok {
+				clog.WithGroupFields(ctx, "destinyService.generateArmorSetBonuses", clog.Fields{
+					"warning":  "missing set bonus perk in manifest",
+					"setHash":  setHash,
+					"perkHash": setPerk.SandboxPerkHash,
+				})
+				continue
+			}
+			var iconPath *string
+			if perkDef.DisplayProperties.Icon != "" {
+				iconPath = new(setBaseBungieURL(&perkDef.DisplayProperties.Icon))
+			}
+			var desc *string
+			if perkDef.DisplayProperties.Description != "" {
+				desc = new(perkDef.DisplayProperties.Description)
+			}
+			activePerks = append(activePerks, api.ArmorSetBonusPerk{
+				RequiredSetCount: setPerk.RequiredSetCount,
+				Hash:             setPerk.SandboxPerkHash,
+				Name:             perkDef.DisplayProperties.Name,
+				Description:      desc,
+				IconPath:         iconPath,
+			})
+		}
+		if len(activePerks) == 0 {
+			continue
+		}
+		slices.SortFunc(activePerks, func(a, b api.ArmorSetBonusPerk) int {
+			if c := cmp.Compare(a.RequiredSetCount, b.RequiredSetCount); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.Hash, b.Hash)
+		})
+		results = append(results, api.ArmorSetBonus{
+			SetHash:     setDef.Hash,
+			SetName:     setDef.DisplayProperties.Name,
+			ActiveCount: equippedCount,
+			ActivePerks: activePerks,
+		})
+	}
+
+	slices.SortFunc(results, func(a, b api.ArmorSetBonus) int {
+		return cmp.Compare(a.SetHash, b.SetHash)
+	})
 	return results
 }

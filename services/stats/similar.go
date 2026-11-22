@@ -83,6 +83,7 @@ func CompareSimilarLoadout(target, candidate *api.CharacterSnapshot, tierLookup 
 
 	exoticMatch := exoticArmorMatches(targetLoadout, candLoadout, tierLookup)
 	powerMatch := powerWeaponMatches(targetLoadout, candLoadout)
+	armorSetBonusMatch := armorSetBonusesMatch(target, candidate)
 	statDiffs := computeStatDiffs(target, candidate)
 
 	tier := api.SimilarityTierBase
@@ -96,11 +97,12 @@ func CompareSimilarLoadout(target, candidate *api.CharacterSnapshot, tierLookup 
 	}
 
 	return api.SimilarSnapshotItem{
-		Snapshot:         candVal,
-		Tier:             tier,
-		ExoticArmorMatch: exoticMatch,
-		PowerWeaponMatch: powerMatch,
-		StatDiffs:        statDiffs,
+		Snapshot:           candVal,
+		Tier:               tier,
+		ExoticArmorMatch:   exoticMatch,
+		PowerWeaponMatch:   powerMatch,
+		ArmorSetBonusMatch: armorSetBonusMatch,
+		StatDiffs:          statDiffs,
 	}
 }
 
@@ -272,4 +274,39 @@ func computeStatDiffs(target, candidate *api.CharacterSnapshot) *map[string]int 
 		return nil
 	}
 	return &diffs
+}
+
+type unlockedSetPerkKey struct {
+	setHash  int64
+	perkHash int64
+}
+
+func unlockedArmorSetPerks(snap *api.CharacterSnapshot) map[unlockedSetPerkKey]struct{} {
+	if snap == nil || snap.ArmorSetBonuses == nil || len(*snap.ArmorSetBonuses) == 0 {
+		return nil
+	}
+	unlocked := make(map[unlockedSetPerkKey]struct{})
+	for _, bonus := range *snap.ArmorSetBonuses {
+		for _, perk := range bonus.ActivePerks {
+			unlocked[unlockedSetPerkKey{setHash: bonus.SetHash, perkHash: perk.Hash}] = struct{}{}
+		}
+	}
+	if len(unlocked) == 0 {
+		return nil
+	}
+	return unlocked
+}
+
+func armorSetBonusesMatch(target, candidate *api.CharacterSnapshot) bool {
+	tUnlocked := unlockedArmorSetPerks(target)
+	cUnlocked := unlockedArmorSetPerks(candidate)
+	if len(tUnlocked) != len(cUnlocked) {
+		return false
+	}
+	for key := range tUnlocked {
+		if _, ok := cUnlocked[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
