@@ -158,6 +158,25 @@ func (m *memSnapshotStore) createHistory(_ context.Context, history History, upd
 	return history.ID, nil
 }
 
+func (m *memSnapshotStore) listHistoriesInWindow(_ context.Context, userID, characterID string, minTime, maxTime time.Time) ([]History, error) {
+	var res []History
+	for _, list := range m.histories {
+		for _, h := range list {
+			if h.UserID != userID || h.CharacterID != characterID {
+				continue
+			}
+			if h.Timestamp.Before(minTime) || h.Timestamp.After(maxTime) {
+				continue
+			}
+			res = append(res, h)
+		}
+	}
+	slices.SortFunc(res, func(a, b History) int {
+		return b.Timestamp.Compare(a.Timestamp)
+	})
+	return res, nil
+}
+
 func (m *memSnapshotStore) archiveSource(_ context.Context, sourceID, targetID string, mergedAt time.Time) error {
 	doc, ok := m.docs[sourceID]
 	if !ok {
@@ -1113,6 +1132,155 @@ func TestCloneSnapshotAndSaveRoundTripArmorSetBonuses(t *testing.T) {
 		}
 		if healed.ArmorSetBonuses == nil || len(*healed.ArmorSetBonuses) != 2 {
 			t.Fatalf("expected self-healed ArmorSetBonuses on reused snapshot, got %+v", healed.ArmorSetBonuses)
+		}
+	})
+}
+
+func makeWeaponsMap(refs ...int64) map[string]api.WeaponInstanceMetrics {
+	m := make(map[string]api.WeaponInstanceMetrics, len(refs))
+	for _, r := range refs {
+		ref := r
+		m[strconv.FormatInt(r, 10)] = api.WeaponInstanceMetrics{ReferenceID: &ref}
+	}
+	return m
+}
+
+func TestFindBestFit(t *testing.T) {
+	ctx := context.Background()
+	basePeriod := time.Date(2026, 4, 10, 18, 0, 0, 0, time.UTC)
+
+	t.Run("notFound when no histories in [-1h, +15m] window", func(t *testing.T) {
+		store := newMemSnapshotStore(api.CharacterSnapshot{ID: "snap-1", UserID: "u1", CharacterID: "c1"})
+		store.histories["snap-1"] = []History{
+			{ID: "h-early", ParentID: "snap-1", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod.Add(-61 * time.Minute), Meta: MetaData{KineticID: "100"}},
+			{ID: "h-late", ParentID: "snap-1", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod.Add(16 * time.Minute), Meta: MetaData{KineticID: "100"}},
+		}
+		svc := &service{store: store}
+		snap, link, err := svc.FindBestFit(ctx, "u1", "c1", basePeriod, makeWeaponsMap(100))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if snap != nil {
+			t.Fatalf("expected nil snap, got %+v", snap)
+		}
+		if link == nil || link.ConfidenceLevel != api.NotFoundConfidenceLevel || link.ConfidenceSource != api.SystemConfidenceSource || link.SnapshotID != nil {
+			t.Fatalf("unexpected link: %+v", link)
+		}
+	})
+
+	t.Run("noMatch when histories exist in window but zero weapons match", func(t *testing.T) {
+		store := newMemSnapshotStore(api.CharacterSnapshot{ID: "snap-1", UserID: "u1", CharacterID: "c1"})
+		store.histories["snap-1"] = []History{
+			{ID: "h-1", ParentID: "snap-1", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod.Add(-5 * time.Minute), Meta: MetaData{KineticID: "100", EnergyID: "200", PowerID: "300"}},
+		}
+		svc := &service{store: store}
+		snap, link, err := svc.FindBestFit(ctx, "u1", "c1", basePeriod, makeWeaponsMap(999))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if snap != nil {
+			t.Fatalf("expected nil snap, got %+v", snap)
+		}
+		if link == nil || link.ConfidenceLevel != api.NoMatchConfidenceLevel || link.SnapshotID != nil {
+			t.Fatalf("unexpected link: %+v", link)
+		}
+	})
+
+	t.Run("confidence levels low (power=1), medium (kinetic=2 or kinetic+power=3), high (kinetic+energy=4)", func(t *testing.T) {
+		store := newMemSnapshotStore(api.CharacterSnapshot{ID: "snap-1", UserID: "u1", CharacterID: "c1"})
+		store.histories["snap-1"] = []History{
+			{ID: "h-1", ParentID: "snap-1", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod, Meta: MetaData{KineticID: "100", EnergyID: "200", PowerID: "300"}},
+		}
+		svc := &service{store: store}
+
+		cases := []struct {
+			name    string
+			weapons []int64
+			want    api.ConfidenceLevel
+		}{
+			{"power only -> low", []int64{300}, api.LowConfidenceLevel},
+			{"kinetic only -> medium", []int64{100}, api.MediumConfidenceLevel},
+			{"energy + power -> medium", []int64{200, 300}, api.MediumConfidenceLevel},
+			{"kinetic + energy -> high", []int64{100, 200}, api.HighConfidenceLevel},
+			{"all three -> high", []int64{100, 200, 300}, api.HighConfidenceLevel},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				snap, link, err := svc.FindBestFit(ctx, "u1", "c1", basePeriod, makeWeaponsMap(tc.weapons...))
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if snap == nil || snap.ID != "snap-1" {
+					t.Fatalf("expected snap-1, got %+v", snap)
+				}
+				if link == nil || link.ConfidenceLevel != tc.want || link.SnapshotID == nil || *link.SnapshotID != "snap-1" {
+					t.Fatalf("expected confidence %s snap-1, got %+v", tc.want, link)
+				}
+			})
+		}
+	})
+
+	t.Run("tie-breaks equal scores by closest absolute timestamp distance to activityPeriod", func(t *testing.T) {
+		store := newMemSnapshotStore(
+			api.CharacterSnapshot{ID: "snap-far", UserID: "u1", CharacterID: "c1"},
+			api.CharacterSnapshot{ID: "snap-close", UserID: "u1", CharacterID: "c1"},
+		)
+		store.histories["snap-far"] = []History{
+			{ID: "h-far", ParentID: "snap-far", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod.Add(10 * time.Minute), Meta: MetaData{KineticID: "100", EnergyID: "200"}},
+		}
+		store.histories["snap-close"] = []History{
+			{ID: "h-close", ParentID: "snap-close", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod.Add(-2 * time.Minute), Meta: MetaData{KineticID: "100", EnergyID: "200"}},
+		}
+		svc := &service{store: store}
+		snap, link, err := svc.FindBestFit(ctx, "u1", "c1", basePeriod, makeWeaponsMap(100, 200))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if snap == nil || snap.ID != "snap-close" || link.SnapshotID == nil || *link.SnapshotID != "snap-close" {
+			t.Fatalf("expected snap-close on timestamp tie-break, got snap=%+v link=%+v", snap, link)
+		}
+	})
+
+	t.Run("auto-forwards archived matched snapshot to merged target", func(t *testing.T) {
+		targetID := "snap-target"
+		store := newMemSnapshotStore(
+			api.CharacterSnapshot{ID: "snap-archived", UserID: "u1", CharacterID: "c1", MergedIntoID: &targetID},
+			api.CharacterSnapshot{ID: targetID, UserID: "u1", CharacterID: "c1"},
+		)
+		store.histories["snap-archived"] = []History{
+			{ID: "h-1", ParentID: "snap-archived", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod, Meta: MetaData{KineticID: "100", EnergyID: "200"}},
+		}
+		svc := &service{store: store}
+		snap, link, err := svc.FindBestFit(ctx, "u1", "c1", basePeriod, makeWeaponsMap(100, 200))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if snap == nil || snap.ID != targetID {
+			t.Fatalf("expected auto-forwarded snap %q, got %+v", targetID, snap)
+		}
+		if link == nil || link.SnapshotID == nil || *link.SnapshotID != targetID || link.ConfidenceLevel != api.HighConfidenceLevel {
+			t.Fatalf("expected link pointing to %q with high confidence, got %+v", targetID, link)
+		}
+	})
+
+	t.Run("restores archived snapshot when auto-forward target is missing", func(t *testing.T) {
+		missingTarget := "snap-gone"
+		store := newMemSnapshotStore(
+			api.CharacterSnapshot{ID: "snap-archived", UserID: "u1", CharacterID: "c1", MergedIntoID: &missingTarget},
+		)
+		store.histories["snap-archived"] = []History{
+			{ID: "h-1", ParentID: "snap-archived", UserID: "u1", CharacterID: "c1", Timestamp: basePeriod, Meta: MetaData{KineticID: "100", EnergyID: "200"}},
+		}
+		svc := &service{store: store}
+		snap, link, err := svc.FindBestFit(ctx, "u1", "c1", basePeriod, makeWeaponsMap(100, 200))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if snap == nil || snap.ID != "snap-archived" || IsArchived(snap) {
+			t.Fatalf("expected restored snap-archived, got %+v", snap)
+		}
+		if link == nil || link.SnapshotID == nil || *link.SnapshotID != "snap-archived" {
+			t.Fatalf("expected link to snap-archived, got %+v", link)
 		}
 	})
 }

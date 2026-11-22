@@ -421,7 +421,10 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 	if !ok {
 		return nil
 	}
-	activityMode := modes[strconv.Itoa(activity.DirectActivityModeHash)]
+	activityMode, ok := modes[strconv.Itoa(activity.DirectActivityModeHash)]
+	if !ok && period.ActivityDetails.Mode != nil {
+		activityMode = modes[strconv.Itoa(int(*period.ActivityDetails.Mode))]
+	}
 	mode := ActivityModeTypeToString((*bungie.CurrentActivityModeType)(period.ActivityDetails.Mode))
 	if activity.DisplayProperties.Name == "Iron Banner: Tribute" || strings.Contains(strings.ToLower(activity.DisplayProperties.Name), "tribute") {
 		mode = "Iron Banner Tribute"
@@ -430,6 +433,11 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 	var pTime time.Time
 	if period.Period != nil {
 		pTime = *period.Period
+	}
+
+	activityIcon := ""
+	if activityMode.DisplayProperties.Icon != "" {
+		activityIcon = setBaseBungieURL(&activityMode.DisplayProperties.Icon)
 	}
 
 	return &api.ActivityHistory{
@@ -443,7 +451,7 @@ func TransformPeriodGroup(period *bungie.StatsPeriodGroup, activities map[string
 		Description:       definition.DisplayProperties.Description,
 		Activity:          activity.DisplayProperties.Name,
 		ImageURL:          setBaseBungieURL(&definition.PgcrImage),
-		ActivityIcon:      setBaseBungieURL(&activityMode.DisplayProperties.Icon),
+		ActivityIcon:      activityIcon,
 		Period:            pTime,
 	}
 }

@@ -26,6 +26,7 @@ type snapshotStore interface {
 	listAll(ctx context.Context) ([]api.CharacterSnapshot, error)
 	listByIDs(ctx context.Context, uniqueIDs []string) ([]api.CharacterSnapshot, error)
 	createHistory(ctx context.Context, history History, updatedAt time.Time) (string, error)
+	listHistoriesInWindow(ctx context.Context, userID, characterID string, minTime, maxTime time.Time) ([]History, error)
 	archiveSource(ctx context.Context, sourceID, targetID string, mergedAt time.Time) error
 	repointArchivedChild(ctx context.Context, childID, targetID string, updatedAt time.Time) error
 	updateMergedFromIDs(ctx context.Context, targetID string, mergedFromIDs []string, updatedAt time.Time) error
@@ -175,6 +176,23 @@ func (f *firestoreStore) createHistory(ctx context.Context, history History, upd
 		return "", err
 	}
 	return history.ID, nil
+}
+
+func (f *firestoreStore) listHistoriesInWindow(ctx context.Context, userID, characterID string, minTime, maxTime time.Time) ([]History, error) {
+	docs, err := f.db.CollectionGroup(historyCollection).
+		Where("userId", "==", userID).
+		Where("characterId", "==", characterID).
+		Where("timestamp", ">=", minTime).
+		Where("timestamp", "<=", maxTime).
+		OrderBy("timestamp", firestore.Desc).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	return utils.GetAllToStructs[History](docs)
 }
 
 func (f *firestoreStore) archiveSource(ctx context.Context, sourceID, targetID string, mergedAt time.Time) error {
