@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/services/snapshot"
 	"oneTrick/set"
 	"strconv"
 	"strings"
@@ -48,11 +49,12 @@ type tickMembership struct {
 }
 
 type tickRunner struct {
-	svc       service
-	opts      TickOptions
-	now       time.Time
-	resp      *api.SessionTickResponse
-	compQueue *set.OrderedSet[string]
+	svc               service
+	opts              TickOptions
+	now               time.Time
+	resp              *api.SessionTickResponse
+	compQueue         *set.OrderedSet[string]
+	loadoutsThrottled int
 }
 
 func newTickRunner(svc service, opts TickOptions) *tickRunner {
@@ -89,6 +91,7 @@ func (r *tickRunner) recordSummary(ctx context.Context, tickStart time.Time) {
 		"sessionsInactiveDeleted": r.resp.SessionsInactiveDeleted,
 		"sessionsErrored":         r.resp.SessionsErrored,
 		"loadoutsSaved":           r.resp.LoadoutsSaved,
+		"loadoutsThrottled":       r.loadoutsThrottled,
 		"loadoutsFailed":          r.resp.LoadoutsFailed,
 		"activitiesFoundTotal":    r.resp.ActivitiesFoundTotal,
 		"aggregatesAddedTotal":    r.resp.AggregatesAddedTotal,
@@ -159,7 +162,7 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand tic
 		return err
 	}
 
-	if err := r.saveLoadoutIfNeeded(iterCtx, cand, membership); err != nil {
+	if err := r.saveLoadoutIfNeeded(iterCtx, &cand, membership); err != nil {
 		return err
 	}
 
@@ -232,7 +235,7 @@ func (r *tickRunner) resolveMembership(ctx context.Context, ses api.Session) (ti
 	}, nil
 }
 
-func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand tickCandidate, membership tickMembership) error {
+func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *tickCandidate, membership tickMembership) error {
 	if cand.isCompleted() || r.opts.SkipSave || r.opts.DryRun {
 		return nil
 	}
@@ -241,10 +244,31 @@ func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand tickCandidate
 		r.resp.ErrorsTotal++
 		return fmt.Errorf("snapshot service not configured for session %s", cand.session.ID)
 	}
-	if _, err := r.svc.snapshotService.Save(ctx, cand.session.UserID, membership.id, cand.session.CharacterID); err != nil {
+	res, err := r.svc.snapshotService.SaveSessionCheckIn(ctx, cand.session.UserID, membership.id, cand.session.CharacterID, snapshot.SessionCheckInOptions{
+		LastSnapshotID:         cand.lastSnapshotID,
+		LastSnapshotHash:       cand.lastSnapshotHash,
+		LastSnapshotRecordedAt: cand.lastSnapshotRecordedAt,
+		HeartbeatInterval:      snapshotHeartbeatPeriod,
+	})
+	if err != nil {
 		r.resp.LoadoutsFailed++
 		r.resp.ErrorsTotal++
 		return fmt.Errorf("failed to save loadout for session %s: %w", cand.session.ID, err)
+	}
+	if !res.HistoryRecorded {
+		r.loadoutsThrottled++
+		return nil
+	}
+	if err := r.svc.store.setLastSnapshot(ctx, cand.session.ID, res.SnapshotID, res.SnapshotHash, res.RecordedAt); err != nil {
+		clog.WithGroupFields(ctx, "sessionService.saveLoadout", clog.Fields{
+			"warning":           "failed to persist last snapshot metadata on session",
+			"sessionId":         cand.session.ID,
+			"lastSnapshotError": err.Error(),
+		})
+	} else {
+		cand.lastSnapshotID = res.SnapshotID
+		cand.lastSnapshotHash = res.SnapshotHash
+		cand.lastSnapshotRecordedAt = res.RecordedAt
 	}
 	r.resp.LoadoutsSaved++
 	return nil
@@ -517,18 +541,19 @@ func (s service) endSession(ctx context.Context, ses api.Session) error {
 }
 
 func (s service) CleanupEmptyCompleted(ctx context.Context, dryRun bool) (int, error) {
-	completedStatus := api.SessionComplete
-	sessions, err := s.store.listDocs(ctx, nil, nil, &completedStatus)
+	now := s.now()
+	windowEnd := now.Add(-completedGracePeriod)
+	windowStart := now.Add(-emptyCleanupLookback)
+	sessions, err := s.store.listCompletedInWindow(ctx, windowStart, windowEnd)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch completed sessions for cleanup: %w", err)
 	}
 
-	graceCutoff := s.now().Add(-completedGracePeriod)
 	deletedCount := 0
 	rollupErr := clog.LoopRollup(ctx, "sessionService.cleanupEmptyItem", sessions, func(iterCtx context.Context, _ int, ses api.Session) error {
 		clog.WithGroupField(iterCtx, "session", "sessionId", ses.ID)
 		if len(ses.AggregateIDs) == 0 {
-			if ses.CompletedAt != nil && ses.CompletedAt.After(graceCutoff) {
+			if ses.CompletedAt == nil || ses.CompletedAt.Before(windowStart) || ses.CompletedAt.After(windowEnd) {
 				return nil
 			}
 			if !dryRun {

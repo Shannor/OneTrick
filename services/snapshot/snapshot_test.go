@@ -1413,3 +1413,228 @@ func TestCreate_LegacyServerTickHashFallback(t *testing.T) {
 		}
 	})
 }
+
+func TestSaveSessionCheckIn_ThrottlingAndMultiHourFindBestFit(t *testing.T) {
+	makeLoadoutWithKinetic := func(kineticInstanceID string, kineticItemHash int64, perkHash int64) api.Loadout {
+		return api.Loadout{
+			strconv.Itoa(destiny.Kinetic): {
+				ItemHash:   kineticItemHash,
+				InstanceID: kineticInstanceID,
+				BucketHash: new(int64(destiny.Kinetic)),
+				ItemProperties: api.ItemProperties{
+					BaseInfo: api.BaseItemInfo{
+						InstanceId: kineticInstanceID,
+						ItemHash:   kineticItemHash,
+					},
+					Perks: []api.Perk{{Hash: perkHash, Name: "Perk"}},
+				},
+			},
+			strconv.Itoa(destiny.Energy): {
+				ItemHash:   2002,
+				InstanceID: "en-inst-1",
+				BucketHash: new(int64(destiny.Energy)),
+				ItemProperties: api.ItemProperties{
+					BaseInfo: api.BaseItemInfo{
+						InstanceId: "en-inst-1",
+						ItemHash:   2002,
+					},
+				},
+			},
+			strconv.Itoa(destiny.Power): {
+				ItemHash:   3003,
+				InstanceID: "pw-inst-1",
+				BucketHash: new(int64(destiny.Power)),
+				ItemProperties: api.ItemProperties{
+					BaseInfo: api.BaseItemInfo{
+						InstanceId: "pw-inst-1",
+						ItemHash:   3003,
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("throttles unchanged loadout within 30m, emits 30m heartbeat, and preserves FindBestFit >1h into session", func(t *testing.T) {
+		start := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+		now := start
+		loadoutA := makeLoadoutWithKinetic("kin-inst-1", 1001, 501)
+
+		store := newMemSnapshotStore()
+		d2Fake := &fakeSnapshotD2Service{
+			loadout: loadoutA,
+			stats:   map[string]api.ClassStat{},
+			ts:      &now,
+		}
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service:   d2Fake,
+			nowFn:       func() time.Time { return now },
+		}
+
+		ctx := context.Background()
+		opts := SessionCheckInOptions{HeartbeatInterval: 30 * time.Minute}
+		recordedTicks := 0
+
+		// Simulate 5-minute ticks over 90 minutes with unchanged loadout (19 ticks total).
+		for step := 0; step <= 90; step += 5 {
+			now = start.Add(time.Duration(step) * time.Minute)
+			res, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", opts)
+			if err != nil {
+				t.Fatalf("step %dm SaveSessionCheckIn failed: %v", step, err)
+			}
+			expectWrite := step%30 == 0
+			if res.HistoryRecorded != expectWrite {
+				t.Fatalf("step %dm: expected HistoryRecorded=%v, got %v", step, expectWrite, res.HistoryRecorded)
+			}
+			if res.HistoryRecorded {
+				recordedTicks++
+				opts.LastSnapshotID = res.SnapshotID
+				opts.LastSnapshotHash = res.SnapshotHash
+				opts.LastSnapshotRecordedAt = res.RecordedAt
+			}
+		}
+
+		// Expect writes only at 0m, 30m, 60m, 90m (4 writes instead of 19).
+		if recordedTicks != 4 {
+			t.Fatalf("expected 4 heartbeat history writes across 90m, got %d", recordedTicks)
+		}
+		if len(store.histories[opts.LastSnapshotID]) != 4 {
+			t.Fatalf("expected 4 stored history entries, got %d", len(store.histories[opts.LastSnapshotID]))
+		}
+		if got := store.docs[opts.LastSnapshotID].UpdatedAt; !got.Equal(start.Add(90 * time.Minute)) {
+			t.Fatalf("expected UpdatedAt to match last heartbeat (90m), got %v", got)
+		}
+
+		// Match played 85 minutes into the session (>1h after start) must still match with High confidence.
+		matchPeriod := start.Add(85 * time.Minute)
+		bestSnap, link, err := svc.FindBestFit(ctx, "user-1", "char-1", matchPeriod, makeWeaponsMap(1001, 2002))
+		if err != nil {
+			t.Fatalf("FindBestFit failed: %v", err)
+		}
+		if bestSnap == nil || bestSnap.ID != opts.LastSnapshotID {
+			t.Fatalf("expected FindBestFit to match %q, got %+v", opts.LastSnapshotID, bestSnap)
+		}
+		if link == nil || link.ConfidenceLevel != api.HighConfidenceLevel {
+			t.Fatalf("expected High confidence match >1h into session, got %+v", link)
+		}
+	})
+
+	t.Run("writes history immediately when loadout hash changes within <30m", func(t *testing.T) {
+		start := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+		now := start
+		loadoutA := makeLoadoutWithKinetic("kin-inst-1", 1001, 501)
+		loadoutB := makeLoadoutWithKinetic("kin-inst-1", 1001, 999) // perk swap changes hash
+
+		store := newMemSnapshotStore()
+		d2Fake := &fakeSnapshotD2Service{
+			loadout: loadoutA,
+			stats:   map[string]api.ClassStat{},
+			ts:      &now,
+		}
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service:   d2Fake,
+			nowFn:       func() time.Time { return now },
+		}
+
+		ctx := context.Background()
+		res1, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			HeartbeatInterval: 30 * time.Minute,
+		})
+		if err != nil || !res1.HistoryRecorded {
+			t.Fatalf("initial check-in failed: res=%+v err=%v", res1, err)
+		}
+
+		// 5m later, unchanged loadout -> skipped and snapshot UpdatedAt untouched.
+		now = start.Add(5 * time.Minute)
+		res2, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			LastSnapshotID:         res1.SnapshotID,
+			LastSnapshotHash:       res1.SnapshotHash,
+			LastSnapshotRecordedAt: res1.RecordedAt,
+			HeartbeatInterval:      30 * time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("second check-in failed: %v", err)
+		}
+		if res2.HistoryRecorded {
+			t.Fatal("expected unchanged check-in at +5m to skip history write")
+		}
+		if !store.docs[res1.SnapshotID].UpdatedAt.Equal(start) {
+			t.Fatalf("expected snapshot UpdatedAt to remain %v when skipped, got %v", start, store.docs[res1.SnapshotID].UpdatedAt)
+		}
+
+		// 10m after start, player swaps a perk -> must immediately record new snapshot + history.
+		now = start.Add(10 * time.Minute)
+		d2Fake.loadout = loadoutB
+		res3, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			LastSnapshotID:         res1.SnapshotID,
+			LastSnapshotHash:       res1.SnapshotHash,
+			LastSnapshotRecordedAt: res1.RecordedAt,
+			HeartbeatInterval:      30 * time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("perk-swap check-in failed: %v", err)
+		}
+		if !res3.HistoryRecorded {
+			t.Fatal("expected immediate history write upon perk/hash change")
+		}
+		if res3.SnapshotID == res1.SnapshotID || res3.SnapshotHash == res1.SnapshotHash {
+			t.Fatalf("expected distinct snapshot after perk change, got old=(%s,%s) new=(%s,%s)", res1.SnapshotID, res1.SnapshotHash, res3.SnapshotID, res3.SnapshotHash)
+		}
+		if len(store.histories[res3.SnapshotID]) != 1 {
+			t.Fatalf("expected 1 history entry for new snapshot %q, got %d", res3.SnapshotID, len(store.histories[res3.SnapshotID]))
+		}
+	})
+
+	t.Run("reuses pre-write timestamp for RecordedAt so create latency does not drift heartbeat boundary", func(t *testing.T) {
+		start := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+		loadoutA := makeLoadoutWithKinetic("kin-inst-1", 1001, 501)
+
+		store := newMemSnapshotStore()
+		d2Fake := &fakeSnapshotD2Service{
+			loadout: loadoutA,
+			stats:   map[string]api.ClassStat{},
+			ts:      &start,
+		}
+		calls := 0
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service:   d2Fake,
+			nowFn: func() time.Time {
+				// Simulate 200ms elapsing on each clock read during s.create / createHistoryEntry.
+				ts := start.Add(time.Duration(calls) * 200 * time.Millisecond)
+				calls++
+				return ts
+			},
+		}
+
+		ctx := context.Background()
+		res1, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			HeartbeatInterval: 30 * time.Minute,
+		})
+		if err != nil || !res1.HistoryRecorded {
+			t.Fatalf("initial check-in failed: res=%+v err=%v", res1, err)
+		}
+		if !res1.RecordedAt.Equal(start) {
+			t.Fatalf("expected RecordedAt to use pre-write timestamp %v, got %v", start, res1.RecordedAt)
+		}
+
+		// Exactly 30m later must trigger heartbeat rather than skipping due to write latency.
+		svc.nowFn = func() time.Time { return start.Add(30 * time.Minute) }
+		res2, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			LastSnapshotID:         res1.SnapshotID,
+			LastSnapshotHash:       res1.SnapshotHash,
+			LastSnapshotRecordedAt: res1.RecordedAt,
+			HeartbeatInterval:      30 * time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("heartbeat check-in failed: %v", err)
+		}
+		if !res2.HistoryRecorded {
+			t.Fatal("expected heartbeat check-in at exactly +30m to record history")
+		}
+	})
+}
