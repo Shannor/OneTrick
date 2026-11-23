@@ -76,7 +76,8 @@ const (
 	completedGracePeriod     = 15 * time.Minute
 	emptyCleanupLookback     = 60 * time.Minute
 	activityStartGracePeriod = 15 * time.Minute
-	snapshotHeartbeatPeriod  = 30 * time.Minute
+	// 28m (rather than 30m) absorbs 5m cron dispatch jitter so Tick 6 reliably emits the 30m heartbeat.
+	snapshotHeartbeatPeriod = 28 * time.Minute
 )
 
 func (s service) now() time.Time {

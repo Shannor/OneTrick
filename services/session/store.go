@@ -176,19 +176,17 @@ func (f *firestoreStore) getTickCandidates(ctx context.Context, completedSince t
 			UpdatedAt              *time.Time `firestore:"updatedAt"`
 			LastSnapshotID         string     `firestore:"lastSnapshotId"`
 			LastSnapshotHash       string     `firestore:"lastSnapshotHash"`
-			LastSnapshotRecordedAt *time.Time `firestore:"lastSnapshotRecordedAt"`
+			LastSnapshotRecordedAt time.Time  `firestore:"lastSnapshotRecordedAt"`
 		}
-		_ = doc.DataTo(&meta)
-		var lastRecordedAt time.Time
-		if meta.LastSnapshotRecordedAt != nil {
-			lastRecordedAt = *meta.LastSnapshotRecordedAt
+		if err := doc.DataTo(&meta); err != nil {
+			return nil, fmt.Errorf("failed to parse session tick metadata for %s: %w", s.ID, err)
 		}
 		candidates = append(candidates, tickCandidate{
 			session:                s,
 			updatedAt:              meta.UpdatedAt,
 			lastSnapshotID:         meta.LastSnapshotID,
 			lastSnapshotHash:       meta.LastSnapshotHash,
-			lastSnapshotRecordedAt: lastRecordedAt,
+			lastSnapshotRecordedAt: meta.LastSnapshotRecordedAt,
 		})
 	}
 	return candidates, nil

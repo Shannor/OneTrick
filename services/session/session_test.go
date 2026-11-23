@@ -1761,13 +1761,35 @@ func TestRunTick_SnapshotHistoryThrottling(t *testing.T) {
 		nowFn:            func() time.Time { return now },
 	}
 
+	findIntAttr := func(attrs []slog.Attr, key string) (int64, bool) {
+		var walk func([]slog.Attr) (int64, bool)
+		walk = func(list []slog.Attr) (int64, bool) {
+			for _, a := range list {
+				if a.Key == key && a.Value.Kind() == slog.KindInt64 {
+					return a.Value.Int64(), true
+				}
+				if a.Value.Kind() == slog.KindGroup {
+					if v, ok := walk(a.Value.Group()); ok {
+						return v, true
+					}
+				}
+			}
+			return 0, false
+		}
+		return walk(attrs)
+	}
+
 	// Tick 1 (t=0m): initial session check-in records history and persists last-snapshot metadata.
-	resp1, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
+	ctx1 := clog.NewContext(context.Background())
+	resp1, err := svc.RunTick(ctx1, TickOptions{})
 	if err != nil {
 		t.Fatalf("Tick 1 failed: %v", err)
 	}
 	if resp1.LoadoutsSaved != 1 || snapSvc.writes.Load() != 1 || store.writes.Load() != 1 {
 		t.Fatalf("Tick 1 expected 1 loadout save & 1 store write, got resp=%+v snapWrites=%d storeWrites=%d", resp1, snapSvc.writes.Load(), store.writes.Load())
+	}
+	if v, ok := findIntAttr(clog.BagFromContext(ctx1).Attrs(), "loadoutsThrottled"); !ok || v != 0 {
+		t.Fatalf("Tick 1 expected loadoutsThrottled=0 in wide event, got ok=%v v=%d", ok, v)
 	}
 	if seenOpts[0].HeartbeatInterval != snapshotHeartbeatPeriod || seenOpts[0].LastSnapshotHash != "" {
 		t.Fatalf("Tick 1 unexpected checkIn options: %+v", seenOpts[0])
@@ -1776,14 +1798,18 @@ func TestRunTick_SnapshotHistoryThrottling(t *testing.T) {
 		t.Fatalf("Tick 1 expected persisted lastSnapshot metadata, got %+v", rec)
 	}
 
-	// Tick 2 (t=10m, unchanged loadout): skips history and skips session store writes.
+	// Tick 2 (t=10m, unchanged loadout): skips history, skips session store writes, and logs loadoutsThrottled=1.
 	now = t0.Add(10 * time.Minute)
-	resp2, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
+	ctx2 := clog.NewContext(context.Background())
+	resp2, err := svc.RunTick(ctx2, TickOptions{})
 	if err != nil {
 		t.Fatalf("Tick 2 failed: %v", err)
 	}
 	if resp2.LoadoutsSaved != 0 || snapSvc.writes.Load() != 1 || store.writes.Load() != 1 {
 		t.Fatalf("Tick 2 expected throttled skip (0 new writes), got resp=%+v snapWrites=%d storeWrites=%d", resp2, snapSvc.writes.Load(), store.writes.Load())
+	}
+	if v, ok := findIntAttr(clog.BagFromContext(ctx2).Attrs(), "loadoutsThrottled"); !ok || v != 1 {
+		t.Fatalf("Tick 2 expected loadoutsThrottled=1 in wide event, got ok=%v v=%d", ok, v)
 	}
 	if seenOpts[1].LastSnapshotID != "snap-a" || seenOpts[1].LastSnapshotHash != "hash-loadout-a" || !seenOpts[1].LastSnapshotRecordedAt.Equal(t0) {
 		t.Fatalf("Tick 2 expected prior snapshot metadata passed in, got %+v", seenOpts[1])
@@ -1804,17 +1830,64 @@ func TestRunTick_SnapshotHistoryThrottling(t *testing.T) {
 		t.Fatalf("Tick 3 expected updated lastSnapshot metadata, got %+v", rec)
 	}
 
-	// Tick 4 (t=45m, 30m after Tick 3, unchanged loadout): emits 30m heartbeat write.
-	now = t0.Add(45 * time.Minute)
-	resp4, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
+	// Tick 4 (t=44m58s, 29m58s after Tick 3): 28m cushion absorbs cron dispatch jitter so Tick 6 emits heartbeat.
+	now = t0.Add(45*time.Minute - 2*time.Second)
+	ctx4 := clog.NewContext(context.Background())
+	resp4, err := svc.RunTick(ctx4, TickOptions{})
 	if err != nil {
 		t.Fatalf("Tick 4 failed: %v", err)
 	}
 	if resp4.LoadoutsSaved != 1 || snapSvc.writes.Load() != 3 || store.writes.Load() != 3 {
-		t.Fatalf("Tick 4 expected heartbeat save at >=30m, got resp=%+v snapWrites=%d storeWrites=%d", resp4, snapSvc.writes.Load(), store.writes.Load())
+		t.Fatalf("Tick 4 expected heartbeat save with cron jitter cushion, got resp=%+v snapWrites=%d storeWrites=%d", resp4, snapSvc.writes.Load(), store.writes.Load())
+	}
+	if v, ok := findIntAttr(clog.BagFromContext(ctx4).Attrs(), "loadoutsThrottled"); !ok || v != 0 {
+		t.Fatalf("Tick 4 expected loadoutsThrottled=0 on heartbeat tick, got ok=%v v=%d", ok, v)
 	}
 	if rec := store.lastSnapshots["ses-throttle"]; !rec.recordedAt.Equal(now) {
 		t.Fatalf("Tick 4 expected updated recordedAt=%v, got %+v", now, rec)
+	}
+}
+
+type unfilteredWindowSessionStore struct {
+	*memorySessionStore
+}
+
+func (u *unfilteredWindowSessionStore) listCompletedInWindow(ctx context.Context, _, _ time.Time) ([]api.Session, error) {
+	completed := api.SessionComplete
+	return u.memorySessionStore.listDocs(ctx, nil, nil, &completed)
+}
+
+func TestCleanupEmptyCompleted_SymmetricGuard(t *testing.T) {
+	now := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+	tooNew := now.Add(-5 * time.Minute)
+	inWindow := now.Add(-20 * time.Minute)
+	tooOld := now.Add(-90 * time.Minute)
+
+	base := newMemorySessionStore()
+	base.docs["empty-nil"] = &api.Session{ID: "empty-nil", Status: new(api.SessionComplete)}
+	base.docs["empty-too-new"] = &api.Session{ID: "empty-too-new", Status: new(api.SessionComplete), CompletedAt: &tooNew}
+	base.docs["empty-too-old"] = &api.Session{ID: "empty-too-old", Status: new(api.SessionComplete), CompletedAt: &tooOld}
+	base.docs["empty-in-window"] = &api.Session{ID: "empty-in-window", Status: new(api.SessionComplete), CompletedAt: &inWindow}
+
+	svc := &service{
+		store: &unfilteredWindowSessionStore{memorySessionStore: base},
+		nowFn: func() time.Time { return now },
+	}
+
+	cleaned, err := svc.CleanupEmptyCompleted(clog.NewContext(context.Background()), false)
+	if err != nil {
+		t.Fatalf("CleanupEmptyCompleted failed: %v", err)
+	}
+	if cleaned != 1 {
+		t.Fatalf("expected only 1 in-window session deleted, got %d", cleaned)
+	}
+	if _, exists := base.docs["empty-in-window"]; exists {
+		t.Fatal("expected empty-in-window to be deleted")
+	}
+	for _, preserved := range []string{"empty-nil", "empty-too-new", "empty-too-old"} {
+		if _, exists := base.docs[preserved]; !exists {
+			t.Fatalf("expected %s to be preserved by symmetric service guard", preserved)
+		}
 	}
 }
 

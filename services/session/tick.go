@@ -49,11 +49,12 @@ type tickMembership struct {
 }
 
 type tickRunner struct {
-	svc       service
-	opts      TickOptions
-	now       time.Time
-	resp      *api.SessionTickResponse
-	compQueue *set.OrderedSet[string]
+	svc               service
+	opts              TickOptions
+	now               time.Time
+	resp              *api.SessionTickResponse
+	compQueue         *set.OrderedSet[string]
+	loadoutsThrottled int
 }
 
 func newTickRunner(svc service, opts TickOptions) *tickRunner {
@@ -90,6 +91,7 @@ func (r *tickRunner) recordSummary(ctx context.Context, tickStart time.Time) {
 		"sessionsInactiveDeleted": r.resp.SessionsInactiveDeleted,
 		"sessionsErrored":         r.resp.SessionsErrored,
 		"loadoutsSaved":           r.resp.LoadoutsSaved,
+		"loadoutsThrottled":       r.loadoutsThrottled,
 		"loadoutsFailed":          r.resp.LoadoutsFailed,
 		"activitiesFoundTotal":    r.resp.ActivitiesFoundTotal,
 		"aggregatesAddedTotal":    r.resp.AggregatesAddedTotal,
@@ -254,6 +256,7 @@ func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *tickCandidat
 		return fmt.Errorf("failed to save loadout for session %s: %w", cand.session.ID, err)
 	}
 	if !res.HistoryRecorded {
+		r.loadoutsThrottled++
 		return nil
 	}
 	if err := r.svc.store.setLastSnapshot(ctx, cand.session.ID, res.SnapshotID, res.SnapshotHash, res.RecordedAt); err != nil {
@@ -550,7 +553,7 @@ func (s service) CleanupEmptyCompleted(ctx context.Context, dryRun bool) (int, e
 	rollupErr := clog.LoopRollup(ctx, "sessionService.cleanupEmptyItem", sessions, func(iterCtx context.Context, _ int, ses api.Session) error {
 		clog.WithGroupField(iterCtx, "session", "sessionId", ses.ID)
 		if len(ses.AggregateIDs) == 0 {
-			if ses.CompletedAt != nil && ses.CompletedAt.After(windowEnd) {
+			if ses.CompletedAt == nil || ses.CompletedAt.Before(windowStart) || ses.CompletedAt.After(windowEnd) {
 				return nil
 			}
 			if !dryRun {

@@ -1587,4 +1587,54 @@ func TestSaveSessionCheckIn_ThrottlingAndMultiHourFindBestFit(t *testing.T) {
 			t.Fatalf("expected 1 history entry for new snapshot %q, got %d", res3.SnapshotID, len(store.histories[res3.SnapshotID]))
 		}
 	})
+
+	t.Run("reuses pre-write timestamp for RecordedAt so create latency does not drift heartbeat boundary", func(t *testing.T) {
+		start := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+		loadoutA := makeLoadoutWithKinetic("kin-inst-1", 1001, 501)
+
+		store := newMemSnapshotStore()
+		d2Fake := &fakeSnapshotD2Service{
+			loadout: loadoutA,
+			stats:   map[string]api.ClassStat{},
+			ts:      &start,
+		}
+		calls := 0
+		svc := &service{
+			store:       store,
+			UserService: &fakeSnapshotUserService{membershipType: 3},
+			D2Service:   d2Fake,
+			nowFn: func() time.Time {
+				// Simulate 200ms elapsing on each clock read during s.create / createHistoryEntry.
+				ts := start.Add(time.Duration(calls) * 200 * time.Millisecond)
+				calls++
+				return ts
+			},
+		}
+
+		ctx := context.Background()
+		res1, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			HeartbeatInterval: 30 * time.Minute,
+		})
+		if err != nil || !res1.HistoryRecorded {
+			t.Fatalf("initial check-in failed: res=%+v err=%v", res1, err)
+		}
+		if !res1.RecordedAt.Equal(start) {
+			t.Fatalf("expected RecordedAt to use pre-write timestamp %v, got %v", start, res1.RecordedAt)
+		}
+
+		// Exactly 30m later must trigger heartbeat rather than skipping due to write latency.
+		svc.nowFn = func() time.Time { return start.Add(30 * time.Minute) }
+		res2, err := svc.SaveSessionCheckIn(ctx, "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			LastSnapshotID:         res1.SnapshotID,
+			LastSnapshotHash:       res1.SnapshotHash,
+			LastSnapshotRecordedAt: res1.RecordedAt,
+			HeartbeatInterval:      30 * time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("heartbeat check-in failed: %v", err)
+		}
+		if !res2.HistoryRecorded {
+			t.Fatal("expected heartbeat check-in at exactly +30m to record history")
+		}
+	})
 }

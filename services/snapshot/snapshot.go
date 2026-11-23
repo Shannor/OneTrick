@@ -731,7 +731,6 @@ func (s *service) SaveSessionCheckIn(ctx context.Context, userID, membershipID, 
 	if id != nil {
 		snapshotID = *id
 	}
-	recordedAt := s.now()
 	clog.WithGroupFields(ctx, "snapshotService.saveSessionCheckIn", clog.Fields{
 		"snapshotId":      snapshotID,
 		"hash":            hash,
@@ -741,7 +740,7 @@ func (s *service) SaveSessionCheckIn(ctx context.Context, userID, membershipID, 
 		SnapshotID:      snapshotID,
 		SnapshotHash:    hash,
 		HistoryRecorded: true,
-		RecordedAt:      recordedAt,
+		RecordedAt:      now,
 	}, nil
 }
 
