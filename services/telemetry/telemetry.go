@@ -55,6 +55,12 @@ func (s *Service) GetCharacterTelemetry(ctx context.Context, query Query) (Resul
 	if q.SnapshotID != "" {
 		logFields["snapshotId"] = q.SnapshotID
 	}
+	if !q.From.IsZero() {
+		logFields["from"] = q.From.Format(time.RFC3339)
+	}
+	if !q.To.IsZero() {
+		logFields["to"] = q.To.Format(time.RFC3339)
+	}
 	clog.WithGroupFields(ctx, "telemetryService.getCharacterTelemetry", logFields)
 
 	u, err := s.users.GetUser(ctx, q.UserID)
@@ -78,19 +84,23 @@ func (s *Service) GetCharacterTelemetry(ctx context.Context, query Query) (Resul
 			}
 			return Result{}, fmt.Errorf("fetch snapshot %s: %w", q.SnapshotID, err)
 		}
-		if snap.CharacterID != q.CharacterID {
+		if snap.CharacterID != q.CharacterID || (snap.UserID != "" && snap.UserID != u.ID) {
 			return Result{}, fmt.Errorf("snapshot %s does not belong to character %s: %w", q.SnapshotID, q.CharacterID, ErrNotFound)
 		}
 		preloadedSnapshots[snap.ID] = snap
 		if snap.IsArchived() {
 			target, err := s.snapshots.GetSnapshot(ctx, snap.MergedIntoID)
-			if err != nil && !errors.Is(err, ErrNotFound) {
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return Result{}, fmt.Errorf("merged target snapshot %s: %w", snap.MergedIntoID, ErrNotFound)
+				}
 				return Result{}, fmt.Errorf("fetch merged target snapshot %s: %w", snap.MergedIntoID, err)
 			}
-			if err == nil && target.CharacterID == q.CharacterID && !target.IsArchived() {
-				effectiveSnapshotID = target.ID
-				preloadedSnapshots[target.ID] = target
+			if target.CharacterID != q.CharacterID || (target.UserID != "" && target.UserID != u.ID) || target.IsArchived() {
+				return Result{}, fmt.Errorf("merged target snapshot %s unavailable: %w", snap.MergedIntoID, ErrNotFound)
 			}
+			effectiveSnapshotID = target.ID
+			preloadedSnapshots[target.ID] = target
 		}
 	}
 

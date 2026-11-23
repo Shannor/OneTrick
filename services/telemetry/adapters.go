@@ -114,6 +114,7 @@ func toDomainSnapshot(snap api.CharacterSnapshot) Snapshot {
 	}
 	return Snapshot{
 		ID:           snap.ID,
+		UserID:       snap.UserID,
 		CharacterID:  snap.CharacterID,
 		Name:         snap.Name,
 		MergedIntoID: mergedInto,

@@ -48,9 +48,11 @@ const (
 )
 
 // IsValidSnapshotLink reports whether a link's confidence represents an actual loadout match.
+// Empty confidenceLevel is allowed because legacy aggregates and merge-reassigned links can
+// store a valid snapshotId without populating confidenceLevel.
 func (c ConfidenceLevel) IsValidSnapshotLink() bool {
 	switch c {
-	case ConfidenceLow, ConfidenceMedium, ConfidenceHigh:
+	case "", ConfidenceLow, ConfidenceMedium, ConfidenceHigh:
 		return true
 	default:
 		return false
@@ -112,6 +114,7 @@ func (u User) OwnsCharacter(characterID string) bool {
 
 type Snapshot struct {
 	ID           string
+	UserID       string
 	CharacterID  string
 	Name         string
 	MergedIntoID string

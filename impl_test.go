@@ -1577,8 +1577,9 @@ func TestGetCharacterTelemetryHandler(t *testing.T) {
 		srv := Server{TelemetryService: mockSvc}
 		from := period.Add(-time.Hour)
 		to := period.Add(time.Hour)
+		ctx := clog.NewContext(context.Background())
 
-		resp, err := srv.GetCharacterTelemetry(context.Background(), api.GetCharacterTelemetryRequestObject{
+		resp, err := srv.GetCharacterTelemetry(ctx, api.GetCharacterTelemetryRequestObject{
 			UserID:      "u1",
 			CharacterID: "c1",
 			Params: api.GetCharacterTelemetryParams{
@@ -1612,6 +1613,18 @@ func TestGetCharacterTelemetryHandler(t *testing.T) {
 		}
 		if okResp.Snapshots["snap_abc123"].Name != "Solar Hand Cannon" {
 			t.Fatalf("unexpected snapshots DTO: %+v", okResp.Snapshots)
+		}
+
+		reqAttrs := make(map[string]string)
+		for _, attr := range clog.BagFromContext(ctx).Attrs() {
+			if attr.Key == "request" {
+				for _, child := range attr.Value.Group() {
+					reqAttrs[child.Key] = child.Value.String()
+				}
+			}
+		}
+		if reqAttrs["from"] != from.Format(time.RFC3339) || reqAttrs["to"] != to.Format(time.RFC3339) {
+			t.Fatalf("expected request.from=%q and request.to=%q, got %+v", from.Format(time.RFC3339), to.Format(time.RFC3339), reqAttrs)
 		}
 	})
 

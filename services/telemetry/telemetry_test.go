@@ -3,12 +3,15 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"oneTrick/api"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"slices"
 	"testing"
 	"time"
+
+	clog "github.com/Shannor/canonical-logger"
 )
 
 type fakeUserReader struct {
@@ -168,12 +171,18 @@ func TestGetCharacterTelemetryValidationErrors(t *testing.T) {
 func TestGetCharacterTelemetryNotFoundCases(t *testing.T) {
 	users := &fakeUserReader{
 		users: map[string]User{
-			"user-1": {ID: "user-1", CharacterIDs: []string{"char-1"}},
+			"user-1":      {ID: "user-1", CharacterIDs: []string{"char-1"}},
+			"legacy-user": {ID: "legacy-user"},
 		},
 	}
 	snaps := &fakeSnapshotReader{
 		snaps: map[string]Snapshot{
-			"snap-other-char": {ID: "snap-other-char", CharacterID: "char-2", Name: "Titan Build"},
+			"snap-other-char":       {ID: "snap-other-char", UserID: "user-1", CharacterID: "char-2", Name: "Titan Build"},
+			"snap-other-user":       {ID: "snap-other-user", UserID: "user-other", CharacterID: "char-1", Name: "Other User Build"},
+			"snap-archived-orphan":  {ID: "snap-archived-orphan", UserID: "user-1", CharacterID: "char-1", Name: "Orphaned", MergedIntoID: "snap-deleted"},
+			"snap-archived-chain":   {ID: "snap-archived-chain", UserID: "user-1", CharacterID: "char-1", Name: "Chained", MergedIntoID: "snap-archived-mid"},
+			"snap-archived-mid":     {ID: "snap-archived-mid", UserID: "user-1", CharacterID: "char-1", Name: "Mid", MergedIntoID: "snap-final"},
+			"snap-archived-foreign": {ID: "snap-archived-foreign", UserID: "user-1", CharacterID: "char-1", Name: "Foreign", MergedIntoID: "snap-other-user"},
 		},
 	}
 	svc := NewService(users, snaps, &fakeMatchStore{})
@@ -214,6 +223,50 @@ func TestGetCharacterTelemetryNotFoundCases(t *testing.T) {
 			UserID:      "user-1",
 			CharacterID: "char-1",
 			SnapshotID:  "snap-other-char",
+		})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("snapshotId belonging to different user for legacy user without CharacterIDs returns ErrNotFound", func(t *testing.T) {
+		_, err := svc.GetCharacterTelemetry(context.Background(), Query{
+			UserID:      "legacy-user",
+			CharacterID: "char-1",
+			SnapshotID:  "snap-other-user",
+		})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("archived snapshotId with missing merge target returns ErrNotFound", func(t *testing.T) {
+		_, err := svc.GetCharacterTelemetry(context.Background(), Query{
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			SnapshotID:  "snap-archived-orphan",
+		})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("archived snapshotId whose merge target is still archived returns ErrNotFound", func(t *testing.T) {
+		_, err := svc.GetCharacterTelemetry(context.Background(), Query{
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			SnapshotID:  "snap-archived-chain",
+		})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("archived snapshotId whose merge target belongs to another user returns ErrNotFound", func(t *testing.T) {
+		_, err := svc.GetCharacterTelemetry(context.Background(), Query{
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			SnapshotID:  "snap-archived-foreign",
 		})
 		if !errors.Is(err, ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
@@ -552,6 +605,106 @@ func TestGetCharacterTelemetrySingleSnapshotFilterAndAutoForward(t *testing.T) {
 	}
 }
 
+func TestGetCharacterTelemetryEmptyConfidenceLevelPreservedAndLogsDateBounds(t *testing.T) {
+	base := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+
+	users := &fakeUserReader{
+		users: map[string]User{"u1": {ID: "u1", CharacterIDs: []string{"c1"}}},
+	}
+	snaps := &fakeSnapshotReader{
+		snaps: map[string]Snapshot{
+			"snap-legacy": {ID: "snap-legacy", UserID: "u1", CharacterID: "c1", Name: "Legacy Reassigned Build"},
+		},
+	}
+	legacyLinked := RawMatch{
+		ActivityID:              "act-empty-confidence-linked",
+		Period:                  base.Add(20 * time.Minute),
+		Activity:                "Control",
+		StoredEstimatedGameMode: GameModeQuickPlay,
+		RawSnapshotID:           "snap-legacy",
+		SnapshotConfidence:      "",
+	}
+	unlinked := RawMatch{
+		ActivityID:              "act-empty-confidence-unlinked",
+		Period:                  base.Add(10 * time.Minute),
+		Activity:                "Control",
+		StoredEstimatedGameMode: GameModeQuickPlay,
+		RawSnapshotID:           "",
+		SnapshotConfidence:      "",
+	}
+	store := &fakeMatchStore{
+		matches: []RawMatch{legacyLinked, unlinked},
+		snapshotMatches: map[string][]RawMatch{
+			"snap-legacy": {legacyLinked, unlinked},
+		},
+	}
+
+	svc := NewService(users, snaps, store)
+
+	t.Run("character-wide query preserves snapshotId when confidenceLevel is empty and logs from/to", func(t *testing.T) {
+		from := base
+		to := base.Add(time.Hour)
+		ctx := clog.NewContext(context.Background())
+
+		res, err := svc.GetCharacterTelemetry(ctx, Query{
+			UserID:      "u1",
+			CharacterID: "c1",
+			From:        from,
+			To:          to,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Matches) != 2 {
+			t.Fatalf("expected 2 matches, got %d", len(res.Matches))
+		}
+		if res.Matches[0].ActivityID != "act-empty-confidence-unlinked" || res.Matches[0].SnapshotID != "" {
+			t.Fatalf("expected unlinked match to remain unlinked, got %+v", res.Matches[0])
+		}
+		if res.Matches[1].ActivityID != "act-empty-confidence-linked" || res.Matches[1].SnapshotID != "snap-legacy" {
+			t.Fatalf("expected legacy empty-confidence link to preserve snapshotId, got %+v", res.Matches[1])
+		}
+		if res.Snapshots["snap-legacy"].Name != "Legacy Reassigned Build" {
+			t.Fatalf("expected snap-legacy in snapshots map, got %+v", res.Snapshots)
+		}
+
+		svcAttrs := make(map[string]string)
+		var collect func(prefix string, attrs []slog.Attr)
+		collect = func(prefix string, attrs []slog.Attr) {
+			for _, attr := range attrs {
+				key := attr.Key
+				if prefix != "" {
+					key = prefix + "." + key
+				}
+				if attr.Value.Kind() == slog.KindGroup {
+					collect(key, attr.Value.Group())
+					continue
+				}
+				svcAttrs[key] = attr.Value.String()
+			}
+		}
+		collect("", clog.BagFromContext(ctx).Attrs())
+		if svcAttrs["telemetryService.getCharacterTelemetry.from"] != from.Format(time.RFC3339) ||
+			svcAttrs["telemetryService.getCharacterTelemetry.to"] != to.Format(time.RFC3339) {
+			t.Fatalf("expected service log from=%q to=%q, got %+v", from.Format(time.RFC3339), to.Format(time.RFC3339), svcAttrs)
+		}
+	})
+
+	t.Run("snapshotId filter includes legacy empty-confidence match and excludes unlinked match", func(t *testing.T) {
+		res, err := svc.GetCharacterTelemetry(context.Background(), Query{
+			UserID:      "u1",
+			CharacterID: "c1",
+			SnapshotID:  "snap-legacy",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Matches) != 1 || res.Matches[0].ActivityID != "act-empty-confidence-linked" || res.Matches[0].SnapshotID != "snap-legacy" {
+			t.Fatalf("expected only act-empty-confidence-linked, got %+v", res.Matches)
+		}
+	})
+}
+
 type stubUserService struct {
 	u   *user.User
 	err error
@@ -598,7 +751,7 @@ func TestAdaptersTranslateNotFoundAndDomainTypes(t *testing.T) {
 		}
 	})
 
-	t.Run("SnapshotReaderAdapter translates snapshot.NotFound and MergedIntoID", func(t *testing.T) {
+	t.Run("SnapshotReaderAdapter translates snapshot.NotFound, UserID, and MergedIntoID", func(t *testing.T) {
 		missing := NewSnapshotReaderAdapter(&stubSnapshotService{err: snapshot.NotFound})
 		if _, err := missing.GetSnapshot(context.Background(), "s1"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
@@ -608,6 +761,7 @@ func TestAdaptersTranslateNotFoundAndDomainTypes(t *testing.T) {
 		okAdapter := NewSnapshotReaderAdapter(&stubSnapshotService{
 			snap: &api.CharacterSnapshot{
 				ID:           "s1",
+				UserID:       "u1",
 				CharacterID:  "c1",
 				Name:         "Void Hunter",
 				MergedIntoID: &mergedTarget,
@@ -617,8 +771,9 @@ func TestAdaptersTranslateNotFoundAndDomainTypes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if snap.ID != "s1" || snap.CharacterID != "c1" || snap.Name != "Void Hunter" || snap.MergedIntoID != "s2" {
+		if snap.ID != "s1" || snap.UserID != "u1" || snap.CharacterID != "c1" || snap.Name != "Void Hunter" || snap.MergedIntoID != "s2" {
 			t.Fatalf("unexpected snapshot: %+v", snap)
 		}
 	})
 }
+

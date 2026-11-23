@@ -354,3 +354,190 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		}
 	})
 }
+
+func TestFirestoreEmulatorListRecentUnfilteredCorruptDocsAndNullStats(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("FIRESTORE_EMULATOR_HOST not set; skipping Firestore emulator integration test")
+	}
+
+	ctx := context.Background()
+	db, err := firestore.NewClient(ctx, "gruntt-destiny-test")
+	if err != nil {
+		t.Fatalf("failed to create emulator firestore client: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	runID := fmt.Sprintf("tel-corrupt-%d", time.Now().UnixNano())
+	base := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	store := NewFirestoreMatchStore(db)
+
+	var aggIDs []string
+	t.Cleanup(func() {
+		for _, id := range aggIDs {
+			_, _ = db.Collection("aggregates").Doc(id).Delete(context.Background())
+		}
+	})
+
+	seedValid := func(docID, charID, actID string, period time.Time) {
+		t.Helper()
+		agg := api.Aggregate{
+			ID:           docID,
+			ActivityID:   actID,
+			CharacterIds: []string{charID},
+			CreatedAt:    period,
+			ActivityDetails: api.ActivityHistory{
+				InstanceID:        actID,
+				Period:            period,
+				Location:          "Javelin-4",
+				Activity:          "Control",
+				EstimatedGameMode: new(api.GameModeQuickPlay),
+			},
+			Performance: map[string]api.InstancePerformance{
+				charID: {
+					PlayerStats: api.PlayerStats{
+						Kills:    new(api.StatsValuePair{Value: new(10.0)}),
+						Deaths:   new(api.StatsValuePair{Value: new(5.0)}),
+						Assists:  new(api.StatsValuePair{Value: new(3.0)}),
+						Standing: new(api.StatsValuePair{Value: new(0.0)}),
+					},
+				},
+			},
+			SnapshotLinks: map[string]api.SnapshotLink{},
+		}
+		if _, err := db.Collection("aggregates").Doc(docID).Set(ctx, agg); err != nil {
+			t.Fatalf("failed seeding valid aggregate %s: %v", docID, err)
+		}
+		aggIDs = append(aggIDs, docID)
+	}
+
+	seedCorrupt := func(docID, charID, actID string, period time.Time) {
+		t.Helper()
+		agg := api.Aggregate{
+			ID:           docID,
+			ActivityID:   actID,
+			CharacterIds: []string{charID},
+			CreatedAt:    period,
+			ActivityDetails: api.ActivityHistory{
+				InstanceID:        actID,
+				Period:            period,
+				Location:          "Dead Cliffs",
+				Activity:          "Control",
+				EstimatedGameMode: new(api.GameModeQuickPlay),
+			},
+			Performance: map[string]api.InstancePerformance{
+				"other-char": {
+					PlayerStats: api.PlayerStats{Kills: new(api.StatsValuePair{Value: new(1.0)})},
+				},
+			},
+			SnapshotLinks: map[string]api.SnapshotLink{},
+		}
+		if _, err := db.Collection("aggregates").Doc(docID).Set(ctx, agg); err != nil {
+			t.Fatalf("failed seeding corrupt aggregate %s: %v", docID, err)
+		}
+		aggIDs = append(aggIDs, docID)
+	}
+
+	t.Run("leading corrupt docs still fill up to limit valid matches with exact count", func(t *testing.T) {
+		charID := runID + "-leading"
+		// Newest first: corrupt1 (40m), corrupt2 (30m), valid1 (20m), valid2 (10m)
+		seedCorrupt(charID+"-c1", charID, "corrupt-1", base.Add(40*time.Minute))
+		seedCorrupt(charID+"-c2", charID, "corrupt-2", base.Add(30*time.Minute))
+		seedValid(charID+"-v1", charID, "valid-1", base.Add(20*time.Minute))
+		seedValid(charID+"-v2", charID, "valid-2", base.Add(10*time.Minute))
+
+		matches, total, truncated, err := store.ListRecentUnfiltered(ctx, charID, time.Time{}, time.Time{}, 2)
+		if err != nil {
+			t.Fatalf("ListRecentUnfiltered failed: %v", err)
+		}
+		if len(matches) != 2 || total != 2 || truncated {
+			t.Fatalf("expected 2 matches total=2 truncated=false, got len=%d total=%d truncated=%v", len(matches), total, truncated)
+		}
+		if matches[0].ActivityID != "valid-1" || matches[1].ActivityID != "valid-2" {
+			t.Fatalf("expected [valid-1 valid-2], got [%s %s]", matches[0].ActivityID, matches[1].ActivityID)
+		}
+	})
+
+	t.Run("trailing corrupt doc at limit+1 does not falsely set truncated", func(t *testing.T) {
+		charID := runID + "-trailing"
+		// Newest first: valid1 (30m), valid2 (20m), corrupt1 (10m)
+		seedValid(charID+"-v1", charID, "valid-1", base.Add(30*time.Minute))
+		seedValid(charID+"-v2", charID, "valid-2", base.Add(20*time.Minute))
+		seedCorrupt(charID+"-c1", charID, "corrupt-1", base.Add(10*time.Minute))
+
+		matches, total, truncated, err := store.ListRecentUnfiltered(ctx, charID, time.Time{}, time.Time{}, 2)
+		if err != nil {
+			t.Fatalf("ListRecentUnfiltered failed: %v", err)
+		}
+		if len(matches) != 2 || total != 2 || truncated {
+			t.Fatalf("expected 2 matches total=2 truncated=false, got len=%d total=%d truncated=%v", len(matches), total, truncated)
+		}
+		if matches[0].ActivityID != "valid-1" || matches[1].ActivityID != "valid-2" {
+			t.Fatalf("expected [valid-1 valid-2], got [%s %s]", matches[0].ActivityID, matches[1].ActivityID)
+		}
+	})
+
+	t.Run("interleaved corrupt docs with extra valid docs beyond limit+1 return exact total and truncated=true", func(t *testing.T) {
+		charID := runID + "-interleaved"
+		// Newest first: corrupt1 (50m), valid1 (40m), valid2 (30m), corrupt2 (20m), valid3 (10m)
+		seedCorrupt(charID+"-c1", charID, "corrupt-1", base.Add(50*time.Minute))
+		seedValid(charID+"-v1", charID, "valid-1", base.Add(40*time.Minute))
+		seedValid(charID+"-v2", charID, "valid-2", base.Add(30*time.Minute))
+		seedCorrupt(charID+"-c2", charID, "corrupt-2", base.Add(20*time.Minute))
+		seedValid(charID+"-v3", charID, "valid-3", base.Add(10*time.Minute))
+
+		matches, total, truncated, err := store.ListRecentUnfiltered(ctx, charID, time.Time{}, time.Time{}, 2)
+		if err != nil {
+			t.Fatalf("ListRecentUnfiltered failed: %v", err)
+		}
+		if len(matches) != 2 || total != 3 || !truncated {
+			t.Fatalf("expected 2 matches total=3 truncated=true, got len=%d total=%d truncated=%v", len(matches), total, truncated)
+		}
+		if matches[0].ActivityID != "valid-1" || matches[1].ActivityID != "valid-2" {
+			t.Fatalf("expected [valid-1 valid-2], got [%s %s]", matches[0].ActivityID, matches[1].ActivityID)
+		}
+	})
+
+	t.Run("explicit null and missing stat fields decode cleanly with value structs", func(t *testing.T) {
+		charID := runID + "-nullstats"
+		docID := charID + "-doc"
+		rawDoc := map[string]any{
+			"id":           docID,
+			"activityId":   "act-null-stats",
+			"characterIds": []string{charID},
+			"activityHistory": map[string]any{
+				"instanceId": "act-null-stats",
+				"period":     base,
+				"location":   "Burnout",
+				"activity":   "Control",
+			},
+			"performance": map[string]any{
+				charID: map[string]any{
+					"playerStats": map[string]any{
+						"kills":      nil,
+						"deaths":     map[string]any{"value": nil},
+						"standing":   nil,
+						"timePlayed": nil,
+					},
+				},
+			},
+			"snapshotLinks": map[string]any{},
+		}
+		if _, err := db.Collection("aggregates").Doc(docID).Set(ctx, rawDoc); err != nil {
+			t.Fatalf("failed seeding raw null-stats doc: %v", err)
+		}
+		aggIDs = append(aggIDs, docID)
+
+		matches, total, truncated, err := store.ListRecentUnfiltered(ctx, charID, time.Time{}, time.Time{}, 5)
+		if err != nil {
+			t.Fatalf("ListRecentUnfiltered failed on null stats doc: %v", err)
+		}
+		if len(matches) != 1 || total != 1 || truncated {
+			t.Fatalf("expected 1 match total=1 truncated=false, got len=%d total=%d truncated=%v", len(matches), total, truncated)
+		}
+		m := matches[0]
+		if m.Kills != 0 || m.Deaths != 0 || m.Assists != 0 || m.Won || m.HasTimePlayedSeconds || m.TimePlayedSeconds != 0 {
+			t.Fatalf("unexpected decoded zero/null stats: %+v", m)
+		}
+	})
+}
+

@@ -34,14 +34,18 @@ type projectedPerfDoc struct {
 }
 
 type projectedPlayerStatsDoc struct {
-	Kills      *projectedStatPairDoc `firestore:"kills"`
-	Deaths     *projectedStatPairDoc `firestore:"deaths"`
-	Assists    *projectedStatPairDoc `firestore:"assists"`
-	Standing   *projectedStatPairDoc `firestore:"standing"`
-	TimePlayed *projectedStatPairDoc `firestore:"timePlayed"`
+	Kills      projectedStatValueDoc         `firestore:"kills"`
+	Deaths     projectedStatValueDoc         `firestore:"deaths"`
+	Assists    projectedStatValueDoc         `firestore:"assists"`
+	Standing   projectedOptionalStatValueDoc `firestore:"standing"`
+	TimePlayed projectedOptionalStatValueDoc `firestore:"timePlayed"`
 }
 
-type projectedStatPairDoc struct {
+type projectedStatValueDoc struct {
+	Value float64 `firestore:"value"`
+}
+
+type projectedOptionalStatValueDoc struct {
 	Value *float64 `firestore:"value"`
 }
 
@@ -93,12 +97,15 @@ func (f *FirestoreMatchStore) ListRecentUnfiltered(
 	limit int,
 ) ([]RawMatch, int, bool, error) {
 	baseQuery := f.buildBaseQuery(characterID, "", from, to)
-	iter := applyTelemetryProjection(baseQuery, characterID).Limit(limit + 1).Documents(ctx)
+	projectedQuery := applyTelemetryProjection(baseQuery, characterID)
+	iter := projectedQuery.Limit(limit + 1).Documents(ctx)
 	defer iter.Stop()
 
 	matches := make([]RawMatch, 0, min(limit, 64))
 	rawDocs := 0
+	validDocs := 0
 	skippedCorrupt := 0
+	var lastDoc *firestore.DocumentSnapshot
 
 	for {
 		doc, err := iter.Next()
@@ -109,6 +116,7 @@ func (f *FirestoreMatchStore) ListRecentUnfiltered(
 			return nil, 0, false, fmt.Errorf("iterate projected aggregates: %w", err)
 		}
 		rawDocs++
+		lastDoc = doc
 
 		raw, ok, err := decodeProjectedMatch(doc, characterID)
 		if err != nil {
@@ -118,26 +126,54 @@ func (f *FirestoreMatchStore) ListRecentUnfiltered(
 			skippedCorrupt++
 			continue
 		}
+		validDocs++
 		if len(matches) < limit {
 			matches = append(matches, raw)
 		}
 	}
 
 	if rawDocs <= limit {
-		return matches, len(matches), false, nil
+		return matches, validDocs, false, nil
 	}
 
-	totalCount, err := f.countQuery(ctx, baseQuery)
-	if err != nil {
-		return nil, 0, false, err
+	if skippedCorrupt == 0 {
+		totalCount, err := f.countQuery(ctx, baseQuery)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		if totalCount < len(matches) {
+			totalCount = len(matches)
+		}
+		return matches, totalCount, totalCount > len(matches), nil
 	}
-	if skippedCorrupt > 0 {
-		totalCount -= skippedCorrupt
+
+	// Corrupt docs appeared within the initial limit+1 window; continue past lastDoc
+	// so matches fills up to limit valid entries and totalCount excludes corrupt docs.
+	tailIter := projectedQuery.StartAfter(lastDoc).Documents(ctx)
+	defer tailIter.Stop()
+
+	for {
+		doc, err := tailIter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, 0, false, fmt.Errorf("iterate remaining projected aggregates: %w", err)
+		}
+		raw, ok, err := decodeProjectedMatch(doc, characterID)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		if !ok {
+			continue
+		}
+		validDocs++
+		if len(matches) < limit {
+			matches = append(matches, raw)
+		}
 	}
-	if totalCount < len(matches) {
-		totalCount = len(matches)
-	}
-	return matches, totalCount, totalCount > len(matches), nil
+
+	return matches, validDocs, validDocs > len(matches), nil
 }
 
 func (f *FirestoreMatchStore) StreamMatches(
@@ -205,14 +241,14 @@ func decodeProjectedMatch(doc *firestore.DocumentSnapshot, characterID string) (
 	}
 
 	stats := perf.PlayerStats
-	kills := intStatValue(stats.Kills)
-	deaths := intStatValue(stats.Deaths)
-	assists := intStatValue(stats.Assists)
-	won := stats.Standing != nil && stats.Standing.Value != nil && *stats.Standing.Value == 0
+	kills := int(stats.Kills.Value)
+	deaths := int(stats.Deaths.Value)
+	assists := int(stats.Assists.Value)
+	won := stats.Standing.Value != nil && *stats.Standing.Value == 0
 
 	var timePlayed int
 	hasTimePlayed := false
-	if stats.TimePlayed != nil && stats.TimePlayed.Value != nil {
+	if stats.TimePlayed.Value != nil {
 		timePlayed = int(*stats.TimePlayed.Value)
 		hasTimePlayed = true
 	}
@@ -244,11 +280,4 @@ func decodeProjectedMatch(doc *firestore.DocumentSnapshot, characterID string) (
 	}
 
 	return raw, true, nil
-}
-
-func intStatValue(pair *projectedStatPairDoc) int {
-	if pair == nil || pair.Value == nil {
-		return 0
-	}
-	return int(*pair.Value)
 }

@@ -1215,6 +1215,12 @@ func (s Server) GetCharacterTelemetry(ctx context.Context, request api.GetCharac
 	if request.Params.Limit != nil {
 		reqFields["limit"] = *request.Params.Limit
 	}
+	if request.Params.From != nil {
+		reqFields["from"] = request.Params.From.Format(time.RFC3339)
+	}
+	if request.Params.To != nil {
+		reqFields["to"] = request.Params.To.Format(time.RFC3339)
+	}
 	clog.WithGroupFields(ctx, "request", reqFields)
 
 	if request.Params.Limit != nil && (*request.Params.Limit < 1 || *request.Params.Limit > telemetry.MaxLimit) {
