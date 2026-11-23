@@ -11,6 +11,7 @@ import (
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"slices"
+	"strconv"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -40,13 +41,14 @@ var (
 )
 
 type service struct {
-	store            sessionStore
-	aggregateService aggregate.Service
-	userService      user.Service
-	d2Service        destiny.Service
-	snapshotService  snapshot.Service
-	manifestService  destiny.ManifestService
-	nowFn            func() time.Time
+	store               sessionStore
+	aggregateService    aggregate.Service
+	userService         user.Service
+	d2Service           destiny.Service
+	snapshotService     snapshot.Service
+	manifestService     destiny.ManifestService
+	nowFn               func() time.Time
+	finalCheckInTimeout time.Duration
 }
 
 var _ Service = (*service)(nil)
@@ -78,6 +80,9 @@ const (
 	activityStartGracePeriod = 15 * time.Minute
 	// 28m (rather than 30m) absorbs 5m cron dispatch jitter so Tick 6 reliably emits the 30m heartbeat.
 	snapshotHeartbeatPeriod = 28 * time.Minute
+	// Active sessions retry incomplete PGCRs up to 30m; completed sessions are additionally bounded by completedGracePeriod (15m) to cap post-completion reads.
+	incompletePerformanceRetryWindow = 30 * time.Minute
+	finalLoadoutCheckInTimeout       = 5 * time.Second
 )
 
 func (s service) now() time.Time {
@@ -85,6 +90,13 @@ func (s service) now() time.Time {
 		return s.nowFn()
 	}
 	return time.Now()
+}
+
+func (s service) checkInTimeout() time.Duration {
+	if s.finalCheckInTimeout > 0 {
+		return s.finalCheckInTimeout
+	}
+	return finalLoadoutCheckInTimeout
 }
 
 func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
@@ -267,12 +279,18 @@ func (s service) Update(ctx context.Context, sessionID string, name, description
 
 func (s service) Complete(ctx context.Context, ID string) error {
 	clog.WithGroupField(ctx, "sessionService.complete", "sessionId", ID)
-	session, err := s.store.getDoc(ctx, ID)
+	cand, err := s.store.getDocWithMeta(ctx, ID)
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
+	session := &cand.session
 	if session.CompletedAt == nil {
-		completedAt := time.Now()
+		// Record the final loadout check-in before marking the session complete so
+		// any subsequent tick (which skips loadout capture on completed sessions)
+		// already sees the final loadout history when linking late-arriving games.
+		s.recordFinalLoadoutCheckIn(ctx, *cand)
+
+		completedAt := s.now()
 		if err := s.store.completeDoc(ctx, ID, completedAt); err != nil {
 			return fmt.Errorf("failed to complete session: %w", err)
 		}
@@ -292,6 +310,50 @@ func (s service) Complete(ctx context.Context, ID string) error {
 	}
 
 	return nil
+}
+
+func (s service) recordFinalLoadoutCheckIn(ctx context.Context, cand tickCandidate) {
+	if s.snapshotService == nil || s.userService == nil {
+		return
+	}
+	checkInCtx, cancel := context.WithTimeout(ctx, s.checkInTimeout())
+	defer cancel()
+
+	pmID, _, err := s.userService.GetPrimaryMembership(checkInCtx, cand.session.UserID)
+	if err != nil {
+		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+			"warning":      "failed to resolve primary membership for final loadout check-in",
+			"loadoutError": err.Error(),
+		})
+		return
+	}
+	res, err := s.snapshotService.SaveSessionCheckIn(checkInCtx, cand.session.UserID, strconv.FormatInt(pmID, 10), cand.session.CharacterID, snapshot.SessionCheckInOptions{
+		LastSnapshotID:         cand.lastSnapshotID,
+		LastSnapshotHash:       cand.lastSnapshotHash,
+		LastSnapshotRecordedAt: cand.lastSnapshotRecordedAt,
+		HeartbeatInterval:      snapshotHeartbeatPeriod,
+	})
+	if err != nil {
+		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+			"warning":      "failed to save final loadout check-in",
+			"loadoutError": err.Error(),
+		})
+		return
+	}
+	if !res.HistoryRecorded {
+		clog.WithGroupField(ctx, "sessionService.complete", "finalLoadoutThrottled", true)
+		return
+	}
+	if err := s.store.setLastSnapshot(ctx, cand.session.ID, res.SnapshotID, res.SnapshotHash, res.RecordedAt); err != nil {
+		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+			"warning":           "failed to persist final snapshot metadata on session",
+			"lastSnapshotError": err.Error(),
+		})
+	}
+	clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+		"finalLoadoutSaved": true,
+		"snapshotId":        res.SnapshotID,
+	})
 }
 
 func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) error {
