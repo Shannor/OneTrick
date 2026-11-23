@@ -1,0 +1,79 @@
+get:
+  operationId: GetCharacterTelemetry
+  description: Returns slim chronological match telemetry for a character alongside referenced snapshot summaries
+  parameters:
+    - in: path
+      name: userId
+      x-go-name: userID
+      required: true
+      description: Internal user ID, Bungie member ID, or primary membership ID
+      schema:
+        type: string
+    - in: path
+      name: characterId
+      x-go-name: characterID
+      required: true
+      description: Target Destiny 2 character ID
+      schema:
+        type: string
+    - in: query
+      name: from
+      required: false
+      description: Inclusive RFC3339 start timestamp filter on activity period
+      schema:
+        type: string
+        format: date-time
+    - in: query
+      name: to
+      required: false
+      description: Inclusive RFC3339 end timestamp filter on activity period
+      schema:
+        type: string
+        format: date-time
+    - in: query
+      name: gameMode
+      required: false
+      description: Optional PvP game mode filter (defaults to allGameModes)
+      schema:
+        $ref: ../components/schemas/GameMode.yaml
+    - in: query
+      name: snapshotId
+      x-go-name: snapshotID
+      required: false
+      description: Optional loadout snapshot ID to scope telemetry to a single loadout
+      schema:
+        type: string
+    - in: query
+      name: limit
+      required: false
+      description: Maximum number of most recent matching games to return (returned chronologically ascending)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 2000
+        default: 500
+  responses:
+    "200":
+      description: Chronological character telemetry and snapshot summaries
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CharacterTelemetryResponse.yaml
+    "400":
+      description: Invalid query parameters
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "404":
+      description: User, character, or snapshot not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    "500":
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

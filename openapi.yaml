@@ -334,6 +334,86 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Session'
+  /users/{userId}/characters/{characterId}/telemetry:
+    get:
+      operationId: GetCharacterTelemetry
+      description: Returns slim chronological match telemetry for a character alongside referenced snapshot summaries
+      parameters:
+        - in: path
+          name: userId
+          x-go-name: userID
+          required: true
+          description: Internal user ID, Bungie member ID, or primary membership ID
+          schema:
+            type: string
+        - in: path
+          name: characterId
+          x-go-name: characterID
+          required: true
+          description: Target Destiny 2 character ID
+          schema:
+            type: string
+        - in: query
+          name: from
+          required: false
+          description: Inclusive RFC3339 start timestamp filter on activity period
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          required: false
+          description: Inclusive RFC3339 end timestamp filter on activity period
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: gameMode
+          required: false
+          description: Optional PvP game mode filter (defaults to allGameModes)
+          schema:
+            $ref: '#/components/schemas/GameMode'
+        - in: query
+          name: snapshotId
+          x-go-name: snapshotID
+          required: false
+          description: Optional loadout snapshot ID to scope telemetry to a single loadout
+          schema:
+            type: string
+        - in: query
+          name: limit
+          required: false
+          description: Maximum number of most recent matching games to return (returned chronologically ascending)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            default: 500
+      responses:
+        '200':
+          description: Chronological character telemetry and snapshot summaries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CharacterTelemetryResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: User, character, or snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /snapshots:
     post:
       parameters:
@@ -1865,6 +1945,98 @@ components:
         - GameModeIronBanner
       x-oapi-codegen-extra-tags:
         firestore: estimatedGameMode,omitempty
+    ConfidenceLevel:
+      type: string
+      enum:
+        - notFound
+        - noMatch
+        - low
+        - medium
+        - high
+      x-enum-varnames:
+        - NotFoundConfidenceLevel
+        - NoMatchConfidenceLevel
+        - LowConfidenceLevel
+        - MediumConfidenceLevel
+        - HighConfidenceLevel
+      x-oapi-codegen-extra-tags:
+        firestore: confidenceLevel
+    TelemetryMatch:
+      type: object
+      description: Slim per-match telemetry record for a single character
+      required:
+        - activityId
+        - period
+        - location
+        - activity
+        - kills
+        - deaths
+        - assists
+        - won
+      properties:
+        activityId:
+          type: string
+          x-go-name: ActivityID
+        period:
+          type: string
+          format: date-time
+        location:
+          type: string
+        activity:
+          type: string
+        estimatedGameMode:
+          $ref: '#/components/schemas/GameMode'
+        kills:
+          type: integer
+        deaths:
+          type: integer
+        assists:
+          type: integer
+        won:
+          type: boolean
+        timePlayedSeconds:
+          type: integer
+        sessionId:
+          type: string
+          x-go-name: SessionID
+        snapshotId:
+          type: string
+          x-go-name: SnapshotID
+        snapshotConfidence:
+          $ref: '#/components/schemas/ConfidenceLevel'
+    TelemetrySnapshotSummary:
+      type: object
+      description: Lightweight snapshot metadata referenced by telemetry matches
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          x-go-name: ID
+        name:
+          type: string
+    CharacterTelemetryResponse:
+      type: object
+      description: Character-scoped chronological match telemetry and referenced snapshot summaries
+      required:
+        - matches
+        - snapshots
+        - totalCount
+        - truncated
+      properties:
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/TelemetryMatch'
+        snapshots:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/TelemetrySnapshotSummary'
+        totalCount:
+          type: integer
+        truncated:
+          type: boolean
     BaseItemInfo:
       x-oapi-codegen-extra-tags:
         firestore: baseItemInfo
@@ -2492,22 +2664,6 @@ components:
           $ref: '#/components/schemas/GameMode'
           x-oapi-codegen-extra-tags:
             firestore: estimatedGameMode,omitempty
-    ConfidenceLevel:
-      type: string
-      enum:
-        - notFound
-        - noMatch
-        - low
-        - medium
-        - high
-      x-enum-varnames:
-        - NotFoundConfidenceLevel
-        - NoMatchConfidenceLevel
-        - LowConfidenceLevel
-        - MediumConfidenceLevel
-        - HighConfidenceLevel
-      x-oapi-codegen-extra-tags:
-        firestore: confidenceLevel
     ConfidenceSource:
       type: string
       enum:

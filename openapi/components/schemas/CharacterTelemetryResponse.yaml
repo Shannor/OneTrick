@@ -1,0 +1,20 @@
+type: object
+description: Character-scoped chronological match telemetry and referenced snapshot summaries
+required:
+  - matches
+  - snapshots
+  - totalCount
+  - truncated
+properties:
+  matches:
+    type: array
+    items:
+      $ref: ./TelemetryMatch.yaml
+  snapshots:
+    type: object
+    additionalProperties:
+      $ref: ./TelemetrySnapshotSummary.yaml
+  totalCount:
+    type: integer
+  truncated:
+    type: boolean

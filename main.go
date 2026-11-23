@@ -14,6 +14,7 @@ import (
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
+	"oneTrick/services/telemetry"
 	"oneTrick/services/user"
 	"oneTrick/validator"
 	"os"
@@ -66,6 +67,11 @@ func main() {
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
 	sessionService := session.NewService(firestore, aggregateService, userService, destinyService, snapshotService, manifestService)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
+	telemetryService := telemetry.NewService(
+		telemetry.NewUserReaderAdapter(userService),
+		telemetry.NewSnapshotReaderAdapter(snapshotService),
+		telemetry.NewFirestoreMatchStore(firestore),
+	)
 	server := NewServer(
 		destinyService,
 		d2AuthAService,
@@ -75,6 +81,7 @@ func main() {
 		sessionService,
 		manifestService,
 		statsService,
+		telemetryService,
 		env.InternalAPIKey,
 	)
 

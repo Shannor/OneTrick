@@ -11,6 +11,7 @@ import (
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
+	"oneTrick/services/telemetry"
 	"oneTrick/services/user"
 	"slices"
 	"strconv"
@@ -25,6 +26,10 @@ import (
 // ensure that we've conformed to the `ServerInterface` with a compile-time check
 var _ api.StrictServerInterface = (*Server)(nil)
 
+type telemetryService interface {
+	GetCharacterTelemetry(ctx context.Context, query telemetry.Query) (telemetry.Result, error)
+}
+
 type Server struct {
 	D2Service         destiny.Service
 	D2AuthService     destiny.AuthService
@@ -34,6 +39,7 @@ type Server struct {
 	AggregateService  aggregate.Service
 	SessionService    session.Service
 	StatsService      stats.Service
+	TelemetryService  telemetryService
 	InternalAPIKey    string
 }
 
@@ -46,6 +52,7 @@ func NewServer(
 	sessionService session.Service,
 	manifestService destiny.ManifestService,
 	statsService stats.Service,
+	telemetrySvc telemetryService,
 	internalAPIKey string,
 ) Server {
 	return Server{
@@ -57,6 +64,7 @@ func NewServer(
 		SessionService:    sessionService,
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
+		TelemetryService:  telemetrySvc,
 		InternalAPIKey:    internalAPIKey,
 	}
 }
@@ -1192,3 +1200,125 @@ func (s Server) BackfillAggregateData(ctx context.Context, request api.BackfillA
 		Failed:  0,
 	}, nil
 }
+
+func (s Server) GetCharacterTelemetry(ctx context.Context, request api.GetCharacterTelemetryRequestObject) (api.GetCharacterTelemetryResponseObject, error) {
+	reqFields := clog.Fields{
+		"userId":      request.UserID,
+		"characterId": request.CharacterID,
+	}
+	if request.Params.SnapshotID != nil && *request.Params.SnapshotID != "" {
+		reqFields["snapshotId"] = *request.Params.SnapshotID
+	}
+	if request.Params.GameMode != nil && *request.Params.GameMode != "" {
+		reqFields["gameMode"] = string(*request.Params.GameMode)
+	}
+	if request.Params.Limit != nil {
+		reqFields["limit"] = *request.Params.Limit
+	}
+	clog.WithGroupFields(ctx, "request", reqFields)
+
+	if request.Params.Limit != nil && (*request.Params.Limit < 1 || *request.Params.Limit > telemetry.MaxLimit) {
+		return api.GetCharacterTelemetry400JSONResponse{
+			Message: fmt.Sprintf("limit must be between 1 and %d", telemetry.MaxLimit),
+			Status:  api.ErrUnknownError,
+		}, nil
+	}
+
+	result, err := s.TelemetryService.GetCharacterTelemetry(ctx, toTelemetryQuery(request))
+	if err != nil {
+		if errors.Is(err, telemetry.ErrInvalidQuery) {
+			return api.GetCharacterTelemetry400JSONResponse{
+				Message: err.Error(),
+				Status:  api.ErrUnknownError,
+			}, nil
+		}
+		if errors.Is(err, telemetry.ErrNotFound) {
+			return api.GetCharacterTelemetry404JSONResponse{
+				Message: err.Error(),
+				Status:  api.ErrUnknownError,
+			}, nil
+		}
+		return api.GetCharacterTelemetry500JSONResponse{
+			Message: err.Error(),
+			Status:  api.ErrInternalSystemDown,
+		}, nil
+	}
+
+	return toTelemetryResponse(result), nil
+}
+
+func toTelemetryQuery(request api.GetCharacterTelemetryRequestObject) telemetry.Query {
+	q := telemetry.Query{
+		UserID:      request.UserID,
+		CharacterID: request.CharacterID,
+	}
+	if request.Params.From != nil {
+		q.From = *request.Params.From
+	}
+	if request.Params.To != nil {
+		q.To = *request.Params.To
+	}
+	if request.Params.GameMode != nil {
+		q.GameMode = telemetry.GameMode(*request.Params.GameMode)
+	}
+	if request.Params.SnapshotID != nil {
+		q.SnapshotID = *request.Params.SnapshotID
+	}
+	if request.Params.Limit != nil {
+		q.Limit = *request.Params.Limit
+	}
+	return q
+}
+
+func toTelemetryResponse(res telemetry.Result) api.GetCharacterTelemetry200JSONResponse {
+	matches := make([]api.TelemetryMatch, 0, len(res.Matches))
+	for _, m := range res.Matches {
+		item := api.TelemetryMatch{
+			ActivityID: m.ActivityID,
+			Period:     m.Period,
+			Location:   m.Location,
+			Activity:   m.Activity,
+			Kills:      m.Kills,
+			Deaths:     m.Deaths,
+			Assists:    m.Assists,
+			Won:        m.Won,
+		}
+		if m.EstimatedGameMode != "" {
+			gm := api.GameMode(m.EstimatedGameMode)
+			item.EstimatedGameMode = &gm
+		}
+		if m.HasTimePlayedSeconds {
+			tp := m.TimePlayedSeconds
+			item.TimePlayedSeconds = &tp
+		}
+		if m.SessionID != "" {
+			sid := m.SessionID
+			item.SessionID = &sid
+		}
+		if m.SnapshotID != "" {
+			snapID := m.SnapshotID
+			item.SnapshotID = &snapID
+		}
+		if m.SnapshotConfidence != "" {
+			conf := api.ConfidenceLevel(m.SnapshotConfidence)
+			item.SnapshotConfidence = &conf
+		}
+		matches = append(matches, item)
+	}
+
+	snapshots := make(map[string]api.TelemetrySnapshotSummary, len(res.Snapshots))
+	for id, summary := range res.Snapshots {
+		snapshots[id] = api.TelemetrySnapshotSummary{
+			ID:   summary.ID,
+			Name: summary.Name,
+		}
+	}
+
+	return api.GetCharacterTelemetry200JSONResponse{
+		Matches:    matches,
+		Snapshots:  snapshots,
+		TotalCount: res.TotalCount,
+		Truncated:  res.Truncated,
+	}
+}
+

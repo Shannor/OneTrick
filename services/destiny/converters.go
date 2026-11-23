@@ -683,28 +683,40 @@ func isQuickplayActivity(mode, activity string) bool {
 	return false
 }
 
+// EstimateGameModeName classifies an activity into a canonical game mode string using the priority order:
+// ironBanner -> trials -> competitive -> quickplay, returning "" if unclassifiable.
+func EstimateGameModeName(mode, activity string) string {
+	m := strings.TrimSpace(mode)
+	act := strings.TrimSpace(activity)
+
+	if isIronBannerActivity(m, act) {
+		return "ironBanner"
+	}
+	if isTrialsActivity(m, act) {
+		return "trials"
+	}
+	if isCompetitiveActivity(m, act) {
+		return "competitive"
+	}
+	if isQuickplayActivity(m, act) {
+		return "quickplay"
+	}
+	return ""
+}
+
 // EstimateGameMode classifies an activity into a canonical api.GameMode using the priority order:
 // ironBanner -> trials -> competitive -> quickplay.
 func EstimateGameMode(mode *string, activity string) *api.GameMode {
 	m := ""
 	if mode != nil {
-		m = strings.TrimSpace(*mode)
+		m = *mode
 	}
-	act := strings.TrimSpace(activity)
-
-	if isIronBannerActivity(m, act) {
-		return new(api.GameModeIronBanner)
+	name := EstimateGameModeName(m, activity)
+	if name == "" {
+		return nil
 	}
-	if isTrialsActivity(m, act) {
-		return new(api.GameModeTrials)
-	}
-	if isCompetitiveActivity(m, act) {
-		return new(api.GameModeCompetitive)
-	}
-	if isQuickplayActivity(m, act) {
-		return new(api.GameModeQuickPlay)
-	}
-	return nil
+	gm := api.GameMode(name)
+	return &gm
 }
 
 // MatchesGameMode classifies whether an ActivityHistory record belongs to the specified GameMode.
