@@ -3,9 +3,12 @@ package user
 import (
 	"context"
 	"errors"
+	"fmt"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/services/destiny"
+	"oneTrick/utils"
+	"os"
 	"reflect"
 	"strconv"
 	"sync"
@@ -13,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
 )
 
@@ -700,15 +704,15 @@ func TestLegacyUnindexedUsersCache(t *testing.T) {
 	})
 }
 
-func TestChunkUniqueStrings(t *testing.T) {
+func TestBatchChunkLimits(t *testing.T) {
 	input := make([]string, 0, 70)
 	for i := 0; i < 65; i++ {
 		input = append(input, "id-"+strconv.Itoa(i))
 	}
-	// Add duplicates and empty strings.
 	input = append(input, "", "   ", "id-0", "id-10", "id-64")
 
-	chunks := chunkUniqueStrings(input, firestoreInBatchLimit)
+	unique := utils.UniqueTrimmedStrings(input)
+	chunks := utils.Chunk(unique, firestoreInBatchLimit)
 	if len(chunks) != 3 {
 		t.Fatalf("expected 3 chunks (30, 30, 5), got %d", len(chunks))
 	}
@@ -716,7 +720,7 @@ func TestChunkUniqueStrings(t *testing.T) {
 		t.Fatalf("unexpected chunk sizes: %d, %d, %d", len(chunks[0]), len(chunks[1]), len(chunks[2]))
 	}
 
-	orChunks := chunkUniqueStrings(input, firestoreOrInBatchLimit)
+	orChunks := utils.Chunk(unique, firestoreOrInBatchLimit)
 	if len(orChunks) != 5 {
 		t.Fatalf("expected 5 OrFilter chunks (15, 15, 15, 15, 5), got %d", len(orChunks))
 	}
@@ -808,11 +812,11 @@ func TestUserServiceGetFireteam(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("expected 1 fireteam member, got %d", len(got))
 		}
-		if got[0].ID != "u-caller" || got[0].ActiveSessions == nil || len(*got[0].ActiveSessions) != 1 {
+		if got[0].ID != "u-caller" || len(got[0].ActiveSessions) != 1 {
 			t.Fatalf("expected 1 active session on caller, got %+v", got[0])
 		}
-		ses := (*got[0].ActiveSessions)[0]
-		if ses.SessionID != "ses-1" || ses.CharacterID != "char-1" || !ses.StartedAt.Equal(t1) || ses.TrackComp == nil || !*ses.TrackComp {
+		ses := got[0].ActiveSessions[0]
+		if ses.SessionID != "ses-1" || ses.CharacterID != "char-1" || !ses.StartedAt.Equal(t1) || !ses.TrackComp {
 			t.Fatalf("unexpected active session payload: %+v", ses)
 		}
 	})
@@ -849,10 +853,10 @@ func TestUserServiceGetFireteam(t *testing.T) {
 				{MembershipId: new(caller.PrimaryMembershipID)},
 				{MembershipId: nil},
 				{MembershipId: new(mate1.PrimaryMembershipID)},
-				{MembershipId: new("4611686018499999999")}, // unregistered random
+				{MembershipId: new("4611686018499999999")},
 				{MembershipId: new(mate2.PrimaryMembershipID)},
-				{MembershipId: new(mate1.PrimaryMembershipID)}, // duplicate party entry
-				{MembershipId: new("999000333")},               // matches via memberId
+				{MembershipId: new(mate1.PrimaryMembershipID)},
+				{MembershipId: new("999000333")},
 			},
 		}
 		sessions := &fakeActiveSessionReader{
@@ -887,7 +891,6 @@ func TestUserServiceGetFireteam(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Confirm batched queries rather than N+1 GetUser calls.
 		if store.lookupCalls != 1 {
 			t.Fatalf("expected exactly 1 caller GetUser lookup (no N+1 loop), got %d", store.lookupCalls)
 		}
@@ -906,41 +909,38 @@ func TestUserServiceGetFireteam(t *testing.T) {
 			t.Fatalf("expected 4 matched registered members, got %d: %+v", len(got), got)
 		}
 
-		// Member 0: caller (no active sessions -> empty non-nil slice)
-		if got[0].ID != "u-caller" || got[0].ActiveSessions == nil || len(*got[0].ActiveSessions) != 0 {
+		if got[0].ID != "u-caller" || got[0].ActiveSessions == nil || len(got[0].ActiveSessions) != 0 {
 			t.Fatalf("expected caller with empty activeSessions slice, got %+v", got[0])
 		}
 
-		// Member 1: mate1 (2 active sessions)
-		if got[1].ID != "u-mate1" || got[1].ActiveSessions == nil || len(*got[1].ActiveSessions) != 2 {
+		if got[1].ID != "u-mate1" || len(got[1].ActiveSessions) != 2 {
 			t.Fatalf("expected mate1 with 2 active sessions, got %+v", got[1])
 		}
-		m1s0 := (*got[1].ActiveSessions)[0]
-		m1s1 := (*got[1].ActiveSessions)[1]
-		if m1s0.SessionID != "ses-mate1-a" || m1s0.TrackComp == nil || !*m1s0.TrackComp {
+		m1s0 := got[1].ActiveSessions[0]
+		m1s1 := got[1].ActiveSessions[1]
+		if m1s0.SessionID != "ses-mate1-a" || !m1s0.TrackComp {
 			t.Fatalf("unexpected mate1 first session: %+v", m1s0)
 		}
-		if m1s1.SessionID != "ses-mate1-b" || m1s1.TrackComp == nil || *m1s1.TrackComp {
+		if m1s1.SessionID != "ses-mate1-b" || m1s1.TrackComp {
 			t.Fatalf("unexpected mate1 second session: %+v", m1s1)
 		}
 
-		// Member 2: mate2 (0 active sessions, nil Characters normalized to empty slice)
-		if got[2].ID != "u-mate2" || got[2].Characters == nil || got[2].ActiveSessions == nil || len(*got[2].ActiveSessions) != 0 {
+		if got[2].ID != "u-mate2" || got[2].Characters == nil || got[2].ActiveSessions == nil || len(got[2].ActiveSessions) != 0 {
 			t.Fatalf("expected mate2 with empty non-nil characters and activeSessions, got %+v", got[2])
 		}
 
-		// Member 3: mate3 matched via memberId (1 active session)
-		if got[3].ID != "u-mate3" || got[3].MembershipID != mate3ByMemberID.PrimaryMembershipID || got[3].ActiveSessions == nil || len(*got[3].ActiveSessions) != 1 {
+		if got[3].ID != "u-mate3" || got[3].MembershipID != mate3ByMemberID.PrimaryMembershipID || len(got[3].ActiveSessions) != 1 {
 			t.Fatalf("expected mate3 with 1 active session, got %+v", got[3])
 		}
 	})
 
-	t.Run("propagates Destiny server down, party batch lookup, and active session reader errors", func(t *testing.T) {
+	t.Run("propagates Destiny server down sentinel, party batch lookup, and active session reader errors", func(t *testing.T) {
 		store := &fakeUserSearchStore{usersByLookupID: map[string]User{"u-caller": caller}}
 		d2Down := &fakeD2SearchService{partyErr: destiny.ErrDestinyServerDown}
 		svcDown := &userService{d2Service: d2Down, store: store}
-		if _, err := svcDown.GetFireteam(clog.NewContext(context.Background()), "u-caller"); err == nil || err.Error() != "destiny 3rd party service is down" {
-			t.Fatalf("expected destiny down error, got %v", err)
+		_, err := svcDown.GetFireteam(clog.NewContext(context.Background()), "u-caller")
+		if !errors.Is(err, ErrDestinyUnavailable) || !errors.Is(err, destiny.ErrDestinyServerDown) {
+			t.Fatalf("expected error matching ErrDestinyUnavailable and destiny.ErrDestinyServerDown, got %v", err)
 		}
 
 		storePartyErr := &fakeUserSearchStore{
@@ -964,5 +964,78 @@ func TestUserServiceGetFireteam(t *testing.T) {
 			t.Fatal("expected error when active session lookup fails")
 		}
 	})
+}
+
+func TestFirestoreEmulatorFindUsersByPartyMembershipIDs(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("skipping Firestore emulator integration test; set FIRESTORE_EMULATOR_HOST to run")
+	}
+
+	ctx := context.Background()
+	db, err := firestore.NewClient(ctx, "gruntt-destiny-test")
+	if err != nil {
+		t.Fatalf("failed to create Firestore emulator client: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := newFirestoreUserStore(db)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	uPrimary := User{
+		ID:                  "emu-party-primary-" + runID,
+		MemberID:            "bnet-primary-" + runID,
+		PrimaryMembershipID: "pm-primary-" + runID,
+		DisplayName:         "PrimaryMatch",
+	}
+	uMember := User{
+		ID:                  "emu-party-member-" + runID,
+		MemberID:            "bnet-member-" + runID,
+		PrimaryMembershipID: "pm-member-" + runID,
+		DisplayName:         "MemberMatch",
+	}
+	uOther := User{
+		ID:                  "emu-party-other-" + runID,
+		MemberID:            "bnet-other-" + runID,
+		PrimaryMembershipID: "pm-other-" + runID,
+		DisplayName:         "OtherUser",
+	}
+
+	seeded := []User{uPrimary, uMember, uOther}
+	for _, u := range seeded {
+		if _, err := db.Collection(userCollection).Doc(u.ID).Set(ctx, u); err != nil {
+			t.Fatalf("failed to seed user %s: %v", u.ID, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, u := range seeded {
+			_, _ = db.Collection(userCollection).Doc(u.ID).Delete(ctx)
+		}
+	})
+
+	// Build >15 IDs to verify multi-chunk OrFilter batching without hitting Firestore's 30-disjunction cap.
+	lookupIDs := make([]string, 0, 20)
+	lookupIDs = append(lookupIDs, uPrimary.PrimaryMembershipID, uPrimary.MemberID)
+	for i := 0; i < 16; i++ {
+		lookupIDs = append(lookupIDs, fmt.Sprintf("unmatched-%s-%d", runID, i))
+	}
+	lookupIDs = append(lookupIDs, uMember.MemberID)
+
+	got, err := store.findUsersByPartyMembershipIDs(ctx, lookupIDs)
+	if err != nil {
+		t.Fatalf("findUsersByPartyMembershipIDs failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 deduplicated matched users, got %d: %+v", len(got), got)
+	}
+	byID := make(map[string]User, len(got))
+	for _, u := range got {
+		byID[u.ID] = u
+	}
+	if _, ok := byID[uPrimary.ID]; !ok {
+		t.Fatalf("expected %s to match via primaryMembershipId/memberId", uPrimary.ID)
+	}
+	if _, ok := byID[uMember.ID]; !ok {
+		t.Fatalf("expected %s to match via memberId in second chunk", uMember.ID)
+	}
 }
 

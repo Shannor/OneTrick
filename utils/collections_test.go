@@ -47,3 +47,16 @@ func TestUnionNonZero(t *testing.T) {
 		t.Fatalf("expected base slice not to be mutated, got %v", base)
 	}
 }
+
+func TestUniqueTrimmedStrings(t *testing.T) {
+	got := UniqueTrimmedStrings([]string{"", "  ", " a ", "b", "a", " b ", "c"})
+	if !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("expected [a b c], got %v", got)
+	}
+	if got := UniqueTrimmedStrings([]string{"", "   "}); got != nil {
+		t.Fatalf("expected nil for blank-only input, got %v", got)
+	}
+	if got := UniqueTrimmedStrings(nil); got != nil {
+		t.Fatalf("expected nil for nil input, got %v", got)
+	}
+}

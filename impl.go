@@ -406,9 +406,42 @@ func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestO
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	members, err := s.UserService.GetFireteam(ctx, request.Params.XUserID)
 	if err != nil {
+		if errors.Is(err, user.ErrDestinyUnavailable) {
+			return api.GetFireteam503JSONResponse{
+				Message: "Destiny 2 servers are currently unavailable",
+				Status:  api.ErrDestinyServerDown,
+			}, nil
+		}
 		return nil, err
 	}
-	return api.GetFireteam200JSONResponse(members), nil
+	return api.GetFireteam200JSONResponse(toAPIFireteamMembers(members)), nil
+}
+
+func toAPIFireteamMembers(members []user.FireteamMember) []api.FireteamMember {
+	out := make([]api.FireteamMember, 0, len(members))
+	for _, m := range members {
+		chars := m.Characters
+		if chars == nil {
+			chars = []api.Character{}
+		}
+		active := make([]api.FireteamActiveSession, 0, len(m.ActiveSessions))
+		for _, ses := range m.ActiveSessions {
+			active = append(active, api.FireteamActiveSession{
+				SessionID:   ses.SessionID,
+				CharacterID: ses.CharacterID,
+				StartedAt:   ses.StartedAt,
+				TrackComp:   new(ses.TrackComp),
+			})
+		}
+		out = append(out, api.FireteamMember{
+			ID:             m.ID,
+			MembershipID:   m.MembershipID,
+			DisplayName:    m.DisplayName,
+			Characters:     chars,
+			ActiveSessions: new(active),
+		})
+	}
+	return out
 }
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {

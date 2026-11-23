@@ -54,7 +54,7 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 
 func (s service) UpdateSessionSummary(ctx context.Context, sessionID string, summary *api.SessionSummary) error {
 	clog.WithGroupField(ctx, "sessionService.updateSummary", "sessionId", sessionID)
-	return s.store.updateSummary(ctx, sessionID, summary, s.now())
+	return s.store.UpdateSummary(ctx, sessionID, summary, s.now())
 }
 
 type summaryAccumulator struct {

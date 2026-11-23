@@ -68,3 +68,11 @@ type ActiveSession struct {
 type ActiveSessionReader interface {
 	GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
 }
+
+type FireteamMember struct {
+	ID             string
+	MembershipID   string
+	DisplayName    string
+	Characters     []api.Character
+	ActiveSessions []ActiveSession
+}

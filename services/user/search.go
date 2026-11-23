@@ -284,7 +284,7 @@ func (f *firestoreUserStore) findUsersByMembershipIDs(ctx context.Context, bungi
 		}
 	}
 
-	for _, chunk := range chunkUniqueStrings(bungieNetIDs, firestoreInBatchLimit) {
+	for _, chunk := range utils.Chunk(utils.UniqueTrimmedStrings(bungieNetIDs), firestoreInBatchLimit) {
 		docs, err := f.db.Collection(userCollection).
 			Where("memberId", "in", chunk).
 			Documents(ctx).
@@ -299,7 +299,7 @@ func (f *firestoreUserStore) findUsersByMembershipIDs(ctx context.Context, bungi
 		addUsers(users)
 	}
 
-	for _, chunk := range chunkUniqueStrings(primaryMembershipIDs, firestoreInBatchLimit) {
+	for _, chunk := range utils.Chunk(utils.UniqueTrimmedStrings(primaryMembershipIDs), firestoreInBatchLimit) {
 		docs, err := f.db.Collection(userCollection).
 			Where("primaryMembershipId", "in", chunk).
 			Documents(ctx).
@@ -325,7 +325,7 @@ func (f *firestoreUserStore) findUsersByPartyMembershipIDs(ctx context.Context, 
 	if f.db == nil {
 		return nil, nil
 	}
-	chunks := chunkUniqueStrings(membershipIDs, firestoreOrInBatchLimit)
+	chunks := utils.Chunk(utils.UniqueTrimmedStrings(membershipIDs), firestoreOrInBatchLimit)
 	if len(chunks) == 0 {
 		return nil, nil
 	}
@@ -764,37 +764,6 @@ func mergeUniqueStrings(a []string, b []string) []string {
 		}
 	}
 	return out
-}
-
-func chunkUniqueStrings(values []string, size int) [][]string {
-	if size <= 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(values))
-	unique := make([]string, 0, len(values))
-	for _, v := range values {
-		v = strings.TrimSpace(v)
-		if v == "" {
-			continue
-		}
-		if _, exists := seen[v]; exists {
-			continue
-		}
-		seen[v] = struct{}{}
-		unique = append(unique, v)
-	}
-	if len(unique) == 0 {
-		return nil
-	}
-	chunks := make([][]string, 0, (len(unique)+size-1)/size)
-	for i := 0; i < len(unique); i += size {
-		end := i + size
-		if end > len(unique) {
-			end = len(unique)
-		}
-		chunks = append(chunks, unique[i:end])
-	}
-	return chunks
 }
 
 func isASCIIDigits(s string) bool {

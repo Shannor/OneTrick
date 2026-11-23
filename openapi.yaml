@@ -1543,8 +1543,6 @@ components:
         trackComp:
           type: boolean
     FireteamMember:
-      x-oapi-codegen-extra-tags:
-        firestore: fireteamMember
       type: object
       required:
         - id
@@ -1555,23 +1553,15 @@ components:
         id:
           x-go-name: ID
           type: string
-          x-oapi-codegen-extra-tags:
-            firestore: id
         membershipId:
           type: string
           x-go-name: MembershipID
-          x-oapi-codegen-extra-tags:
-            firestore: membershipId
         displayName:
           type: string
-          x-oapi-codegen-extra-tags:
-            firestore: displayName
         characters:
           type: array
           items:
             $ref: '#/components/schemas/Character'
-          x-oapi-codegen-extra-tags:
-            firestore: characters
         activeSessions:
           type: array
           items:

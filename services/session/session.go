@@ -41,7 +41,7 @@ var (
 )
 
 type service struct {
-	store            sessionStore
+	store            Store
 	aggregateService aggregate.Service
 	userService      user.Service
 	d2Service        destiny.Service
@@ -53,7 +53,7 @@ type service struct {
 var _ Service = (*service)(nil)
 
 func NewService(
-	store sessionStore,
+	store Store,
 	aggregateService aggregate.Service,
 	userService user.Service,
 	d2Service destiny.Service,
@@ -136,7 +136,7 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 		result.CompTracking = compTracking
 	}
 
-	created, err := s.store.createDoc(ctx, result)
+	created, err := s.store.CreateDoc(ctx, result)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (s service) HasActive(ctx context.Context, userID string, characterID strin
 		"userId":      userID,
 		"characterId": characterID,
 	})
-	hasActive, err := s.store.hasActive(ctx, userID, characterID)
+	hasActive, err := s.store.HasActive(ctx, userID, characterID)
 	if err != nil {
 		return false, err
 	}
@@ -163,7 +163,7 @@ func (s service) GetActive(ctx context.Context, userID string, characterID strin
 		"userId":      userID,
 		"characterId": characterID,
 	})
-	result, err := s.store.getActiveDoc(ctx, userID, characterID)
+	result, err := s.store.GetActiveDoc(ctx, userID, characterID)
 	if err != nil {
 		return nil, err
 	}
@@ -175,24 +175,12 @@ func (s service) GetActive(ctx context.Context, userID string, characterID strin
 }
 
 func (s service) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error) {
-	uniqueIDs := uniqueTrimmedStrings(userIDs)
-	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "requestedUserCount", len(uniqueIDs))
-	if len(uniqueIDs) == 0 {
-		clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", 0)
-		return []ActiveSession{}, nil
-	}
-	sessions, err := s.store.getActiveByUserIDs(ctx, uniqueIDs)
-	if err != nil {
-		return nil, err
-	}
-	sortActiveSessions(sessions)
-	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", len(sessions))
-	return sessions, nil
+	return NewActiveSessionReader(s.store).GetActiveByUserIDs(ctx, userIDs)
 }
 
 func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {
 	clog.WithGroupField(ctx, "sessionService.get", "sessionId", ID)
-	result, err := s.store.getDoc(ctx, ID)
+	result, err := s.store.GetDoc(ctx, ID)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +206,7 @@ func (s service) GetAll(ctx context.Context, userID *string, characterID *string
 	}
 	clog.WithGroupFields(ctx, "sessionService.getAll", fields)
 
-	result, err := s.store.listDocs(ctx, userID, characterID, status)
+	result, err := s.store.ListDocs(ctx, userID, characterID, status)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +263,7 @@ func (s service) Update(ctx context.Context, sessionID string, name, description
 		clog.WithGroupField(ctx, "sessionService.update", "warning", "no updates to session")
 		return nil
 	}
-	if err := s.store.updateFields(ctx, sessionID, updates); err != nil {
+	if err := s.store.UpdateFields(ctx, sessionID, updates); err != nil {
 		return fmt.Errorf("failed to update session: %w", err)
 	}
 
@@ -284,13 +272,13 @@ func (s service) Update(ctx context.Context, sessionID string, name, description
 
 func (s service) Complete(ctx context.Context, ID string) error {
 	clog.WithGroupField(ctx, "sessionService.complete", "sessionId", ID)
-	session, err := s.store.getDoc(ctx, ID)
+	session, err := s.store.GetDoc(ctx, ID)
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 	if session.CompletedAt == nil {
 		completedAt := time.Now()
-		if err := s.store.completeDoc(ctx, ID, completedAt); err != nil {
+		if err := s.store.CompleteDoc(ctx, ID, completedAt); err != nil {
 			return fmt.Errorf("failed to complete session: %w", err)
 		}
 		session.CompletedAt = &completedAt
@@ -313,7 +301,7 @@ func (s service) Complete(ctx context.Context, ID string) error {
 
 func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) error {
 	clog.WithGroupField(ctx, "sessionService.finalizeCompTracking", "sessionId", sessionID)
-	ses, err := s.store.getDoc(ctx, sessionID)
+	ses, err := s.store.GetDoc(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
@@ -355,7 +343,7 @@ func (s service) finalizeCompTrackingForSession(ctx context.Context, ses *api.Se
 		pointDelta = &delta
 	}
 
-	if err := s.store.updateCompTrackingEnd(ctx, ses.ID, endSnap, pointDelta); err != nil {
+	if err := s.store.UpdateCompTrackingEnd(ctx, ses.ID, endSnap, pointDelta); err != nil {
 		return fmt.Errorf("failed to persist competitive rank end: %w", err)
 	}
 
@@ -375,7 +363,7 @@ func (s service) SetLastActivity(ctx context.Context, ID, activityID string) err
 		"sessionId":  ID,
 		"activityId": activityID,
 	})
-	if err := s.store.setLastActivity(ctx, ID, activityID, time.Now()); err != nil {
+	if err := s.store.SetLastActivity(ctx, ID, activityID, time.Now()); err != nil {
 		return fmt.Errorf("failed to update session: %v", err)
 	}
 	return nil
@@ -386,7 +374,7 @@ func (s service) Delete(ctx context.Context, sessionID string, userID string) er
 		"sessionId": sessionID,
 		"userId":    userID,
 	})
-	ses, err := s.store.getDoc(ctx, sessionID)
+	ses, err := s.store.GetDoc(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			clog.WithGroupField(ctx, "sessionService.delete", "warning", "session not found for deletion")
@@ -411,7 +399,7 @@ func (s service) Delete(ctx context.Context, sessionID string, userID string) er
 	}
 
 	// Delete session document
-	if err := s.store.deleteDoc(ctx, sessionID); err != nil {
+	if err := s.store.DeleteDoc(ctx, sessionID); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
@@ -424,5 +412,5 @@ func (s service) AddAggregateIDs(ctx context.Context, sessionID string, aggregat
 		"sessionId":      sessionID,
 		"aggregateCount": len(aggregateIDs),
 	})
-	return s.store.addAggregateIDs(ctx, sessionID, aggregateIDs)
+	return s.store.AddAggregateIDs(ctx, sessionID, aggregateIDs)
 }

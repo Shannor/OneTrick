@@ -19,7 +19,7 @@ type Service interface {
 	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
 	GetPrimaryMembership(ctx context.Context, userID string) (int64, int64, error)
-	GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error)
+	GetFireteam(ctx context.Context, userID string) ([]FireteamMember, error)
 	// BackfillCharacters fetches characters from Destiny for the user's primary membership
 	// and updates the user's characterIds field in Firestore.
 	BackfillCharacters(ctx context.Context, userID string) error
@@ -55,7 +55,10 @@ func NewUserService(client *firestore.Client, service destiny.Service, activeSes
 	}
 }
 
-var NotFound = errors.New("user not found")
+var (
+	NotFound              = errors.New("user not found")
+	ErrDestinyUnavailable = errors.New("destiny 3rd party service is down")
+)
 
 func (s *userService) GetUser(ctx context.Context, ID string) (*User, error) {
 	clog.WithGroupField(ctx, "userService.getUser", "lookupId", ID)
@@ -133,7 +136,7 @@ func (s *userService) GetPrimaryMembership(ctx context.Context, userID string) (
 	return pmID, membershipType, nil
 }
 
-func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error) {
+func (s *userService) GetFireteam(ctx context.Context, userID string) ([]FireteamMember, error) {
 	clog.WithGroupField(ctx, "userService.getFireteam", "userId", userID)
 	caller, err := s.GetUser(ctx, userID)
 	if err != nil {
@@ -146,9 +149,9 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 	partyMembers, err := s.d2Service.GetPartyMembers(ctx, pmID, membershipType)
 	if err != nil {
 		if errors.Is(err, destiny.ErrDestinyServerDown) {
-			return nil, fmt.Errorf("destiny 3rd party service is down")
+			return nil, fmt.Errorf("%w: %w", ErrDestinyUnavailable, err)
 		}
-		return nil, fmt.Errorf("failed to fetch characters: %w", err)
+		return nil, fmt.Errorf("failed to fetch party members: %w", err)
 	}
 
 	usersByMembership := make(map[string]User, len(partyMembers)+2)
@@ -208,7 +211,7 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 		matchedUserIDs = append(matchedUserIDs, u.ID)
 	}
 
-	sessionsByUser := make(map[string][]api.FireteamActiveSession, len(matchedUsers))
+	sessionsByUser := make(map[string][]ActiveSession, len(matchedUsers))
 	activeSessionCount := 0
 	if len(matchedUserIDs) > 0 && s.activeSessions != nil {
 		activeSessions, err := s.activeSessions.GetActiveByUserIDs(ctx, matchedUserIDs)
@@ -217,16 +220,11 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 		}
 		activeSessionCount = len(activeSessions)
 		for _, ses := range activeSessions {
-			sessionsByUser[ses.UserID] = append(sessionsByUser[ses.UserID], api.FireteamActiveSession{
-				SessionID:   ses.SessionID,
-				CharacterID: ses.CharacterID,
-				StartedAt:   ses.StartedAt,
-				TrackComp:   new(ses.TrackComp),
-			})
+			sessionsByUser[ses.UserID] = append(sessionsByUser[ses.UserID], ses)
 		}
 	}
 
-	fireteam := make([]api.FireteamMember, 0, len(matchedUsers))
+	fireteam := make([]FireteamMember, 0, len(matchedUsers))
 	for _, u := range matchedUsers {
 		chars := u.Characters
 		if chars == nil {
@@ -234,14 +232,14 @@ func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.Fir
 		}
 		active := sessionsByUser[u.ID]
 		if active == nil {
-			active = []api.FireteamActiveSession{}
+			active = []ActiveSession{}
 		}
-		fireteam = append(fireteam, api.FireteamMember{
+		fireteam = append(fireteam, FireteamMember{
 			DisplayName:    u.DisplayName,
 			ID:             u.ID,
 			MembershipID:   u.PrimaryMembershipID,
 			Characters:     chars,
-			ActiveSessions: new(active),
+			ActiveSessions: active,
 		})
 	}
 

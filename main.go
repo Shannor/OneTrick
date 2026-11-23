@@ -59,10 +59,11 @@ func main() {
 	)
 
 	sessionStore := session.NewFirestoreStore(firestore)
+	activeSessionReader := session.NewActiveSessionReader(sessionStore)
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
-	userService := user.NewUserService(firestore, destinyService, activeSessionReaderAdapter{store: sessionStore})
+	userService := user.NewUserService(firestore, destinyService, activeSessionReaderAdapter{reader: activeSessionReader})
 	aggregateService := aggregate.NewService(firestore)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
 	sessionService := session.NewService(sessionStore, aggregateService, userService, destinyService, snapshotService, manifestService)
@@ -132,11 +133,11 @@ func main() {
 }
 
 type activeSessionReaderAdapter struct {
-	store *session.FirestoreStore
+	reader *session.ActiveSessionReader
 }
 
 func (a activeSessionReaderAdapter) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]user.ActiveSession, error) {
-	sessions, err := a.store.GetActiveByUserIDs(ctx, userIDs)
+	sessions, err := a.reader.GetActiveByUserIDs(ctx, userIDs)
 	if err != nil {
 		return nil, err
 	}

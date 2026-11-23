@@ -10,6 +10,7 @@ import (
 	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
+	"os"
 	"slices"
 	"strconv"
 	"sync"
@@ -64,7 +65,7 @@ func cloneSession(s *api.Session) api.Session {
 	return cp
 }
 
-func (m *memorySessionStore) hasActive(_ context.Context, userID, characterID string) (bool, error) {
+func (m *memorySessionStore) HasActive(_ context.Context, userID, characterID string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, s := range m.docs {
@@ -75,7 +76,7 @@ func (m *memorySessionStore) hasActive(_ context.Context, userID, characterID st
 	return false, nil
 }
 
-func (m *memorySessionStore) createDoc(_ context.Context, ses *api.Session) (*api.Session, error) {
+func (m *memorySessionStore) CreateDoc(_ context.Context, ses *api.Session) (*api.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -87,7 +88,7 @@ func (m *memorySessionStore) createDoc(_ context.Context, ses *api.Session) (*ap
 	return &out, nil
 }
 
-func (m *memorySessionStore) getActiveDoc(_ context.Context, userID, characterID string) (*api.Session, error) {
+func (m *memorySessionStore) GetActiveDoc(_ context.Context, userID, characterID string) (*api.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, s := range m.docs {
@@ -99,7 +100,7 @@ func (m *memorySessionStore) getActiveDoc(_ context.Context, userID, characterID
 	return nil, fmt.Errorf("no active session found")
 }
 
-func (m *memorySessionStore) getActiveByUserIDs(_ context.Context, userIDs []string) ([]ActiveSession, error) {
+func (m *memorySessionStore) GetActiveByUserIDs(_ context.Context, userIDs []string) ([]ActiveSession, error) {
 	m.getActiveByUserIDsCalls.Add(1)
 	if m.getActiveByUserIDsErr != nil {
 		return nil, m.getActiveByUserIDsErr
@@ -129,7 +130,7 @@ func (m *memorySessionStore) getActiveByUserIDs(_ context.Context, userIDs []str
 	return out, nil
 }
 
-func (m *memorySessionStore) getDoc(_ context.Context, sessionID string) (*api.Session, error) {
+func (m *memorySessionStore) GetDoc(_ context.Context, sessionID string) (*api.Session, error) {
 	m.getDocCalls.Add(1)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -141,7 +142,7 @@ func (m *memorySessionStore) getDoc(_ context.Context, sessionID string) (*api.S
 	return &cp, nil
 }
 
-func (m *memorySessionStore) listDocs(_ context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error) {
+func (m *memorySessionStore) ListDocs(_ context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]api.Session, 0, len(m.docs))
@@ -160,7 +161,7 @@ func (m *memorySessionStore) listDocs(_ context.Context, userID, characterID *st
 	return out, nil
 }
 
-func (m *memorySessionStore) listCompletedInWindow(_ context.Context, since, until time.Time) ([]api.Session, error) {
+func (m *memorySessionStore) ListCompletedInWindow(_ context.Context, since, until time.Time) ([]api.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]api.Session, 0)
@@ -180,7 +181,7 @@ func (m *memorySessionStore) listCompletedInWindow(_ context.Context, since, unt
 	return out, nil
 }
 
-func (m *memorySessionStore) getTickCandidates(_ context.Context, completedSince time.Time) ([]tickCandidate, error) {
+func (m *memorySessionStore) GetTickCandidates(_ context.Context, completedSince time.Time) ([]TickCandidate, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ids := make([]string, 0, len(m.docs))
@@ -189,7 +190,7 @@ func (m *memorySessionStore) getTickCandidates(_ context.Context, completedSince
 	}
 	slices.Sort(ids)
 
-	out := make([]tickCandidate, 0, len(ids))
+	out := make([]TickCandidate, 0, len(ids))
 	for _, id := range ids {
 		s := m.docs[id]
 		isPending := s.Status != nil && *s.Status == api.SessionPending
@@ -203,23 +204,23 @@ func (m *memorySessionStore) getTickCandidates(_ context.Context, completedSince
 			upd = &t
 		}
 		rec := m.lastSnapshots[id]
-		out = append(out, tickCandidate{
-			session:                cloneSession(s),
-			updatedAt:              upd,
-			lastSnapshotID:         rec.snapshotID,
-			lastSnapshotHash:       rec.hash,
-			lastSnapshotRecordedAt: rec.recordedAt,
+		out = append(out, TickCandidate{
+			Session:                cloneSession(s),
+			UpdatedAt:              upd,
+			LastSnapshotID:         rec.snapshotID,
+			LastSnapshotHash:       rec.hash,
+			LastSnapshotRecordedAt: rec.recordedAt,
 		})
 	}
 	return out, nil
 }
 
-func (m *memorySessionStore) updateFields(_ context.Context, _ string, _ []firestore.Update) error {
+func (m *memorySessionStore) UpdateFields(_ context.Context, _ string, _ []firestore.Update) error {
 	m.writes.Add(1)
 	return nil
 }
 
-func (m *memorySessionStore) completeDoc(_ context.Context, sessionID string, completedAt time.Time) error {
+func (m *memorySessionStore) CompleteDoc(_ context.Context, sessionID string, completedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -232,7 +233,7 @@ func (m *memorySessionStore) completeDoc(_ context.Context, sessionID string, co
 	return nil
 }
 
-func (m *memorySessionStore) endSessionDoc(_ context.Context, sessionID string, completedBy api.AuditField, completedAt time.Time, summary *api.SessionSummary) error {
+func (m *memorySessionStore) EndSessionDoc(_ context.Context, sessionID string, completedBy api.AuditField, completedAt time.Time, summary *api.SessionSummary) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -252,7 +253,7 @@ func (m *memorySessionStore) endSessionDoc(_ context.Context, sessionID string, 
 	return nil
 }
 
-func (m *memorySessionStore) updateSummary(_ context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error {
+func (m *memorySessionStore) UpdateSummary(_ context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -270,7 +271,7 @@ func (m *memorySessionStore) updateSummary(_ context.Context, sessionID string, 
 	return nil
 }
 
-func (m *memorySessionStore) updateCompTrackingEnd(_ context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error {
+func (m *memorySessionStore) UpdateCompTrackingEnd(_ context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -286,7 +287,7 @@ func (m *memorySessionStore) updateCompTrackingEnd(_ context.Context, sessionID 
 	return nil
 }
 
-func (m *memorySessionStore) setLastActivity(_ context.Context, sessionID, activityID string, seenAt time.Time) error {
+func (m *memorySessionStore) SetLastActivity(_ context.Context, sessionID, activityID string, seenAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -300,7 +301,7 @@ func (m *memorySessionStore) setLastActivity(_ context.Context, sessionID, activ
 	return nil
 }
 
-func (m *memorySessionStore) setLastSnapshot(_ context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
+func (m *memorySessionStore) SetLastSnapshot(_ context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -315,7 +316,7 @@ func (m *memorySessionStore) setLastSnapshot(_ context.Context, sessionID, snaps
 	return nil
 }
 
-func (m *memorySessionStore) deleteDoc(_ context.Context, sessionID string) error {
+func (m *memorySessionStore) DeleteDoc(_ context.Context, sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -325,7 +326,7 @@ func (m *memorySessionStore) deleteDoc(_ context.Context, sessionID string) erro
 	return nil
 }
 
-func (m *memorySessionStore) addAggregateIDs(_ context.Context, sessionID string, aggregateIDs []string) error {
+func (m *memorySessionStore) AddAggregateIDs(_ context.Context, sessionID string, aggregateIDs []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -1884,9 +1885,9 @@ type unfilteredWindowSessionStore struct {
 	*memorySessionStore
 }
 
-func (u *unfilteredWindowSessionStore) listCompletedInWindow(ctx context.Context, _, _ time.Time) ([]api.Session, error) {
+func (u *unfilteredWindowSessionStore) ListCompletedInWindow(ctx context.Context, _, _ time.Time) ([]api.Session, error) {
 	completed := api.SessionComplete
-	return u.memorySessionStore.listDocs(ctx, nil, nil, &completed)
+	return u.memorySessionStore.ListDocs(ctx, nil, nil, &completed)
 }
 
 func TestCleanupEmptyCompleted_SymmetricGuard(t *testing.T) {
@@ -1928,11 +1929,30 @@ func TestGetActiveByUserIDs(t *testing.T) {
 	t2 := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
 	t3 := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
 
+	findIntAttr := func(attrs []slog.Attr, key string) (int64, bool) {
+		var walk func([]slog.Attr) (int64, bool)
+		walk = func(list []slog.Attr) (int64, bool) {
+			for _, a := range list {
+				if a.Key == key && a.Value.Kind() == slog.KindInt64 {
+					return a.Value.Int64(), true
+				}
+				if a.Value.Kind() == slog.KindGroup {
+					if v, ok := walk(a.Value.Group()); ok {
+						return v, true
+					}
+				}
+			}
+			return 0, false
+		}
+		return walk(attrs)
+	}
+
 	t.Run("returns empty slice without querying store when input has no valid user IDs", func(t *testing.T) {
 		store := newMemorySessionStore()
 		svc := &service{store: store}
 
-		got, err := svc.GetActiveByUserIDs(clog.NewContext(context.Background()), []string{"", "   "})
+		ctx := clog.NewContext(context.Background())
+		got, err := svc.GetActiveByUserIDs(ctx, []string{"", "   "})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1941,6 +1961,13 @@ func TestGetActiveByUserIDs(t *testing.T) {
 		}
 		if store.getActiveByUserIDsCalls.Load() != 0 {
 			t.Fatalf("expected 0 store calls for empty input, got %d", store.getActiveByUserIDsCalls.Load())
+		}
+		attrs := clog.BagFromContext(ctx).Attrs()
+		if v, ok := findIntAttr(attrs, "requestedUserCount"); !ok || v != 0 {
+			t.Fatalf("expected requestedUserCount=0 in clog, got ok=%v v=%d", ok, v)
+		}
+		if v, ok := findIntAttr(attrs, "returnedCount"); !ok || v != 0 {
+			t.Fatalf("expected returnedCount=0 in clog, got ok=%v v=%d", ok, v)
 		}
 	})
 
@@ -1984,8 +2011,9 @@ func TestGetActiveByUserIDs(t *testing.T) {
 			Status:      new(api.SessionPending),
 		}
 
-		svc := &service{store: store}
-		got, err := svc.GetActiveByUserIDs(clog.NewContext(context.Background()), []string{" u-1 ", "u-2", "u-1", "u-3", ""})
+		reader := NewActiveSessionReader(store)
+		ctx := clog.NewContext(context.Background())
+		got, err := reader.GetActiveByUserIDs(ctx, []string{" u-1 ", "u-2", "u-1", "u-3", ""})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -2004,6 +2032,13 @@ func TestGetActiveByUserIDs(t *testing.T) {
 		if got[2].SessionID != "ses-old" || got[2].TrackComp || got[2].CharacterID != "char-1a" {
 			t.Fatalf("unexpected third session: %+v", got[2])
 		}
+		attrs := clog.BagFromContext(ctx).Attrs()
+		if v, ok := findIntAttr(attrs, "requestedUserCount"); !ok || v != 3 {
+			t.Fatalf("expected requestedUserCount=3 in clog, got ok=%v v=%d", ok, v)
+		}
+		if v, ok := findIntAttr(attrs, "returnedCount"); !ok || v != 3 {
+			t.Fatalf("expected returnedCount=3 in clog, got ok=%v v=%d", ok, v)
+		}
 	})
 
 	t.Run("propagates store error", func(t *testing.T) {
@@ -2016,5 +2051,120 @@ func TestGetActiveByUserIDs(t *testing.T) {
 			t.Fatal("expected error from store")
 		}
 	})
+}
+
+func TestFirestoreEmulatorGetActiveByUserIDs(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("skipping Firestore emulator integration test; set FIRESTORE_EMULATOR_HOST to run")
+	}
+
+	ctx := context.Background()
+	db, err := firestore.NewClient(ctx, "gruntt-destiny-test")
+	if err != nil {
+		t.Fatalf("failed to create Firestore emulator client: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := NewFirestoreStore(db)
+	reader := NewActiveSessionReader(store)
+
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	user1 := "emu-fireteam-u1-" + runID
+	user2 := "emu-fireteam-u2-" + runID
+	userOther := "emu-fireteam-other-" + runID
+
+	t1 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+
+	seedDocs := []struct {
+		id  string
+		doc map[string]any
+	}{
+		{
+			id: "emu-ses-comp-enabled-" + runID,
+			doc: map[string]any{
+				"id":          "emu-ses-comp-enabled-" + runID,
+				"userId":      user1,
+				"characterId": "char-1b",
+				"startedAt":   t3,
+				"status":      api.SessionPending,
+				"compTracking": map[string]any{
+					"enabled": true,
+				},
+			},
+		},
+		{
+			id: "emu-ses-comp-disabled-" + runID,
+			doc: map[string]any{
+				"id":          "emu-ses-comp-disabled-" + runID,
+				"userId":      user1,
+				"characterId": "char-1a",
+				"startedAt":   t1,
+				"status":      api.SessionPending,
+				"compTracking": map[string]any{
+					"enabled": false,
+				},
+			},
+		},
+		{
+			id: "emu-ses-no-comp-" + runID,
+			doc: map[string]any{
+				"id":          "emu-ses-no-comp-" + runID,
+				"userId":      user2,
+				"characterId": "char-2a",
+				"startedAt":   t2,
+				"status":      api.SessionPending,
+			},
+		},
+		{
+			id: "emu-ses-complete-" + runID,
+			doc: map[string]any{
+				"id":          "emu-ses-complete-" + runID,
+				"userId":      user2,
+				"characterId": "char-2b",
+				"startedAt":   t3,
+				"status":      api.SessionComplete,
+			},
+		},
+		{
+			id: "emu-ses-other-" + runID,
+			doc: map[string]any{
+				"id":          "emu-ses-other-" + runID,
+				"userId":      userOther,
+				"characterId": "char-99",
+				"startedAt":   t3,
+				"status":      api.SessionPending,
+			},
+		},
+	}
+
+	for _, s := range seedDocs {
+		if _, err := db.Collection(collection).Doc(s.id).Set(ctx, s.doc); err != nil {
+			t.Fatalf("failed to seed session doc %s: %v", s.id, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, s := range seedDocs {
+			_, _ = db.Collection(collection).Doc(s.id).Delete(ctx)
+		}
+	})
+
+	got, err := reader.GetActiveByUserIDs(clog.NewContext(ctx), []string{user1, user2, user1})
+	if err != nil {
+		t.Fatalf("GetActiveByUserIDs failed: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 active sessions, got %d: %+v", len(got), got)
+	}
+	if got[0].SessionID != "emu-ses-comp-enabled-"+runID || !got[0].TrackComp || got[0].CharacterID != "char-1b" || !got[0].StartedAt.Equal(t3) {
+		t.Fatalf("unexpected first active session: %+v", got[0])
+	}
+	if got[1].SessionID != "emu-ses-no-comp-"+runID || got[1].TrackComp || got[1].UserID != user2 || !got[1].StartedAt.Equal(t2) {
+		t.Fatalf("unexpected second active session (omitted compTracking must still be returned): %+v", got[1])
+	}
+	if got[2].SessionID != "emu-ses-comp-disabled-"+runID || got[2].TrackComp || got[2].CharacterID != "char-1a" || !got[2].StartedAt.Equal(t1) {
+		t.Fatalf("unexpected third active session: %+v", got[2])
+	}
 }
 
