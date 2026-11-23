@@ -1524,6 +1524,24 @@ components:
           description: User friendly description of the error
         status:
           $ref: '#/components/schemas/InternalError'
+    FireteamActiveSession:
+      type: object
+      required:
+        - sessionId
+        - characterId
+        - startedAt
+      properties:
+        sessionId:
+          type: string
+          x-go-name: SessionID
+        characterId:
+          type: string
+          x-go-name: CharacterID
+        startedAt:
+          type: string
+          format: date-time
+        trackComp:
+          type: boolean
     FireteamMember:
       x-oapi-codegen-extra-tags:
         firestore: fireteamMember
@@ -1541,7 +1559,7 @@ components:
             firestore: id
         membershipId:
           type: string
-          x-go-name: membershipID
+          x-go-name: MembershipID
           x-oapi-codegen-extra-tags:
             firestore: membershipId
         displayName:
@@ -1554,6 +1572,10 @@ components:
             $ref: '#/components/schemas/Character'
           x-oapi-codegen-extra-tags:
             firestore: characters
+        activeSessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FireteamActiveSession'
     Profile:
       type: object
       required:

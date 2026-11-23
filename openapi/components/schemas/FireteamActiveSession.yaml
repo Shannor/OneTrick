@@ -1,0 +1,17 @@
+type: object
+required:
+  - sessionId
+  - characterId
+  - startedAt
+properties:
+  sessionId:
+    type: string
+    x-go-name: SessionID
+  characterId:
+    type: string
+    x-go-name: CharacterID
+  startedAt:
+    type: string
+    format: date-time
+  trackComp:
+    type: boolean

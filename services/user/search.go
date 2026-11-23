@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"errors"
 	"oneTrick/api"
 	"oneTrick/utils"
 	"slices"
@@ -11,22 +12,26 @@ import (
 
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
+	"google.golang.org/api/iterator"
 )
 
 const (
 	firestoreInBatchLimit      = 30
+	firestoreOrInBatchLimit    = 15
 	firestorePrefixLimit       = 25
 	legacyUsersCacheTTL        = 5 * time.Minute
 	defaultBungieSearchTimeout = 4 * time.Second
 	firestorePrefixHighEnd     = "\uf8ff"
 )
 
-type userSearchStore interface {
+type userStore interface {
+	findUserByLookupID(ctx context.Context, id string) (*User, error)
 	findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error)
 	findUsersByMembershipIDs(ctx context.Context, bungieNetIDs []string, primaryMembershipIDs []string) ([]User, error)
+	findUsersByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
 }
 
-type firestoreUserSearchStore struct {
+type firestoreUserStore struct {
 	db *firestore.Client
 
 	// loadAllUsersFn defaults to scanning Firestore's users collection and can be overridden in unit tests.
@@ -39,11 +44,41 @@ type firestoreUserSearchStore struct {
 	legacyAllIndexed bool
 }
 
-func newFirestoreUserSearchStore(db *firestore.Client) *firestoreUserSearchStore {
-	return &firestoreUserSearchStore{db: db}
+func newFirestoreUserStore(db *firestore.Client) *firestoreUserStore {
+	return &firestoreUserStore{db: db}
 }
 
-func (f *firestoreUserSearchStore) evictLegacyUser(userID string) {
+func (f *firestoreUserStore) findUserByLookupID(ctx context.Context, id string) (*User, error) {
+	if f.db == nil {
+		return nil, NotFound
+	}
+	orFilter := firestore.OrFilter{
+		Filters: []firestore.EntityFilter{
+			firestore.PropertyFilter{Path: "id", Operator: "==", Value: id},
+			firestore.PropertyFilter{Path: "memberId", Operator: "==", Value: id},
+			firestore.PropertyFilter{Path: "primaryMembershipId", Operator: "==", Value: id},
+		},
+	}
+
+	iter := f.db.Collection(userCollection).WhereEntity(orFilter).Documents(ctx)
+	for {
+		doc, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		var u User
+		if err := doc.DataTo(&u); err != nil {
+			return nil, err
+		}
+		return &u, nil
+	}
+	return nil, NotFound
+}
+
+func (f *firestoreUserStore) evictLegacyUser(userID string) {
 	if userID == "" {
 		return
 	}
@@ -64,7 +99,7 @@ func (f *firestoreUserSearchStore) evictLegacyUser(userID string) {
 	}
 }
 
-func (f *firestoreUserSearchStore) findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error) {
+func (f *firestoreUserStore) findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error) {
 	if f.db == nil || queryLower == "" {
 		return nil, nil
 	}
@@ -168,7 +203,7 @@ func matchLegacyUsers(legacyUsers []User, queryLower string, existing map[string
 	return matched
 }
 
-func (f *firestoreUserSearchStore) getLegacyUnindexedUsers(ctx context.Context) ([]User, error) {
+func (f *firestoreUserStore) getLegacyUnindexedUsers(ctx context.Context) ([]User, error) {
 	now := time.Now()
 	f.legacyMu.RLock()
 	if f.legacyAllIndexed {
@@ -221,7 +256,7 @@ func (f *firestoreUserSearchStore) getLegacyUnindexedUsers(ctx context.Context) 
 	return legacy, nil
 }
 
-func (f *firestoreUserSearchStore) loadAllUsers(ctx context.Context) ([]User, error) {
+func (f *firestoreUserStore) loadAllUsers(ctx context.Context) ([]User, error) {
 	if f.loadAllUsersFn != nil {
 		return f.loadAllUsersFn(ctx)
 	}
@@ -235,7 +270,7 @@ func (f *firestoreUserSearchStore) loadAllUsers(ctx context.Context) ([]User, er
 	return utils.GetAllToStructs[User](docs)
 }
 
-func (f *firestoreUserSearchStore) findUsersByMembershipIDs(ctx context.Context, bungieNetIDs []string, primaryMembershipIDs []string) ([]User, error) {
+func (f *firestoreUserStore) findUsersByMembershipIDs(ctx context.Context, bungieNetIDs []string, primaryMembershipIDs []string) ([]User, error) {
 	if f.db == nil {
 		return nil, nil
 	}
@@ -286,6 +321,48 @@ func (f *firestoreUserSearchStore) findUsersByMembershipIDs(ctx context.Context,
 	return results, nil
 }
 
+func (f *firestoreUserStore) findUsersByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error) {
+	if f.db == nil {
+		return nil, nil
+	}
+	chunks := chunkUniqueStrings(membershipIDs, firestoreOrInBatchLimit)
+	if len(chunks) == 0 {
+		return nil, nil
+	}
+
+	byID := make(map[string]User, len(membershipIDs))
+	for _, chunk := range chunks {
+		orFilter := firestore.OrFilter{
+			Filters: []firestore.EntityFilter{
+				firestore.PropertyFilter{Path: "primaryMembershipId", Operator: "in", Value: chunk},
+				firestore.PropertyFilter{Path: "memberId", Operator: "in", Value: chunk},
+			},
+		}
+		docs, err := f.db.Collection(userCollection).
+			WhereEntity(orFilter).
+			Documents(ctx).
+			GetAll()
+		if err != nil {
+			return nil, err
+		}
+		users, err := utils.GetAllToStructs[User](docs)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range users {
+			if u.ID != "" {
+				byID[u.ID] = u
+			}
+		}
+	}
+
+	results := make([]User, 0, len(byID))
+	for _, u := range byID {
+		results = append(results, u)
+	}
+	return results, nil
+}
+
 func (s *userService) bungieSearchTimeout() time.Duration {
 	if s.bungieTimeout > 0 {
 		return s.bungieTimeout
@@ -313,7 +390,7 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 		return []api.SearchUserResult{}, false, nil
 	}
 
-	store := s.searchStore()
+	store := s.resolveStore()
 
 	var (
 		firestoreUsers []User
@@ -448,12 +525,12 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 	return results, hasMore, nil
 }
 
-func (s *userService) searchStore() userSearchStore {
+func (s *userService) resolveStore() userStore {
 	if s.store != nil {
 		return s.store
 	}
 	if s.db != nil {
-		return newFirestoreUserSearchStore(s.db)
+		return newFirestoreUserStore(s.db)
 	}
 	return nil
 }

@@ -14,7 +14,7 @@ properties:
       firestore: id
   membershipId:
     type: string
-    x-go-name: membershipID
+    x-go-name: MembershipID
     x-oapi-codegen-extra-tags:
       firestore: membershipId
   displayName:
@@ -27,3 +27,7 @@ properties:
       $ref: ./Character.yaml
     x-oapi-codegen-extra-tags:
       firestore: characters
+  activeSessions:
+    type: array
+    items:
+      $ref: ./FireteamActiveSession.yaml

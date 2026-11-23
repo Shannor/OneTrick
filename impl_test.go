@@ -51,11 +51,14 @@ type mockUserService struct {
 	updatedCharacters     []api.Character
 	updateCalls           atomic.Int32
 	updateSearchFieldCall atomic.Int32
-	searchResults         []api.SearchUserResult
-	searchHasMore         bool
-	searchErr             error
-	capturedSearchQuery   string
-	capturedSearchPage    int
+	searchResults          []api.SearchUserResult
+	searchHasMore          bool
+	searchErr              error
+	capturedSearchQuery    string
+	capturedSearchPage     int
+	fireteamMembers        []api.FireteamMember
+	fireteamErr            error
+	capturedFireteamUserID string
 }
 
 func (m *mockUserService) GetUser(ctx context.Context, id string) (*user.User, error) {
@@ -89,6 +92,14 @@ func (m *mockUserService) Search(ctx context.Context, query string, page int) ([
 		return nil, false, m.searchErr
 	}
 	return m.searchResults, m.searchHasMore, nil
+}
+
+func (m *mockUserService) GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error) {
+	m.capturedFireteamUserID = userID
+	if m.fireteamErr != nil {
+		return nil, m.fireteamErr
+	}
+	return m.fireteamMembers, nil
 }
 
 type mockD2Service struct {
@@ -1508,5 +1519,93 @@ func TestBackfillSnapshotInfoPopulatesEquipableItemSetHash(t *testing.T) {
 	gotHash := updatedLoadout["3448274439"].ItemProperties.BaseInfo.EquipableItemSetHash
 	if gotHash == nil || *gotHash != setHash {
 		t.Fatalf("expected backfilled EquipableItemSetHash=%d, got %v", setHash, gotHash)
+	}
+}
+
+func TestGetFireteamEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	startedAt := time.Date(2026, 5, 1, 20, 0, 0, 0, time.UTC)
+	activeList := []api.FireteamActiveSession{
+		{
+			SessionID:   "ses-1",
+			CharacterID: "char-1",
+			StartedAt:   startedAt,
+			TrackComp:   new(true),
+		},
+	}
+	emptyList := []api.FireteamActiveSession{}
+
+	userMock := &mockUserService{
+		fireteamMembers: []api.FireteamMember{
+			{
+				ID:             "u-1",
+				MembershipID:   "4611686018467484863",
+				DisplayName:    "GuardianOne",
+				Characters:     []api.Character{{Id: "char-1", Class: "Hunter", Light: 2010}},
+				ActiveSessions: &activeList,
+			},
+			{
+				ID:             "u-2",
+				MembershipID:   "4611686018467484002",
+				DisplayName:    "GuardianTwo",
+				Characters:     []api.Character{},
+				ActiveSessions: &emptyList,
+			},
+		},
+	}
+	server := Server{UserService: userMock}
+
+	r := gin.New()
+	r.ContextWithFallback = true
+	r.Use(logger.CanonicalLogger())
+	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+		ErrorHandler: logger.GinValidationErrorHandler,
+		Options: openapi3filter.Options{
+			AuthenticationFunc: validator.Authenticate,
+		},
+	}))
+	h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+		logger.GinStrictMiddleware[api.StrictHandlerFunc],
+	})
+	api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+		ErrorHandler: logger.GinParamErrorHandler,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/fireteam", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("X-User-ID", "u-1")
+	req.Header.Set("X-Membership-ID", "4611686018467484863")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+	if userMock.capturedFireteamUserID != "u-1" {
+		t.Fatalf("expected actor userId=u-1, got %q", userMock.capturedFireteamUserID)
+	}
+
+	var got []api.FireteamMember
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed to decode response JSON: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(got))
+	}
+	if got[0].ActiveSessions == nil || len(*got[0].ActiveSessions) != 1 {
+		t.Fatalf("expected 1 active session on first member, got %+v", got[0])
+	}
+	s0 := (*got[0].ActiveSessions)[0]
+	if s0.SessionID != "ses-1" || s0.CharacterID != "char-1" || !s0.StartedAt.Equal(startedAt) || s0.TrackComp == nil || !*s0.TrackComp {
+		t.Fatalf("unexpected active session decoded: %+v", s0)
+	}
+	if got[1].ActiveSessions == nil || len(*got[1].ActiveSessions) != 0 {
+		t.Fatalf("expected empty activeSessions slice on second member, got %+v", got[1])
 	}
 }

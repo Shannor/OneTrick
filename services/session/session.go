@@ -23,6 +23,7 @@ type Service interface {
 	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 	Get(ctx context.Context, ID string) (*api.Session, error)
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
+	GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
 	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error)
 	Complete(ctx context.Context, ID string) error
 	FinalizeCompTracking(ctx context.Context, sessionID string) error
@@ -52,7 +53,7 @@ type service struct {
 var _ Service = (*service)(nil)
 
 func NewService(
-	db *firestore.Client,
+	store sessionStore,
 	aggregateService aggregate.Service,
 	userService user.Service,
 	d2Service destiny.Service,
@@ -60,7 +61,7 @@ func NewService(
 	manifestService destiny.ManifestService,
 ) Service {
 	return &service{
-		store:            &firestoreStore{db: db},
+		store:            store,
 		aggregateService: aggregateService,
 		userService:      userService,
 		d2Service:        d2Service,
@@ -171,6 +172,22 @@ func (s service) GetActive(ctx context.Context, userID string, characterID strin
 	}
 	clog.WithGroupField(ctx, "sessionService.getActive", "sessionId", result.ID)
 	return result, nil
+}
+
+func (s service) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error) {
+	uniqueIDs := uniqueTrimmedStrings(userIDs)
+	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "requestedUserCount", len(uniqueIDs))
+	if len(uniqueIDs) == 0 {
+		clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", 0)
+		return []ActiveSession{}, nil
+	}
+	sessions, err := s.store.getActiveByUserIDs(ctx, uniqueIDs)
+	if err != nil {
+		return nil, err
+	}
+	sortActiveSessions(sessions)
+	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", len(sessions))
+	return sessions, nil
 }
 
 func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {

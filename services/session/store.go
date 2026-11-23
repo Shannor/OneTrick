@@ -5,12 +5,34 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/utils"
+	"slices"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+const firestoreInBatchLimit = 30
+
+type ActiveSession struct {
+	SessionID   string
+	UserID      string
+	CharacterID string
+	StartedAt   time.Time
+	TrackComp   bool
+}
+
+type activeSessionDoc struct {
+	ID           string    `firestore:"id"`
+	UserID       string    `firestore:"userId"`
+	CharacterID  string    `firestore:"characterId"`
+	StartedAt    time.Time `firestore:"startedAt"`
+	CompTracking *struct {
+		Enabled bool `firestore:"enabled"`
+	} `firestore:"compTracking"`
+}
 
 type tickCandidate struct {
 	session                api.Session
@@ -24,6 +46,7 @@ type sessionStore interface {
 	hasActive(ctx context.Context, userID, characterID string) (bool, error)
 	createDoc(ctx context.Context, ses *api.Session) (*api.Session, error)
 	getActiveDoc(ctx context.Context, userID, characterID string) (*api.Session, error)
+	getActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
 	getDoc(ctx context.Context, sessionID string) (*api.Session, error)
 	listDocs(ctx context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error)
 	listCompletedInWindow(ctx context.Context, since, until time.Time) ([]api.Session, error)
@@ -39,13 +62,17 @@ type sessionStore interface {
 	addAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
 }
 
-type firestoreStore struct {
+type FirestoreStore struct {
 	db *firestore.Client
 }
 
-var _ sessionStore = (*firestoreStore)(nil)
+func NewFirestoreStore(db *firestore.Client) *FirestoreStore {
+	return &FirestoreStore{db: db}
+}
 
-func (f *firestoreStore) hasActive(ctx context.Context, userID, characterID string) (bool, error) {
+var _ sessionStore = (*FirestoreStore)(nil)
+
+func (f *FirestoreStore) hasActive(ctx context.Context, userID, characterID string) (bool, error) {
 	query := f.db.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID).
@@ -59,7 +86,7 @@ func (f *firestoreStore) hasActive(ctx context.Context, userID, characterID stri
 	return len(docs) > 0, nil
 }
 
-func (f *firestoreStore) createDoc(ctx context.Context, ses *api.Session) (*api.Session, error) {
+func (f *FirestoreStore) createDoc(ctx context.Context, ses *api.Session) (*api.Session, error) {
 	ref := f.db.Collection(collection).NewDoc()
 	ses.ID = ref.ID
 	if _, err := ref.Set(ctx, ses); err != nil {
@@ -68,7 +95,7 @@ func (f *firestoreStore) createDoc(ctx context.Context, ses *api.Session) (*api.
 	return ses, nil
 }
 
-func (f *firestoreStore) getActiveDoc(ctx context.Context, userID, characterID string) (*api.Session, error) {
+func (f *FirestoreStore) getActiveDoc(ctx context.Context, userID, characterID string) (*api.Session, error) {
 	query := f.db.Collection(collection).
 		Where("userId", "==", userID).
 		Where("characterId", "==", characterID).
@@ -89,7 +116,82 @@ func (f *firestoreStore) getActiveDoc(ctx context.Context, userID, characterID s
 	return result, nil
 }
 
-func (f *firestoreStore) getDoc(ctx context.Context, sessionID string) (*api.Session, error) {
+func (f *FirestoreStore) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error) {
+	return f.getActiveByUserIDs(ctx, userIDs)
+}
+
+func (f *FirestoreStore) getActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error) {
+	if f.db == nil {
+		return []ActiveSession{}, nil
+	}
+	uniqueIDs := uniqueTrimmedStrings(userIDs)
+	if len(uniqueIDs) == 0 {
+		return []ActiveSession{}, nil
+	}
+
+	results := make([]ActiveSession, 0, len(uniqueIDs))
+	for _, chunk := range utils.Chunk(uniqueIDs, firestoreInBatchLimit) {
+		docs, err := f.db.Collection(collection).
+			Where("userId", "in", chunk).
+			Where("status", "==", api.SessionPending).
+			Documents(ctx).
+			GetAll()
+		if err != nil {
+			return nil, fmt.Errorf("failed to query active sessions for users: %w", err)
+		}
+		for _, doc := range docs {
+			var d activeSessionDoc
+			if err := doc.DataTo(&d); err != nil {
+				return nil, fmt.Errorf("failed to parse active session %s: %w", doc.Ref.ID, err)
+			}
+			sessionID := d.ID
+			if sessionID == "" {
+				sessionID = doc.Ref.ID
+			}
+			results = append(results, ActiveSession{
+				SessionID:   sessionID,
+				UserID:      d.UserID,
+				CharacterID: d.CharacterID,
+				StartedAt:   d.StartedAt,
+				TrackComp:   d.CompTracking != nil && d.CompTracking.Enabled,
+			})
+		}
+	}
+
+	sortActiveSessions(results)
+	return results, nil
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func sortActiveSessions(sessions []ActiveSession) {
+	slices.SortFunc(sessions, func(a, b ActiveSession) int {
+		if cmp := b.StartedAt.Compare(a.StartedAt); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.SessionID, b.SessionID)
+	})
+}
+
+func (f *FirestoreStore) getDoc(ctx context.Context, sessionID string) (*api.Session, error) {
 	doc, err := f.db.Collection(collection).Doc(sessionID).Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -104,7 +206,7 @@ func (f *firestoreStore) getDoc(ctx context.Context, sessionID string) (*api.Ses
 	return result, nil
 }
 
-func (f *firestoreStore) listDocs(ctx context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error) {
+func (f *FirestoreStore) listDocs(ctx context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error) {
 	query := f.db.Collection(collection).Query
 	if userID != nil && *userID != "" {
 		query = query.Where("userId", "==", *userID)
@@ -126,7 +228,7 @@ func (f *firestoreStore) listDocs(ctx context.Context, userID, characterID *stri
 	return result, nil
 }
 
-func (f *firestoreStore) listCompletedInWindow(ctx context.Context, since, until time.Time) ([]api.Session, error) {
+func (f *FirestoreStore) listCompletedInWindow(ctx context.Context, since, until time.Time) ([]api.Session, error) {
 	docs, err := f.db.Collection(collection).
 		Where("status", "==", api.SessionComplete).
 		Where("completedAt", ">=", since).
@@ -142,7 +244,7 @@ func (f *firestoreStore) listCompletedInWindow(ctx context.Context, since, until
 	return result, nil
 }
 
-func (f *firestoreStore) getTickCandidates(ctx context.Context, completedSince time.Time) ([]tickCandidate, error) {
+func (f *FirestoreStore) getTickCandidates(ctx context.Context, completedSince time.Time) ([]tickCandidate, error) {
 	orFilter := firestore.OrFilter{
 		Filters: []firestore.EntityFilter{
 			firestore.PropertyFilter{
@@ -192,12 +294,12 @@ func (f *firestoreStore) getTickCandidates(ctx context.Context, completedSince t
 	return candidates, nil
 }
 
-func (f *firestoreStore) updateFields(ctx context.Context, sessionID string, updates []firestore.Update) error {
+func (f *FirestoreStore) updateFields(ctx context.Context, sessionID string, updates []firestore.Update) error {
 	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, updates)
 	return err
 }
 
-func (f *firestoreStore) completeDoc(ctx context.Context, sessionID string, completedAt time.Time) error {
+func (f *FirestoreStore) completeDoc(ctx context.Context, sessionID string, completedAt time.Time) error {
 	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
 		{
 			Path:  "completedAt",
@@ -211,7 +313,7 @@ func (f *firestoreStore) completeDoc(ctx context.Context, sessionID string, comp
 	return err
 }
 
-func (f *firestoreStore) endSessionDoc(ctx context.Context, sessionID string, completedBy api.AuditField, completedAt time.Time, summary *api.SessionSummary) error {
+func (f *FirestoreStore) endSessionDoc(ctx context.Context, sessionID string, completedBy api.AuditField, completedAt time.Time, summary *api.SessionSummary) error {
 	updates := []firestore.Update{
 		{
 			Path:  "completedBy",
@@ -240,7 +342,7 @@ func (f *firestoreStore) endSessionDoc(ctx context.Context, sessionID string, co
 	return err
 }
 
-func (f *firestoreStore) updateSummary(ctx context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error {
+func (f *FirestoreStore) updateSummary(ctx context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error {
 	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
 		{
 			Path:  "sessionSummary",
@@ -254,7 +356,7 @@ func (f *firestoreStore) updateSummary(ctx context.Context, sessionID string, su
 	return err
 }
 
-func (f *firestoreStore) updateCompTrackingEnd(ctx context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error {
+func (f *FirestoreStore) updateCompTrackingEnd(ctx context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error {
 	updates := []firestore.Update{
 		{
 			Path:  "compTracking.end",
@@ -271,7 +373,7 @@ func (f *firestoreStore) updateCompTrackingEnd(ctx context.Context, sessionID st
 	return err
 }
 
-func (f *firestoreStore) setLastActivity(ctx context.Context, sessionID, activityID string, seenAt time.Time) error {
+func (f *FirestoreStore) setLastActivity(ctx context.Context, sessionID, activityID string, seenAt time.Time) error {
 	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
 		{
 			Path:  "lastSeenActivityId",
@@ -289,7 +391,7 @@ func (f *firestoreStore) setLastActivity(ctx context.Context, sessionID, activit
 	return err
 }
 
-func (f *firestoreStore) setLastSnapshot(ctx context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
+func (f *FirestoreStore) setLastSnapshot(ctx context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
 	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
 		{
 			Path:  "lastSnapshotId",
@@ -307,12 +409,12 @@ func (f *firestoreStore) setLastSnapshot(ctx context.Context, sessionID, snapsho
 	return err
 }
 
-func (f *firestoreStore) deleteDoc(ctx context.Context, sessionID string) error {
+func (f *FirestoreStore) deleteDoc(ctx context.Context, sessionID string) error {
 	_, err := f.db.Collection(collection).Doc(sessionID).Delete(ctx)
 	return err
 }
 
-func (f *firestoreStore) addAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error {
+func (f *FirestoreStore) addAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error {
 	ids := make([]any, 0, len(aggregateIDs))
 	for _, d := range aggregateIDs {
 		ids = append(ids, d)

@@ -34,6 +34,8 @@ type memorySessionStore struct {
 	lastSnapshots            map[string]lastSnapshotRecord
 	seq                      int
 	getDocCalls              atomic.Int32
+	getActiveByUserIDsCalls  atomic.Int32
+	getActiveByUserIDsErr    error
 	writes                   atomic.Int32
 	lastCompletedWindowCount atomic.Int32
 }
@@ -95,6 +97,36 @@ func (m *memorySessionStore) getActiveDoc(_ context.Context, userID, characterID
 		}
 	}
 	return nil, fmt.Errorf("no active session found")
+}
+
+func (m *memorySessionStore) getActiveByUserIDs(_ context.Context, userIDs []string) ([]ActiveSession, error) {
+	m.getActiveByUserIDsCalls.Add(1)
+	if m.getActiveByUserIDsErr != nil {
+		return nil, m.getActiveByUserIDsErr
+	}
+	wanted := make(map[string]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		wanted[id] = struct{}{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ActiveSession, 0)
+	for _, s := range m.docs {
+		if _, ok := wanted[s.UserID]; !ok {
+			continue
+		}
+		if s.Status == nil || *s.Status != api.SessionPending {
+			continue
+		}
+		out = append(out, ActiveSession{
+			SessionID:   s.ID,
+			UserID:      s.UserID,
+			CharacterID: s.CharacterID,
+			StartedAt:   s.StartedAt,
+			TrackComp:   s.CompTracking != nil && s.CompTracking.Enabled,
+		})
+	}
+	return out, nil
 }
 
 func (m *memorySessionStore) getDoc(_ context.Context, sessionID string) (*api.Session, error) {
@@ -1889,5 +1921,100 @@ func TestCleanupEmptyCompleted_SymmetricGuard(t *testing.T) {
 			t.Fatalf("expected %s to be preserved by symmetric service guard", preserved)
 		}
 	}
+}
+
+func TestGetActiveByUserIDs(t *testing.T) {
+	t1 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+
+	t.Run("returns empty slice without querying store when input has no valid user IDs", func(t *testing.T) {
+		store := newMemorySessionStore()
+		svc := &service{store: store}
+
+		got, err := svc.GetActiveByUserIDs(clog.NewContext(context.Background()), []string{"", "   "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected 0 sessions, got %d", len(got))
+		}
+		if store.getActiveByUserIDsCalls.Load() != 0 {
+			t.Fatalf("expected 0 store calls for empty input, got %d", store.getActiveByUserIDsCalls.Load())
+		}
+	})
+
+	t.Run("batches pending sessions for requested users, maps trackComp, excludes completed and other users, and sorts newest first", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-old"] = &api.Session{
+			ID:           "ses-old",
+			UserID:       "u-1",
+			CharacterID:  "char-1a",
+			StartedAt:    t1,
+			Status:       new(api.SessionPending),
+			CompTracking: &api.CompTracking{Enabled: false},
+		}
+		store.docs["ses-new"] = &api.Session{
+			ID:           "ses-new",
+			UserID:       "u-1",
+			CharacterID:  "char-1b",
+			StartedAt:    t3,
+			Status:       new(api.SessionPending),
+			CompTracking: &api.CompTracking{Enabled: true},
+		}
+		store.docs["ses-u2"] = &api.Session{
+			ID:          "ses-u2",
+			UserID:      "u-2",
+			CharacterID: "char-2a",
+			StartedAt:   t2,
+			Status:      new(api.SessionPending),
+		}
+		store.docs["ses-complete"] = &api.Session{
+			ID:          "ses-complete",
+			UserID:      "u-2",
+			CharacterID: "char-2b",
+			StartedAt:   t3,
+			Status:      new(api.SessionComplete),
+		}
+		store.docs["ses-other"] = &api.Session{
+			ID:          "ses-other",
+			UserID:      "u-99",
+			CharacterID: "char-99",
+			StartedAt:   t3,
+			Status:      new(api.SessionPending),
+		}
+
+		svc := &service{store: store}
+		got, err := svc.GetActiveByUserIDs(clog.NewContext(context.Background()), []string{" u-1 ", "u-2", "u-1", "u-3", ""})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if store.getActiveByUserIDsCalls.Load() != 1 {
+			t.Fatalf("expected 1 batched store call, got %d", store.getActiveByUserIDsCalls.Load())
+		}
+		if len(got) != 3 {
+			t.Fatalf("expected 3 pending sessions, got %d: %+v", len(got), got)
+		}
+		if got[0].SessionID != "ses-new" || !got[0].TrackComp || got[0].CharacterID != "char-1b" {
+			t.Fatalf("unexpected first session: %+v", got[0])
+		}
+		if got[1].SessionID != "ses-u2" || got[1].TrackComp || got[1].UserID != "u-2" {
+			t.Fatalf("unexpected second session: %+v", got[1])
+		}
+		if got[2].SessionID != "ses-old" || got[2].TrackComp || got[2].CharacterID != "char-1a" {
+			t.Fatalf("unexpected third session: %+v", got[2])
+		}
+	})
+
+	t.Run("propagates store error", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.getActiveByUserIDsErr = errors.New("firestore unavailable")
+		svc := &service{store: store}
+
+		_, err := svc.GetActiveByUserIDs(clog.NewContext(context.Background()), []string{"u-1"})
+		if err == nil {
+			t.Fatal("expected error from store")
+		}
+	})
 }
 
