@@ -31,6 +31,7 @@ type Store interface {
 	CreateDoc(ctx context.Context, ses *api.Session) (*api.Session, error)
 	GetActiveDoc(ctx context.Context, userID, characterID string) (*api.Session, error)
 	GetDoc(ctx context.Context, sessionID string) (*api.Session, error)
+	GetDocWithMeta(ctx context.Context, sessionID string) (*TickCandidate, error)
 	ListDocs(ctx context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error)
 	ListCompletedInWindow(ctx context.Context, since, until time.Time) ([]api.Session, error)
 	GetTickCandidates(ctx context.Context, completedSince time.Time) ([]TickCandidate, error)
@@ -40,6 +41,7 @@ type Store interface {
 	UpdateSummary(ctx context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error
 	UpdateCompTrackingEnd(ctx context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error
 	SetLastActivity(ctx context.Context, sessionID, activityID string, seenAt time.Time) error
+	TouchLastSeen(ctx context.Context, sessionID string, seenAt time.Time) error
 	SetLastSnapshot(ctx context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error
 	DeleteDoc(ctx context.Context, sessionID string) error
 	AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
@@ -152,6 +154,44 @@ func (f *FirestoreStore) GetDoc(ctx context.Context, sessionID string) (*api.Ses
 	return result, nil
 }
 
+func (f *FirestoreStore) GetDocWithMeta(ctx context.Context, sessionID string) (*TickCandidate, error) {
+	doc, err := f.db.Collection(collection).Doc(sessionID).Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	cand, err := parseTickCandidate(doc)
+	if err != nil {
+		return nil, err
+	}
+	return &cand, nil
+}
+
+func parseTickCandidate(doc *firestore.DocumentSnapshot) (TickCandidate, error) {
+	var s api.Session
+	if err := doc.DataTo(&s); err != nil {
+		return TickCandidate{}, err
+	}
+	var meta struct {
+		UpdatedAt              *time.Time `firestore:"updatedAt"`
+		LastSnapshotID         string     `firestore:"lastSnapshotId"`
+		LastSnapshotHash       string     `firestore:"lastSnapshotHash"`
+		LastSnapshotRecordedAt time.Time  `firestore:"lastSnapshotRecordedAt"`
+	}
+	if err := doc.DataTo(&meta); err != nil {
+		return TickCandidate{}, fmt.Errorf("failed to parse session tick metadata for %s: %w", s.ID, err)
+	}
+	return TickCandidate{
+		Session:                s,
+		UpdatedAt:              meta.UpdatedAt,
+		LastSnapshotID:         meta.LastSnapshotID,
+		LastSnapshotHash:       meta.LastSnapshotHash,
+		LastSnapshotRecordedAt: meta.LastSnapshotRecordedAt,
+	}, nil
+}
+
 func (f *FirestoreStore) ListDocs(ctx context.Context, userID, characterID *string, st *api.SessionStatus) ([]api.Session, error) {
 	query := f.db.Collection(collection).Query
 	if userID != nil && *userID != "" {
@@ -216,26 +256,11 @@ func (f *FirestoreStore) GetTickCandidates(ctx context.Context, completedSince t
 
 	candidates := make([]TickCandidate, 0, len(docs))
 	for _, doc := range docs {
-		var s api.Session
-		if err := doc.DataTo(&s); err != nil {
+		cand, err := parseTickCandidate(doc)
+		if err != nil {
 			return nil, err
 		}
-		var meta struct {
-			UpdatedAt              *time.Time `firestore:"updatedAt"`
-			LastSnapshotID         string     `firestore:"lastSnapshotId"`
-			LastSnapshotHash       string     `firestore:"lastSnapshotHash"`
-			LastSnapshotRecordedAt time.Time  `firestore:"lastSnapshotRecordedAt"`
-		}
-		if err := doc.DataTo(&meta); err != nil {
-			return nil, fmt.Errorf("failed to parse session tick metadata for %s: %w", s.ID, err)
-		}
-		candidates = append(candidates, TickCandidate{
-			Session:                s,
-			UpdatedAt:              meta.UpdatedAt,
-			LastSnapshotID:         meta.LastSnapshotID,
-			LastSnapshotHash:       meta.LastSnapshotHash,
-			LastSnapshotRecordedAt: meta.LastSnapshotRecordedAt,
-		})
+		candidates = append(candidates, cand)
 	}
 	return candidates, nil
 }
@@ -325,6 +350,20 @@ func (f *FirestoreStore) SetLastActivity(ctx context.Context, sessionID, activit
 			Path:  "lastSeenActivityId",
 			Value: activityID,
 		},
+		{
+			Path:  "lastSeenTimestamp",
+			Value: seenAt,
+		},
+		{
+			Path:  "updatedAt",
+			Value: seenAt,
+		},
+	})
+	return err
+}
+
+func (f *FirestoreStore) TouchLastSeen(ctx context.Context, sessionID string, seenAt time.Time) error {
+	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
 		{
 			Path:  "lastSeenTimestamp",
 			Value: seenAt,

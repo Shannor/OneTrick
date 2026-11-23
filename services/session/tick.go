@@ -7,6 +7,8 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/snapshot"
 	"oneTrick/set"
+	"oneTrick/utils"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,12 +51,13 @@ type tickMembership struct {
 }
 
 type tickRunner struct {
-	svc               service
-	opts              TickOptions
-	now               time.Time
-	resp              *api.SessionTickResponse
-	compQueue         *set.OrderedSet[string]
-	loadoutsThrottled int
+	svc                 service
+	opts                TickOptions
+	now                 time.Time
+	resp                *api.SessionTickResponse
+	compQueue           *set.OrderedSet[string]
+	loadoutsThrottled   int
+	aggregatesRefreshed int
 }
 
 func newTickRunner(svc service, opts TickOptions) *tickRunner {
@@ -95,6 +98,7 @@ func (r *tickRunner) recordSummary(ctx context.Context, tickStart time.Time) {
 		"loadoutsFailed":          r.resp.LoadoutsFailed,
 		"activitiesFoundTotal":    r.resp.ActivitiesFoundTotal,
 		"aggregatesAddedTotal":    r.resp.AggregatesAddedTotal,
+		"aggregatesRefreshed":     r.aggregatesRefreshed,
 		"compFinalizedCount":      r.resp.CompFinalizedCount,
 		"emptySessionsCleaned":    r.resp.EmptySessionsCleaned,
 		"errorsTotal":             r.resp.ErrorsTotal,
@@ -177,16 +181,22 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand Tic
 
 	r.resp.ActivitiesFoundTotal += len(histories)
 
-	aggIDs, err := r.linkActivities(iterCtx, cand.Session, histories)
+	linkRes, err := r.linkActivities(iterCtx, cand.Session, histories)
 	if err != nil {
 		return err
 	}
-	if len(aggIDs) == 0 {
+	if len(linkRes.aggregateIDs) == 0 {
+		if !linkRes.hasPendingRetry && !cand.isCompleted() && !r.opts.DryRun && latestID != "" && !cand.hasSeenActivity(latestID) {
+			if err := r.svc.store.SetLastActivity(iterCtx, cand.Session.ID, latestID, r.svc.now()); err != nil {
+				r.resp.ErrorsTotal++
+				return fmt.Errorf("failed to save last activity for session %s: %w", cand.Session.ID, err)
+			}
+		}
 		r.resp.SessionsSkipped++
 		return nil
 	}
 
-	return r.persistSessionProgress(iterCtx, &cand, latestID, aggIDs)
+	return r.persistSessionProgress(iterCtx, &cand, latestID, linkRes)
 }
 
 func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bool, error) {
@@ -300,9 +310,22 @@ func (r *tickRunner) fetchNewActivities(ctx context.Context, cand TickCandidate,
 	return latestID, histories, nil
 }
 
-func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, histories []api.ActivityHistory) ([]string, error) {
+type linkActivitiesResult struct {
+	aggregateIDs    []string
+	refreshedCount  int
+	hasPendingRetry bool
+}
+
+type activityLinkOutcome struct {
+	aggregateID  string
+	linked       bool
+	refreshed    bool
+	pendingRetry bool
+}
+
+func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, histories []api.ActivityHistory) (linkActivitiesResult, error) {
 	if r.svc.aggregateService == nil {
-		return nil, r.failSession(fmt.Errorf("aggregate service not configured for session %s", ses.ID))
+		return linkActivitiesResult{}, r.failSession(fmt.Errorf("aggregate service not configured for session %s", ses.ID))
 	}
 
 	ids := make([]string, len(histories))
@@ -312,7 +335,7 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, hi
 
 	existingAggs, err := r.svc.aggregateService.GetAggregatesByActivity(iterCtx, ids)
 	if err != nil {
-		return nil, r.failSession(fmt.Errorf("failed to fetch aggregates for session %s: %w", ses.ID, err))
+		return linkActivitiesResult{}, r.failSession(fmt.Errorf("failed to fetch aggregates for session %s: %w", ses.ID, err))
 	}
 
 	existingByActivity := make(map[string]*api.Aggregate, len(existingAggs))
@@ -320,7 +343,9 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, hi
 		existingByActivity[existingAggs[i].ActivityID] = &existingAggs[i]
 	}
 
-	aggIDs := make([]string, 0, len(histories))
+	res := linkActivitiesResult{
+		aggregateIDs: make([]string, 0, len(histories)),
+	}
 	_ = clog.LoopRollup(iterCtx, "aggregateService.processActivity", histories, func(actCtx context.Context, _ int, history api.ActivityHistory) error {
 		defer func() {
 			if bag := clog.BagFromContext(actCtx); bag != nil && bag.HasWarning() {
@@ -328,30 +353,41 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, hi
 			}
 		}()
 
-		aggID, linked, err := r.linkSingleActivity(actCtx, ses, history, existingByActivity[history.InstanceID])
+		outcome, err := r.linkSingleActivity(actCtx, ses, history, existingByActivity[history.InstanceID])
 		if err != nil {
 			r.resp.ErrorsTotal++
+			res.hasPendingRetry = true
 			return err
 		}
-		if linked {
-			aggIDs = append(aggIDs, aggID)
+		if outcome.pendingRetry {
+			res.hasPendingRetry = true
+		}
+		if outcome.linked {
+			res.aggregateIDs = append(res.aggregateIDs, outcome.aggregateID)
+			if outcome.refreshed {
+				res.refreshedCount++
+			}
 		}
 		return nil
 	})
 
-	return aggIDs, nil
+	return res, nil
 }
 
-func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session, history api.ActivityHistory, existing *api.Aggregate) (string, bool, error) {
+func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session, history api.ActivityHistory, existing *api.Aggregate) (activityLinkOutcome, error) {
 	clog.WithGroupField(actCtx, "activity", "activityId", history.InstanceID)
 
+	refreshing := false
 	if hasSessionLink(existing, ses.CharacterID) {
-		return "", false, nil
+		if !needsPerformanceRefresh(existing, ses.CharacterID, r.now) {
+			return activityLinkOutcome{}, nil
+		}
+		refreshing = true
 	}
 
 	performances, err := r.svc.d2Service.GetPerformances(actCtx, history.InstanceID, []string{ses.CharacterID})
 	if err != nil {
-		return "", false, fmt.Errorf("failed to fetch performances for activity %s: %w", history.InstanceID, err)
+		return activityLinkOutcome{}, fmt.Errorf("failed to fetch performances for activity %s: %w", history.InstanceID, err)
 	}
 
 	performance, ok := performances[ses.CharacterID]
@@ -362,25 +398,45 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 			"userId":      ses.UserID,
 			"activityId":  history.InstanceID,
 		})
-		return "", false, nil
+		return activityLinkOutcome{pendingRetry: true}, nil
+	}
+
+	// Bungie occasionally serves PGCRs with entry.Values populated before entry.Extended
+	// (weapons/medals) is ready. Persist on first sight so matches are not dropped, then
+	// retry on subsequent ticks until extended data arrives or the retry window expires.
+	incomplete := isIncompletePerformance(performance)
+	if incomplete {
+		clog.WithGroupFields(actCtx, "activity", clog.Fields{
+			"warning":     "activity performance missing extended stats, will retry on next tick",
+			"warningType": "incomplete_pgcr_extended",
+			"userId":      ses.UserID,
+			"activityId":  history.InstanceID,
+			"refreshing":  refreshing,
+		})
+		if refreshing {
+			return activityLinkOutcome{pendingRetry: true}, nil
+		}
 	}
 
 	if r.opts.DryRun {
-		return history.InstanceID, true, nil
+		if refreshing {
+			return activityLinkOutcome{aggregateID: existing.ID, linked: true, refreshed: true}, nil
+		}
+		return activityLinkOutcome{aggregateID: history.InstanceID, linked: true, pendingRetry: incomplete}, nil
 	}
 
 	if r.svc.snapshotService == nil {
-		return "", false, fmt.Errorf("snapshot service not configured for activity %s", history.InstanceID)
+		return activityLinkOutcome{}, fmt.Errorf("snapshot service not configured for activity %s", history.InstanceID)
 	}
 
 	snap, link, err := r.svc.snapshotService.FindBestFit(actCtx, ses.UserID, ses.CharacterID, history.Period, performance.Weapons)
 	if err != nil {
-		return "", false, fmt.Errorf("failed to find best-fit snapshot for activity %s: %w", history.InstanceID, err)
+		return activityLinkOutcome{}, fmt.Errorf("failed to find best-fit snapshot for activity %s: %w", history.InstanceID, err)
 	}
 
 	enrichedPerformance, err := r.svc.snapshotService.EnrichInstancePerformance(snap, performance)
 	if err != nil {
-		return "", false, fmt.Errorf("failed to enrich performance instance for activity %s: %w", history.InstanceID, err)
+		return activityLinkOutcome{}, fmt.Errorf("failed to enrich performance instance for activity %s: %w", history.InstanceID, err)
 	}
 
 	sessionID := ses.ID
@@ -388,35 +444,64 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 
 	agg, err := r.svc.aggregateService.UpsertSessionActivity(actCtx, ses.CharacterID, history, *link, *enrichedPerformance)
 	if err != nil {
-		return "", false, fmt.Errorf("failed to add data to aggregate for activity %s: %w", history.InstanceID, err)
+		return activityLinkOutcome{}, fmt.Errorf("failed to add data to aggregate for activity %s: %w", history.InstanceID, err)
 	}
-	return agg.ID, true, nil
+	if refreshing {
+		clog.WithGroupFields(actCtx, "activity", clog.Fields{
+			"refreshed":       true,
+			"aggregateId":     agg.ID,
+			"confidenceLevel": string(link.ConfidenceLevel),
+		})
+	}
+	return activityLinkOutcome{
+		aggregateID:  agg.ID,
+		linked:       true,
+		refreshed:    refreshing,
+		pendingRetry: incomplete,
+	}, nil
 }
 
-func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickCandidate, latestID string, aggIDs []string) error {
+func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickCandidate, latestID string, linkRes linkActivitiesResult) error {
 	ses := &cand.Session
+	newAggIDs := make([]string, 0, len(linkRes.aggregateIDs))
+	for _, id := range linkRes.aggregateIDs {
+		if id != "" && !slices.Contains(ses.AggregateIDs, id) && !slices.Contains(newAggIDs, id) {
+			newAggIDs = append(newAggIDs, id)
+		}
+	}
+
 	if r.opts.DryRun {
-		ses.AggregateIDs = append(ses.AggregateIDs, aggIDs...)
+		ses.AggregateIDs = utils.UnionNonZero(ses.AggregateIDs, newAggIDs)
 		r.resp.SessionsProcessed++
-		r.resp.AggregatesAddedTotal += len(aggIDs)
+		r.resp.AggregatesAddedTotal += len(newAggIDs)
+		r.aggregatesRefreshed += linkRes.refreshedCount
 		return nil
 	}
 
 	var postErrs []error
 	if !cand.isCompleted() {
-		if err := r.svc.store.SetLastActivity(iterCtx, ses.ID, latestID, r.svc.now()); err != nil {
-			r.resp.ErrorsTotal++
-			postErrs = append(postErrs, fmt.Errorf("failed to save last activity for session %s: %w", ses.ID, err))
+		if !linkRes.hasPendingRetry {
+			if err := r.svc.store.SetLastActivity(iterCtx, ses.ID, latestID, r.svc.now()); err != nil {
+				r.resp.ErrorsTotal++
+				postErrs = append(postErrs, fmt.Errorf("failed to save last activity for session %s: %w", ses.ID, err))
+			}
+		} else if len(newAggIDs) > 0 {
+			if err := r.svc.store.TouchLastSeen(iterCtx, ses.ID, r.svc.now()); err != nil {
+				r.resp.ErrorsTotal++
+				postErrs = append(postErrs, fmt.Errorf("failed to update last seen timestamp for session %s: %w", ses.ID, err))
+			}
 		}
 	}
 
-	if err := r.svc.AddAggregateIDs(iterCtx, ses.ID, aggIDs); err != nil {
-		r.resp.SessionsErrored++
-		r.resp.ErrorsTotal++
-		return errors.Join(append(postErrs, fmt.Errorf("failed to add aggregate IDs to session %s: %w", ses.ID, err))...)
+	if len(newAggIDs) > 0 {
+		if err := r.svc.AddAggregateIDs(iterCtx, ses.ID, newAggIDs); err != nil {
+			r.resp.SessionsErrored++
+			r.resp.ErrorsTotal++
+			return errors.Join(append(postErrs, fmt.Errorf("failed to add aggregate IDs to session %s: %w", ses.ID, err))...)
+		}
 	}
 
-	ses.AggregateIDs = append(ses.AggregateIDs, aggIDs...)
+	ses.AggregateIDs = utils.UnionNonZero(ses.AggregateIDs, newAggIDs)
 	summary, err := r.svc.ComputeSessionSummary(iterCtx, *ses)
 	if err != nil {
 		r.resp.ErrorsTotal++
@@ -427,7 +512,8 @@ func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickC
 	}
 
 	r.resp.SessionsProcessed++
-	r.resp.AggregatesAddedTotal += len(aggIDs)
+	r.resp.AggregatesAddedTotal += len(newAggIDs)
+	r.aggregatesRefreshed += linkRes.refreshedCount
 	return errors.Join(postErrs...)
 }
 
@@ -468,6 +554,32 @@ func hasSessionLink(agg *api.Aggregate, characterID string) bool {
 	}
 	link, ok := agg.SnapshotLinks[characterID]
 	return ok && link.SessionID != nil
+}
+
+func isIncompletePerformance(perf api.InstancePerformance) bool {
+	return perf.Extra == nil && len(perf.Weapons) == 0
+}
+
+func needsPerformanceRefresh(agg *api.Aggregate, characterID string, now time.Time) bool {
+	if agg == nil {
+		return false
+	}
+	link, ok := agg.SnapshotLinks[characterID]
+	if !ok || link.SessionID == nil || link.SnapshotID != nil {
+		return false
+	}
+	if link.ConfidenceSource != api.SystemConfidenceSource {
+		return false
+	}
+	refTime := link.CreatedAt
+	if refTime.IsZero() {
+		refTime = agg.CreatedAt
+	}
+	if refTime.IsZero() || now.Sub(refTime) >= incompletePerformanceRetryWindow {
+		return false
+	}
+	perf, ok := agg.Performance[characterID]
+	return !ok || isIncompletePerformance(perf)
 }
 
 func ShouldFinalizeComp(ses api.Session) bool {
