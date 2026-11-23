@@ -390,18 +390,16 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 		return []api.SearchUserResult{}, false, nil
 	}
 
-	store := s.resolveStore()
-
 	var (
 		firestoreUsers []User
 		firestoreErr   error
 		wg             sync.WaitGroup
 	)
-	if page == 0 && store != nil {
+	if page == 0 && s.store != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			firestoreUsers, firestoreErr = store.findUsersByPrefix(ctx, qLower, trimmed)
+			firestoreUsers, firestoreErr = s.store.findUsersByPrefix(ctx, qLower, trimmed)
 		}()
 	}
 
@@ -434,7 +432,7 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 	}
 
 	crossRefUsers := make([]User, 0)
-	if len(bungieResults) > 0 && store != nil {
+	if len(bungieResults) > 0 && s.store != nil {
 		bungieNetIDs := make([]string, 0, len(bungieResults))
 		primaryIDs := make([]string, 0, len(bungieResults))
 		for _, r := range bungieResults {
@@ -447,7 +445,7 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 		}
 		if len(bungieNetIDs) > 0 || len(primaryIDs) > 0 {
 			var err error
-			crossRefUsers, err = store.findUsersByMembershipIDs(ctx, bungieNetIDs, primaryIDs)
+			crossRefUsers, err = s.store.findUsersByMembershipIDs(ctx, bungieNetIDs, primaryIDs)
 			if err != nil {
 				return nil, false, err
 			}
@@ -523,16 +521,6 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 		"hasMore":          hasMore,
 	})
 	return results, hasMore, nil
-}
-
-func (s *userService) resolveStore() userStore {
-	if s.store != nil {
-		return s.store
-	}
-	if s.db != nil {
-		return newFirestoreUserStore(s.db)
-	}
-	return nil
 }
 
 type rankedSearchResult struct {

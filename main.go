@@ -11,6 +11,7 @@ import (
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
+	"oneTrick/services/fireteam"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -59,14 +60,14 @@ func main() {
 	)
 
 	sessionStore := session.NewFirestoreStore(firestore)
-	activeSessionReader := session.NewActiveSessionReader(sessionStore)
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
-	userService := user.NewUserService(firestore, destinyService, activeSessionReaderAdapter{reader: activeSessionReader})
+	userService := user.NewUserService(firestore, destinyService)
 	aggregateService := aggregate.NewService(firestore)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
 	sessionService := session.NewService(sessionStore, aggregateService, userService, destinyService, snapshotService, manifestService)
+	fireteamService := fireteam.NewService(userService, destinyService, sessionService)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	server := NewServer(
 		destinyService,
@@ -75,6 +76,7 @@ func main() {
 		snapshotService,
 		aggregateService,
 		sessionService,
+		fireteamService,
 		manifestService,
 		statsService,
 		env.InternalAPIKey,
@@ -130,26 +132,4 @@ func main() {
 		slog.Error("Server crashed", "error", err)
 		os.Exit(1)
 	}
-}
-
-type activeSessionReaderAdapter struct {
-	reader *session.ActiveSessionReader
-}
-
-func (a activeSessionReaderAdapter) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]user.ActiveSession, error) {
-	sessions, err := a.reader.GetActiveByUserIDs(ctx, userIDs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]user.ActiveSession, 0, len(sessions))
-	for _, s := range sessions {
-		out = append(out, user.ActiveSession{
-			SessionID:   s.SessionID,
-			UserID:      s.UserID,
-			CharacterID: s.CharacterID,
-			StartedAt:   s.StartedAt,
-			TrackComp:   s.TrackComp,
-		})
-	}
-	return out, nil
 }

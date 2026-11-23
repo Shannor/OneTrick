@@ -5,25 +5,14 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/utils"
-	"slices"
-	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
-	clog "github.com/Shannor/canonical-logger"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 const firestoreInBatchLimit = 30
-
-type ActiveSession struct {
-	SessionID   string
-	UserID      string
-	CharacterID string
-	StartedAt   time.Time
-	TrackComp   bool
-}
 
 type activeSessionDoc struct {
 	ID           string    `firestore:"id"`
@@ -35,44 +24,9 @@ type activeSessionDoc struct {
 	} `firestore:"compTracking"`
 }
 
-type TickCandidate struct {
-	Session                api.Session
-	UpdatedAt              *time.Time
-	LastSnapshotID         string
-	LastSnapshotHash       string
-	LastSnapshotRecordedAt time.Time
-}
-
-type ActiveSessionStore interface {
-	GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
-}
-
-type ActiveSessionReader struct {
-	store ActiveSessionStore
-}
-
-func NewActiveSessionReader(store ActiveSessionStore) *ActiveSessionReader {
-	return &ActiveSessionReader{store: store}
-}
-
-func (r *ActiveSessionReader) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error) {
-	uniqueIDs := utils.UniqueTrimmedStrings(userIDs)
-	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "requestedUserCount", len(uniqueIDs))
-	if len(uniqueIDs) == 0 {
-		clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", 0)
-		return []ActiveSession{}, nil
-	}
-	sessions, err := r.store.GetActiveByUserIDs(ctx, uniqueIDs)
-	if err != nil {
-		return nil, err
-	}
-	sortActiveSessions(sessions)
-	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", len(sessions))
-	return sessions, nil
-}
-
 type Store interface {
-	ActiveSessionStore
+	// GetActiveByUserIDs expects pre-trimmed, deduplicated userIDs; returned order is unspecified.
+	GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
 	HasActive(ctx context.Context, userID, characterID string) (bool, error)
 	CreateDoc(ctx context.Context, ses *api.Session) (*api.Session, error)
 	GetActiveDoc(ctx context.Context, userID, characterID string) (*api.Session, error)
@@ -181,15 +135,6 @@ func (f *FirestoreStore) GetActiveByUserIDs(ctx context.Context, userIDs []strin
 	}
 
 	return results, nil
-}
-
-func sortActiveSessions(sessions []ActiveSession) {
-	slices.SortFunc(sessions, func(a, b ActiveSession) int {
-		if cmp := b.StartedAt.Compare(a.StartedAt); cmp != 0 {
-			return cmp
-		}
-		return strings.Compare(a.SessionID, b.SessionID)
-	})
 }
 
 func (f *FirestoreStore) GetDoc(ctx context.Context, sessionID string) (*api.Session, error) {

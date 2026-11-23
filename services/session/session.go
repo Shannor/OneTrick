@@ -10,6 +10,7 @@ import (
 	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
+	"oneTrick/utils"
 	"slices"
 	"time"
 
@@ -175,7 +176,19 @@ func (s service) GetActive(ctx context.Context, userID string, characterID strin
 }
 
 func (s service) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error) {
-	return NewActiveSessionReader(s.store).GetActiveByUserIDs(ctx, userIDs)
+	uniqueIDs := utils.UniqueTrimmedStrings(userIDs)
+	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "requestedUserCount", len(uniqueIDs))
+	if len(uniqueIDs) == 0 || s.store == nil {
+		clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", 0)
+		return []ActiveSession{}, nil
+	}
+	sessions, err := s.store.GetActiveByUserIDs(ctx, uniqueIDs)
+	if err != nil {
+		return nil, err
+	}
+	sortActiveSessions(sessions)
+	clog.WithGroupField(ctx, "sessionService.getActiveByUserIds", "returnedCount", len(sessions))
+	return sessions, nil
 }
 
 func (s service) Get(ctx context.Context, ID string) (*api.Session, error) {

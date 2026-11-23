@@ -1971,7 +1971,19 @@ func TestGetActiveByUserIDs(t *testing.T) {
 		}
 	})
 
-	t.Run("batches pending sessions for requested users, maps trackComp, excludes completed and other users, and sorts newest first", func(t *testing.T) {
+	t.Run("returns empty slice safely when store is nil", func(t *testing.T) {
+		svc := &service{}
+		ctx := clog.NewContext(context.Background())
+		got, err := svc.GetActiveByUserIDs(ctx, []string{"u-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == nil || len(got) != 0 {
+			t.Fatalf("expected non-nil empty slice, got %#v", got)
+		}
+	})
+
+	t.Run("batches pending sessions for requested users, maps trackComp, excludes completed and other users, and sorts newest first with SessionID tie-breaker", func(t *testing.T) {
 		store := newMemorySessionStore()
 		store.docs["ses-old"] = &api.Session{
 			ID:           "ses-old",
@@ -1989,10 +2001,17 @@ func TestGetActiveByUserIDs(t *testing.T) {
 			Status:       new(api.SessionPending),
 			CompTracking: &api.CompTracking{Enabled: true},
 		}
-		store.docs["ses-u2"] = &api.Session{
-			ID:          "ses-u2",
+		store.docs["ses-tie-b"] = &api.Session{
+			ID:          "ses-tie-b",
 			UserID:      "u-2",
-			CharacterID: "char-2a",
+			CharacterID: "char-2b-tie",
+			StartedAt:   t2,
+			Status:      new(api.SessionPending),
+		}
+		store.docs["ses-tie-a"] = &api.Session{
+			ID:          "ses-tie-a",
+			UserID:      "u-2",
+			CharacterID: "char-2a-tie",
 			StartedAt:   t2,
 			Status:      new(api.SessionPending),
 		}
@@ -2011,33 +2030,36 @@ func TestGetActiveByUserIDs(t *testing.T) {
 			Status:      new(api.SessionPending),
 		}
 
-		reader := NewActiveSessionReader(store)
+		svc := &service{store: store}
 		ctx := clog.NewContext(context.Background())
-		got, err := reader.GetActiveByUserIDs(ctx, []string{" u-1 ", "u-2", "u-1", "u-3", ""})
+		got, err := svc.GetActiveByUserIDs(ctx, []string{" u-1 ", "u-2", "u-1", "u-3", ""})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if store.getActiveByUserIDsCalls.Load() != 1 {
 			t.Fatalf("expected 1 batched store call, got %d", store.getActiveByUserIDsCalls.Load())
 		}
-		if len(got) != 3 {
-			t.Fatalf("expected 3 pending sessions, got %d: %+v", len(got), got)
+		if len(got) != 4 {
+			t.Fatalf("expected 4 pending sessions, got %d: %+v", len(got), got)
 		}
 		if got[0].SessionID != "ses-new" || !got[0].TrackComp || got[0].CharacterID != "char-1b" {
 			t.Fatalf("unexpected first session: %+v", got[0])
 		}
-		if got[1].SessionID != "ses-u2" || got[1].TrackComp || got[1].UserID != "u-2" {
-			t.Fatalf("unexpected second session: %+v", got[1])
+		if got[1].SessionID != "ses-tie-a" || got[1].TrackComp || got[1].UserID != "u-2" {
+			t.Fatalf("expected ses-tie-a before ses-tie-b on identical StartedAt, got %+v", got[1])
 		}
-		if got[2].SessionID != "ses-old" || got[2].TrackComp || got[2].CharacterID != "char-1a" {
+		if got[2].SessionID != "ses-tie-b" || got[2].TrackComp || got[2].UserID != "u-2" {
 			t.Fatalf("unexpected third session: %+v", got[2])
+		}
+		if got[3].SessionID != "ses-old" || got[3].TrackComp || got[3].CharacterID != "char-1a" {
+			t.Fatalf("unexpected fourth session: %+v", got[3])
 		}
 		attrs := clog.BagFromContext(ctx).Attrs()
 		if v, ok := findIntAttr(attrs, "requestedUserCount"); !ok || v != 3 {
 			t.Fatalf("expected requestedUserCount=3 in clog, got ok=%v v=%d", ok, v)
 		}
-		if v, ok := findIntAttr(attrs, "returnedCount"); !ok || v != 3 {
-			t.Fatalf("expected returnedCount=3 in clog, got ok=%v v=%d", ok, v)
+		if v, ok := findIntAttr(attrs, "returnedCount"); !ok || v != 4 {
+			t.Fatalf("expected returnedCount=4 in clog, got ok=%v v=%d", ok, v)
 		}
 	})
 
@@ -2066,16 +2088,18 @@ func TestFirestoreEmulatorGetActiveByUserIDs(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	store := NewFirestoreStore(db)
-	reader := NewActiveSessionReader(store)
+	svc := &service{store: store}
 
 	runID := fmt.Sprintf("%d", time.Now().UnixNano())
 	user1 := "emu-fireteam-u1-" + runID
 	user2 := "emu-fireteam-u2-" + runID
+	userChunk2 := "emu-fireteam-chunk2-" + runID
 	userOther := "emu-fireteam-other-" + runID
 
 	t1 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
 	t3 := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+	t4 := time.Date(2026, 5, 1, 15, 0, 0, 0, time.UTC)
 
 	seedDocs := []struct {
 		id  string
@@ -2108,13 +2132,27 @@ func TestFirestoreEmulatorGetActiveByUserIDs(t *testing.T) {
 			},
 		},
 		{
-			id: "emu-ses-no-comp-" + runID,
+			// Deliberately omit inner "id" and "compTracking" to verify doc.Ref.ID fallback under .Select(...).
+			id: "emu-ses-no-id-no-comp-" + runID,
 			doc: map[string]any{
-				"id":          "emu-ses-no-comp-" + runID,
 				"userId":      user2,
 				"characterId": "char-2a",
 				"startedAt":   t2,
 				"status":      api.SessionPending,
+			},
+		},
+		{
+			// Lives in the second >30 userId chunk and has the newest StartedAt to verify cross-chunk sorting.
+			id: "emu-ses-chunk2-newest-" + runID,
+			doc: map[string]any{
+				"id":          "emu-ses-chunk2-newest-" + runID,
+				"userId":      userChunk2,
+				"characterId": "char-chunk2",
+				"startedAt":   t4,
+				"status":      api.SessionPending,
+				"compTracking": map[string]any{
+					"enabled": true,
+				},
 			},
 		},
 		{
@@ -2150,21 +2188,31 @@ func TestFirestoreEmulatorGetActiveByUserIDs(t *testing.T) {
 		}
 	})
 
-	got, err := reader.GetActiveByUserIDs(clog.NewContext(ctx), []string{user1, user2, user1})
+	queryUserIDs := make([]string, 0, 35)
+	queryUserIDs = append(queryUserIDs, user1, user2, user1)
+	for i := 0; i < 30; i++ {
+		queryUserIDs = append(queryUserIDs, fmt.Sprintf("emu-fireteam-pad-%s-%d", runID, i))
+	}
+	queryUserIDs = append(queryUserIDs, userChunk2)
+
+	got, err := svc.GetActiveByUserIDs(clog.NewContext(ctx), queryUserIDs)
 	if err != nil {
 		t.Fatalf("GetActiveByUserIDs failed: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("expected 3 active sessions, got %d: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("expected 4 active sessions across chunks, got %d: %+v", len(got), got)
 	}
-	if got[0].SessionID != "emu-ses-comp-enabled-"+runID || !got[0].TrackComp || got[0].CharacterID != "char-1b" || !got[0].StartedAt.Equal(t3) {
-		t.Fatalf("unexpected first active session: %+v", got[0])
+	if got[0].SessionID != "emu-ses-chunk2-newest-"+runID || !got[0].TrackComp || got[0].UserID != userChunk2 || !got[0].StartedAt.Equal(t4) {
+		t.Fatalf("expected chunk-2 session sorted newest first, got %+v", got[0])
 	}
-	if got[1].SessionID != "emu-ses-no-comp-"+runID || got[1].TrackComp || got[1].UserID != user2 || !got[1].StartedAt.Equal(t2) {
-		t.Fatalf("unexpected second active session (omitted compTracking must still be returned): %+v", got[1])
+	if got[1].SessionID != "emu-ses-comp-enabled-"+runID || !got[1].TrackComp || got[1].CharacterID != "char-1b" || !got[1].StartedAt.Equal(t3) {
+		t.Fatalf("unexpected second active session: %+v", got[1])
 	}
-	if got[2].SessionID != "emu-ses-comp-disabled-"+runID || got[2].TrackComp || got[2].CharacterID != "char-1a" || !got[2].StartedAt.Equal(t1) {
-		t.Fatalf("unexpected third active session: %+v", got[2])
+	if got[2].SessionID != "emu-ses-no-id-no-comp-"+runID || got[2].TrackComp || got[2].UserID != user2 || !got[2].StartedAt.Equal(t2) {
+		t.Fatalf("expected doc.Ref.ID fallback and omitted compTracking on third session, got %+v", got[2])
+	}
+	if got[3].SessionID != "emu-ses-comp-disabled-"+runID || got[3].TrackComp || got[3].CharacterID != "char-1a" || !got[3].StartedAt.Equal(t1) {
+		t.Fatalf("unexpected fourth active session: %+v", got[3])
 	}
 }
 

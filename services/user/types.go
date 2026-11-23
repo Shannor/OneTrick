@@ -1,7 +1,6 @@
 package user
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"oneTrick/api"
@@ -55,24 +54,4 @@ type Membership struct {
 	ID          string `json:"id" firestore:"id"`
 	Type        int64  `json:"type" firestore:"type"`
 	DisplayName string `json:"displayName" firestore:"displayName"`
-}
-
-type ActiveSession struct {
-	SessionID   string
-	UserID      string
-	CharacterID string
-	StartedAt   time.Time
-	TrackComp   bool
-}
-
-type ActiveSessionReader interface {
-	GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
-}
-
-type FireteamMember struct {
-	ID             string
-	MembershipID   string
-	DisplayName    string
-	Characters     []api.Character
-	ActiveSessions []ActiveSession
 }

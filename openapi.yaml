@@ -148,6 +148,12 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/FireteamMember'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
         '503':
           description: Server is down
           content:

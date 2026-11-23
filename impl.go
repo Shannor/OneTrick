@@ -8,6 +8,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
+	"oneTrick/services/fireteam"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -33,6 +34,7 @@ type Server struct {
 	SnapshotService   snapshot.Service
 	AggregateService  aggregate.Service
 	SessionService    session.Service
+	FireteamService   fireteam.Service
 	StatsService      stats.Service
 	InternalAPIKey    string
 }
@@ -44,6 +46,7 @@ func NewServer(
 	snapshotService snapshot.Service,
 	aggregateService aggregate.Service,
 	sessionService session.Service,
+	fireteamService fireteam.Service,
 	manifestService destiny.ManifestService,
 	statsService stats.Service,
 	internalAPIKey string,
@@ -55,6 +58,7 @@ func NewServer(
 		SnapshotService:   snapshotService,
 		AggregateService:  aggregateService,
 		SessionService:    sessionService,
+		FireteamService:   fireteamService,
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
 		InternalAPIKey:    internalAPIKey,
@@ -404,9 +408,12 @@ func (s Server) GetFeaturedLoadouts(ctx context.Context, request api.GetFeatured
 
 func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestObject) (api.GetFireteamResponseObject, error) {
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
-	members, err := s.UserService.GetFireteam(ctx, request.Params.XUserID)
+	members, err := s.FireteamService.GetFireteam(ctx, request.Params.XUserID)
 	if err != nil {
-		if errors.Is(err, user.ErrDestinyUnavailable) {
+		if errors.Is(err, user.NotFound) {
+			return api.GetFireteam404JSONResponse{Message: "user not found"}, nil
+		}
+		if errors.Is(err, fireteam.ErrDestinyUnavailable) {
 			return api.GetFireteam503JSONResponse{
 				Message: "Destiny 2 servers are currently unavailable",
 				Status:  api.ErrDestinyServerDown,
@@ -417,7 +424,7 @@ func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestO
 	return api.GetFireteam200JSONResponse(toAPIFireteamMembers(members)), nil
 }
 
-func toAPIFireteamMembers(members []user.FireteamMember) []api.FireteamMember {
+func toAPIFireteamMembers(members []fireteam.Member) []api.FireteamMember {
 	out := make([]api.FireteamMember, 0, len(members))
 	for _, m := range members {
 		chars := m.Characters

@@ -11,6 +11,7 @@ import (
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
+	"oneTrick/services/fireteam"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -51,14 +52,11 @@ type mockUserService struct {
 	updatedCharacters     []api.Character
 	updateCalls           atomic.Int32
 	updateSearchFieldCall atomic.Int32
-	searchResults          []api.SearchUserResult
-	searchHasMore          bool
-	searchErr              error
-	capturedSearchQuery    string
-	capturedSearchPage     int
-	fireteamMembers        []user.FireteamMember
-	fireteamErr            error
-	capturedFireteamUserID string
+	searchResults         []api.SearchUserResult
+	searchHasMore         bool
+	searchErr             error
+	capturedSearchQuery   string
+	capturedSearchPage    int
 }
 
 func (m *mockUserService) GetUser(ctx context.Context, id string) (*user.User, error) {
@@ -94,12 +92,19 @@ func (m *mockUserService) Search(ctx context.Context, query string, page int) ([
 	return m.searchResults, m.searchHasMore, nil
 }
 
-func (m *mockUserService) GetFireteam(ctx context.Context, userID string) ([]user.FireteamMember, error) {
-	m.capturedFireteamUserID = userID
-	if m.fireteamErr != nil {
-		return nil, m.fireteamErr
+type mockFireteamService struct {
+	fireteam.Service
+	members        []fireteam.Member
+	err            error
+	capturedUserID string
+}
+
+func (m *mockFireteamService) GetFireteam(_ context.Context, userID string) ([]fireteam.Member, error) {
+	m.capturedUserID = userID
+	if m.err != nil {
+		return nil, m.err
 	}
-	return m.fireteamMembers, nil
+	return m.members, nil
 }
 
 type mockD2Service struct {
@@ -1530,8 +1535,8 @@ func TestGetFireteamEndpoint(t *testing.T) {
 	}
 	swagger.Servers = nil
 
-	newRouter := func(userMock *mockUserService) *gin.Engine {
-		server := Server{UserService: userMock}
+	newRouter := func(ftMock *mockFireteamService) *gin.Engine {
+		server := Server{FireteamService: ftMock}
 		r := gin.New()
 		r.ContextWithFallback = true
 		r.Use(logger.CanonicalLogger())
@@ -1552,14 +1557,14 @@ func TestGetFireteamEndpoint(t *testing.T) {
 
 	t.Run("200 returns members converted to OpenAPI DTOs with activeSessions", func(t *testing.T) {
 		startedAt := time.Date(2026, 5, 1, 20, 0, 0, 0, time.UTC)
-		userMock := &mockUserService{
-			fireteamMembers: []user.FireteamMember{
+		ftMock := &mockFireteamService{
+			members: []fireteam.Member{
 				{
 					ID:           "u-1",
 					MembershipID: "4611686018467484863",
 					DisplayName:  "GuardianOne",
 					Characters:   []api.Character{{Id: "char-1", Class: "Hunter", Light: 2010}},
-					ActiveSessions: []user.ActiveSession{
+					ActiveSessions: []session.ActiveSession{
 						{
 							SessionID:   "ses-1",
 							UserID:      "u-1",
@@ -1574,12 +1579,12 @@ func TestGetFireteamEndpoint(t *testing.T) {
 					MembershipID:   "4611686018467484002",
 					DisplayName:    "GuardianTwo",
 					Characters:     nil,
-					ActiveSessions: []user.ActiveSession{},
+					ActiveSessions: []session.ActiveSession{},
 				},
 			},
 		}
 
-		r := newRouter(userMock)
+		r := newRouter(ftMock)
 		req := httptest.NewRequest(http.MethodGet, "/fireteam", nil)
 		req.Header.Set("Authorization", "Bearer test-token")
 		req.Header.Set("X-User-ID", "u-1")
@@ -1590,8 +1595,8 @@ func TestGetFireteamEndpoint(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
 		}
-		if userMock.capturedFireteamUserID != "u-1" {
-			t.Fatalf("expected actor userId=u-1, got %q", userMock.capturedFireteamUserID)
+		if ftMock.capturedUserID != "u-1" {
+			t.Fatalf("expected actor userId=u-1, got %q", ftMock.capturedUserID)
 		}
 
 		var got []api.FireteamMember
@@ -1613,12 +1618,37 @@ func TestGetFireteamEndpoint(t *testing.T) {
 		}
 	})
 
-	t.Run("503 returns ErrDestinyServerDown when Destiny servers are unavailable", func(t *testing.T) {
-		userMock := &mockUserService{
-			fireteamErr: fmt.Errorf("%w: %w", user.ErrDestinyUnavailable, destiny.ErrDestinyServerDown),
+	t.Run("404 returns user not found when caller does not exist", func(t *testing.T) {
+		ftMock := &mockFireteamService{
+			err: fmt.Errorf("failed to fetch user: %w", user.NotFound),
 		}
 
-		r := newRouter(userMock)
+		r := newRouter(ftMock)
+		req := httptest.NewRequest(http.MethodGet, "/fireteam", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-User-ID", "missing-user")
+		req.Header.Set("X-Membership-ID", "4611686018467484863")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 Not Found, got %d: %s", w.Code, w.Body.String())
+		}
+		var body api.GetFireteam404JSONResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("failed to decode 404 JSON: %v", err)
+		}
+		if body.Message != "user not found" {
+			t.Fatalf("expected message %q, got %q", "user not found", body.Message)
+		}
+	})
+
+	t.Run("503 returns ErrDestinyServerDown when Destiny servers are unavailable", func(t *testing.T) {
+		ftMock := &mockFireteamService{
+			err: fmt.Errorf("%w: %w", fireteam.ErrDestinyUnavailable, destiny.ErrDestinyServerDown),
+		}
+
+		r := newRouter(ftMock)
 		req := httptest.NewRequest(http.MethodGet, "/fireteam", nil)
 		req.Header.Set("Authorization", "Bearer test-token")
 		req.Header.Set("X-User-ID", "u-1")
