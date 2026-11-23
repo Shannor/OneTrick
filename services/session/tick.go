@@ -401,13 +401,6 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		return activityLinkOutcome{pendingRetry: true}, nil
 	}
 
-	if r.opts.DryRun {
-		if refreshing {
-			return activityLinkOutcome{aggregateID: existing.ID, linked: true, refreshed: true}, nil
-		}
-		return activityLinkOutcome{aggregateID: history.InstanceID, linked: true}, nil
-	}
-
 	// Bungie occasionally serves PGCRs with entry.Values populated before entry.Extended
 	// (weapons/medals) is ready. Persist on first sight so matches are not dropped, then
 	// retry on subsequent ticks until extended data arrives or the retry window expires.
@@ -423,6 +416,13 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		if refreshing {
 			return activityLinkOutcome{pendingRetry: true}, nil
 		}
+	}
+
+	if r.opts.DryRun {
+		if refreshing {
+			return activityLinkOutcome{aggregateID: existing.ID, linked: true, refreshed: true}, nil
+		}
+		return activityLinkOutcome{aggregateID: history.InstanceID, linked: true, pendingRetry: incomplete}, nil
 	}
 
 	if r.svc.snapshotService == nil {
@@ -479,10 +479,17 @@ func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *tickC
 	}
 
 	var postErrs []error
-	if !cand.isCompleted() && !linkRes.hasPendingRetry {
-		if err := r.svc.store.setLastActivity(iterCtx, ses.ID, latestID, r.svc.now()); err != nil {
-			r.resp.ErrorsTotal++
-			postErrs = append(postErrs, fmt.Errorf("failed to save last activity for session %s: %w", ses.ID, err))
+	if !cand.isCompleted() {
+		if !linkRes.hasPendingRetry {
+			if err := r.svc.store.setLastActivity(iterCtx, ses.ID, latestID, r.svc.now()); err != nil {
+				r.resp.ErrorsTotal++
+				postErrs = append(postErrs, fmt.Errorf("failed to save last activity for session %s: %w", ses.ID, err))
+			}
+		} else if len(newAggIDs) > 0 {
+			if err := r.svc.store.touchLastSeen(iterCtx, ses.ID, r.svc.now()); err != nil {
+				r.resp.ErrorsTotal++
+				postErrs = append(postErrs, fmt.Errorf("failed to update last seen timestamp for session %s: %w", ses.ID, err))
+			}
 		}
 	}
 

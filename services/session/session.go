@@ -41,13 +41,14 @@ var (
 )
 
 type service struct {
-	store            sessionStore
-	aggregateService aggregate.Service
-	userService      user.Service
-	d2Service        destiny.Service
-	snapshotService  snapshot.Service
-	manifestService  destiny.ManifestService
-	nowFn            func() time.Time
+	store               sessionStore
+	aggregateService    aggregate.Service
+	userService         user.Service
+	d2Service           destiny.Service
+	snapshotService     snapshot.Service
+	manifestService     destiny.ManifestService
+	nowFn               func() time.Time
+	finalCheckInTimeout time.Duration
 }
 
 var _ Service = (*service)(nil)
@@ -78,8 +79,10 @@ const (
 	emptyCleanupLookback     = 60 * time.Minute
 	activityStartGracePeriod = 15 * time.Minute
 	// 28m (rather than 30m) absorbs 5m cron dispatch jitter so Tick 6 reliably emits the 30m heartbeat.
-	snapshotHeartbeatPeriod          = 28 * time.Minute
+	snapshotHeartbeatPeriod = 28 * time.Minute
+	// Active sessions retry incomplete PGCRs up to 30m; completed sessions are additionally bounded by completedGracePeriod (15m) to cap post-completion reads.
 	incompletePerformanceRetryWindow = 30 * time.Minute
+	finalLoadoutCheckInTimeout       = 5 * time.Second
 )
 
 func (s service) now() time.Time {
@@ -87,6 +90,13 @@ func (s service) now() time.Time {
 		return s.nowFn()
 	}
 	return time.Now()
+}
+
+func (s service) checkInTimeout() time.Duration {
+	if s.finalCheckInTimeout > 0 {
+		return s.finalCheckInTimeout
+	}
+	return finalLoadoutCheckInTimeout
 }
 
 func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
@@ -306,7 +316,10 @@ func (s service) recordFinalLoadoutCheckIn(ctx context.Context, cand tickCandida
 	if s.snapshotService == nil || s.userService == nil {
 		return
 	}
-	pmID, _, err := s.userService.GetPrimaryMembership(ctx, cand.session.UserID)
+	checkInCtx, cancel := context.WithTimeout(ctx, s.checkInTimeout())
+	defer cancel()
+
+	pmID, _, err := s.userService.GetPrimaryMembership(checkInCtx, cand.session.UserID)
 	if err != nil {
 		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
 			"warning":      "failed to resolve primary membership for final loadout check-in",
@@ -314,7 +327,7 @@ func (s service) recordFinalLoadoutCheckIn(ctx context.Context, cand tickCandida
 		})
 		return
 	}
-	res, err := s.snapshotService.SaveSessionCheckIn(ctx, cand.session.UserID, strconv.FormatInt(pmID, 10), cand.session.CharacterID, snapshot.SessionCheckInOptions{
+	res, err := s.snapshotService.SaveSessionCheckIn(checkInCtx, cand.session.UserID, strconv.FormatInt(pmID, 10), cand.session.CharacterID, snapshot.SessionCheckInOptions{
 		LastSnapshotID:         cand.lastSnapshotID,
 		LastSnapshotHash:       cand.lastSnapshotHash,
 		LastSnapshotRecordedAt: cand.lastSnapshotRecordedAt,

@@ -35,6 +35,7 @@ type sessionStore interface {
 	updateSummary(ctx context.Context, sessionID string, summary *api.SessionSummary, updatedAt time.Time) error
 	updateCompTrackingEnd(ctx context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error
 	setLastActivity(ctx context.Context, sessionID, activityID string, seenAt time.Time) error
+	touchLastSeen(ctx context.Context, sessionID string, seenAt time.Time) error
 	setLastSnapshot(ctx context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error
 	deleteDoc(ctx context.Context, sessionID string) error
 	addAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error
@@ -301,6 +302,20 @@ func (f *firestoreStore) setLastActivity(ctx context.Context, sessionID, activit
 			Path:  "lastSeenActivityId",
 			Value: activityID,
 		},
+		{
+			Path:  "lastSeenTimestamp",
+			Value: seenAt,
+		},
+		{
+			Path:  "updatedAt",
+			Value: seenAt,
+		},
+	})
+	return err
+}
+
+func (f *firestoreStore) touchLastSeen(ctx context.Context, sessionID string, seenAt time.Time) error {
+	_, err := f.db.Collection(collection).Doc(sessionID).Update(ctx, []firestore.Update{
 		{
 			Path:  "lastSeenTimestamp",
 			Value: seenAt,

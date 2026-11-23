@@ -291,6 +291,19 @@ func (m *memorySessionStore) setLastActivity(_ context.Context, sessionID, activ
 	return nil
 }
 
+func (m *memorySessionStore) touchLastSeen(_ context.Context, sessionID string, seenAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writes.Add(1)
+	s, ok := m.docs[sessionID]
+	if !ok {
+		return ErrNotFound
+	}
+	s.LastSeenTimestamp = &seenAt
+	m.updatedAt[sessionID] = seenAt
+	return nil
+}
+
 func (m *memorySessionStore) setLastSnapshot(_ context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -399,6 +412,7 @@ type fakeSessionSnapshotService struct {
 	saveCalls     atomic.Int32
 	saveErrByChar map[string]error
 	checkInFn     func(userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error)
+	checkInCtxFn  func(ctx context.Context, userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error)
 	findBestFitFn func(userID, characterID string, period time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
 	enrichFn      func(snap *api.CharacterSnapshot, perf api.InstancePerformance) (*api.InstancePerformance, error)
 }
@@ -412,10 +426,17 @@ func (f *fakeSessionSnapshotService) Save(_ context.Context, _, _, characterID s
 	return &api.CharacterSnapshot{ID: "snap-" + characterID}, nil
 }
 
-func (f *fakeSessionSnapshotService) SaveSessionCheckIn(_ context.Context, userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+func (f *fakeSessionSnapshotService) SaveSessionCheckIn(ctx context.Context, userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
 	f.saveCalls.Add(1)
 	if err, ok := f.saveErrByChar[characterID]; ok && err != nil {
 		return snapshot.SessionCheckInResult{}, err
+	}
+	if f.checkInCtxFn != nil {
+		res, err := f.checkInCtxFn(ctx, userID, membershipID, characterID, opts)
+		if err == nil && res.HistoryRecorded {
+			f.writes.Add(1)
+		}
+		return res, err
 	}
 	if f.checkInFn != nil {
 		res, err := f.checkInFn(userID, membershipID, characterID, opts)
@@ -2186,6 +2207,9 @@ func TestRunTick_ActiveSessionIncompletePGCRRetryAndWindowExpiry(t *testing.T) {
 	if store.docs["ses-active"].LastSeenActivityID != nil {
 		t.Fatalf("Tick 1 should hold LastSeenActivityID while PGCR is incomplete, got %v", *store.docs["ses-active"].LastSeenActivityID)
 	}
+	if ts := store.docs["ses-active"].LastSeenTimestamp; ts == nil || !ts.Equal(t0) {
+		t.Fatalf("Tick 1 expected LastSeenTimestamp=%v even while holding LastSeenActivityID, got %v", t0, ts)
+	}
 
 	// Tick 2 (t=5m): Bungie STILL returns incomplete PGCR -> no redundant aggregate write, LastSeenActivityID still held.
 	now = t0.Add(5 * time.Minute)
@@ -2229,6 +2253,144 @@ func TestRunTick_ActiveSessionIncompletePGCRRetryAndWindowExpiry(t *testing.T) {
 	}
 	if len(ses.AggregateIDs) != 1 || ses.Summary == nil || ses.Summary.TopWeapons == nil || len(*ses.Summary.TopWeapons) != 1 {
 		t.Fatalf("Tick 3 expected deduplicated AggregateIDs and populated TopWeapons, got aggs=%v summary=%+v", ses.AggregateIDs, ses.Summary)
+	}
+}
+
+func TestRunTick_PendingRetryUpdatesLastSeenAndPreventsPrematureExpiry(t *testing.T) {
+	t0 := time.Date(2026, 11, 23, 5, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name              string
+		setupSession      func(store *memorySessionStore, aggSvc *fakeSessionAggregateService)
+		wantHeldActivity  *string
+		activities        []api.ActivityHistory
+	}{
+		{
+			name: "inactive session near cutoff does not expire after partial PGCR",
+			setupSession: func(store *memorySessionStore, _ *fakeSessionAggregateService) {
+				store.docs["ses-near-cutoff"] = &api.Session{
+					ID:          "ses-near-cutoff",
+					UserID:      "user-1",
+					CharacterID: "char-1",
+					StartedAt:   t0.Add(-118 * time.Minute),
+					Status:      new(api.SessionPending),
+				}
+			},
+			wantHeldActivity: nil,
+			activities: []api.ActivityHistory{
+				{InstanceID: "act-inc", Activity: "Control", Mode: new("Control"), Period: t0.Add(-2 * time.Minute)},
+			},
+		},
+		{
+			name: "stale session near cutoff refreshes lastSeenTimestamp while holding cursor",
+			setupSession: func(store *memorySessionStore, aggSvc *fakeSessionAggregateService) {
+				prevSeen := t0.Add(-118 * time.Minute)
+				store.docs["ses-near-cutoff"] = &api.Session{
+					ID:                 "ses-near-cutoff",
+					UserID:             "user-1",
+					CharacterID:        "char-1",
+					StartedAt:          t0.Add(-150 * time.Minute),
+					LastSeenActivityID: new("act-prev"),
+					LastSeenTimestamp:  &prevSeen,
+					AggregateIDs:       []string{"agg-prev"},
+					Status:             new(api.SessionPending),
+				}
+				store.updatedAt["ses-near-cutoff"] = prevSeen
+				aggSvc.seed(api.Aggregate{
+					ID:         "agg-prev",
+					ActivityID: "act-prev",
+					CreatedAt:  prevSeen,
+					Performance: map[string]api.InstancePerformance{
+						"char-1": {
+							PlayerStats: api.PlayerStats{Kills: statVal(10), Deaths: statVal(5)},
+							Extra:       &map[string]api.UniqueStatValue{},
+						},
+					},
+				})
+			},
+			wantHeldActivity: new("act-prev"),
+			activities: []api.ActivityHistory{
+				{InstanceID: "act-inc", Activity: "Control", Mode: new("Control"), Period: t0.Add(-2 * time.Minute)},
+				{InstanceID: "act-prev", Activity: "Control", Mode: new("Control"), Period: t0.Add(-120 * time.Minute)},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			now := t0
+			store := newMemorySessionStore()
+			aggSvc := newFakeSessionAggregateService()
+			aggSvc.nowFn = func() time.Time { return now }
+			tc.setupSession(store, aggSvc)
+
+			uSvc := &fakeSessionUserService{
+				u: &user.User{
+					ID:                  "user-1",
+					PrimaryMembershipID: "12345",
+					Memberships:         []user.Membership{{ID: "12345", Type: 3}},
+				},
+			}
+			d2Svc := &fakeSessionD2Service{
+				activitiesByChr: map[string][]api.ActivityHistory{
+					"char-1": tc.activities,
+				},
+				perfsByAct: map[string]map[string]api.InstancePerformance{
+					"act-inc": {
+						"char-1": {PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(12), Deaths: statVal(4)}},
+					},
+				},
+			}
+			snapSvc := &fakeSessionSnapshotService{
+				findBestFitFn: func(_, characterID string, _ time.Time, _ map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
+					return nil, &api.SnapshotLink{
+						CharacterID:      characterID,
+						ConfidenceLevel:  api.NoMatchConfidenceLevel,
+						ConfidenceSource: api.SystemConfidenceSource,
+						CreatedAt:        now,
+					}, nil
+				},
+			}
+			svc := &service{
+				store:            store,
+				aggregateService: aggSvc,
+				userService:      uSvc,
+				d2Service:        d2Svc,
+				snapshotService:  snapSvc,
+				manifestService:  &fakeSessionManifestService{},
+				nowFn:            func() time.Time { return now },
+			}
+
+			// Tick 1 (t=0, 118m since start/lastSeen): partial PGCR saves aggregate and bumps LastSeenTimestamp, holding LastSeenActivityID.
+			resp1, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true})
+			if err != nil {
+				t.Fatalf("Tick 1 failed: %v", err)
+			}
+			if resp1.SessionsProcessed != 1 || resp1.AggregatesAddedTotal != 1 {
+				t.Fatalf("Tick 1 unexpected response: %+v", resp1)
+			}
+			ses := store.docs["ses-near-cutoff"]
+			if ses.LastSeenTimestamp == nil || !ses.LastSeenTimestamp.Equal(t0) {
+				t.Fatalf("Tick 1 expected LastSeenTimestamp=%v, got %v", t0, ses.LastSeenTimestamp)
+			}
+			if (tc.wantHeldActivity == nil) != (ses.LastSeenActivityID == nil) ||
+				(tc.wantHeldActivity != nil && *ses.LastSeenActivityID != *tc.wantHeldActivity) {
+				t.Fatalf("Tick 1 expected LastSeenActivityID=%v, got %v", tc.wantHeldActivity, ses.LastSeenActivityID)
+			}
+
+			// Tick 2 (t=5m, 123m since original start/lastSeen > 2h CutOffDuration): session must stay active rather than expiring.
+			now = t0.Add(5 * time.Minute)
+			resp2, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true})
+			if err != nil {
+				t.Fatalf("Tick 2 failed: %v", err)
+			}
+			if resp2.SessionsStaleEnded != 0 || resp2.SessionsInactiveDeleted != 0 || resp2.SessionsStaleDeleted != 0 {
+				t.Fatalf("Tick 2 prematurely expired active session: %+v", resp2)
+			}
+			if ses.Status == nil || *ses.Status != api.SessionPending {
+				t.Fatalf("Tick 2 expected session to remain pending, got %v", ses.Status)
+			}
+		})
 	}
 }
 
@@ -2338,6 +2500,118 @@ func TestRunTick_IncompletePGCRStopsRetryingAfterWindow(t *testing.T) {
 	}
 	if needsPerformanceRefresh(zeroKillCompleteAgg, "char-1", now) {
 		t.Fatal("expected complete 0-kill match with Extra != nil not to trigger refresh")
+	}
+}
+
+func TestRunTick_DryRunIncompletePGCRParity(t *testing.T) {
+	t0 := time.Date(2026, 11, 23, 6, 30, 0, 0, time.UTC)
+
+	store := newMemorySessionStore()
+	store.docs["ses-dry"] = &api.Session{
+		ID:           "ses-dry",
+		UserID:       "user-1",
+		CharacterID:  "char-1",
+		StartedAt:    t0.Add(-20 * time.Minute),
+		AggregateIDs: []string{"agg-inc"},
+		Status:       new(api.SessionPending),
+	}
+
+	aggSvc := newFakeSessionAggregateService()
+	aggSvc.seed(api.Aggregate{
+		ID:         "agg-inc",
+		ActivityID: "act-inc",
+		CreatedAt:  t0.Add(-5 * time.Minute),
+		SnapshotLinks: map[string]api.SnapshotLink{
+			"char-1": {
+				CharacterID:      "char-1",
+				SessionID:        new("ses-dry"),
+				ConfidenceLevel:  api.NoMatchConfidenceLevel,
+				ConfidenceSource: api.SystemConfidenceSource,
+				CreatedAt:        t0.Add(-5 * time.Minute),
+			},
+		},
+		Performance: map[string]api.InstancePerformance{
+			"char-1": {PlayerStats: api.PlayerStats{Kills: statVal(12), Deaths: statVal(4)}},
+		},
+	})
+
+	uSvc := &fakeSessionUserService{
+		u: &user.User{
+			ID:                  "user-1",
+			PrimaryMembershipID: "12345",
+			Memberships:         []user.Membership{{ID: "12345", Type: 3}},
+		},
+	}
+	d2Svc := &fakeSessionD2Service{
+		activitiesByChr: map[string][]api.ActivityHistory{
+			"char-1": {
+				{InstanceID: "act-inc", Activity: "Control", Period: t0.Add(-6 * time.Minute)},
+			},
+		},
+		perfsByAct: map[string]map[string]api.InstancePerformance{
+			"act-inc": {
+				"char-1": {PlayerStats: api.PlayerStats{Kills: statVal(12), Deaths: statVal(4)}},
+			},
+		},
+	}
+	snapSvc := &fakeSessionSnapshotService{}
+
+	svc := &service{
+		store:            store,
+		aggregateService: aggSvc,
+		userService:      uSvc,
+		d2Service:        d2Svc,
+		snapshotService:  snapSvc,
+		manifestService:  &fakeSessionManifestService{},
+		nowFn:            func() time.Time { return t0 },
+	}
+
+	// Dry-run while PGCR is still incomplete: matches live tick (skipped, 0 refreshed, warning emitted, 0 DB writes).
+	ctx1 := clog.NewContext(context.Background())
+	resp1, err := svc.RunTick(ctx1, TickOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run Tick 1 failed: %v", err)
+	}
+	if resp1.SessionsSkipped != 1 || resp1.SessionsProcessed != 0 || resp1.AggregatesAddedTotal != 0 {
+		t.Fatalf("dry-run Tick 1 expected skip on still-incomplete PGCR, got %+v", resp1)
+	}
+	if got, ok := findIntAttr(clog.BagFromContext(ctx1).Attrs(), "aggregatesRefreshed"); !ok || got != 0 {
+		t.Fatalf("dry-run Tick 1 expected aggregatesRefreshed=0, got %d (found=%v)", got, ok)
+	}
+	if !clog.BagFromContext(ctx1).HasWarning() {
+		t.Fatal("dry-run Tick 1 expected incomplete_pgcr_extended warning")
+	}
+	if store.writes.Load() != 0 || aggSvc.writes.Load() != 0 || snapSvc.writes.Load() != 0 {
+		t.Fatalf("dry-run Tick 1 must perform zero writes, got store=%d agg=%d snap=%d", store.writes.Load(), aggSvc.writes.Load(), snapSvc.writes.Load())
+	}
+
+	// Dry-run once PGCR is complete: reports processed + refreshed with still zero DB writes.
+	extra := map[string]api.UniqueStatValue{
+		"precisionKills": {Basic: api.StatsValuePair{Value: new(float64(5))}},
+	}
+	d2Svc.perfsByAct["act-inc"] = map[string]api.InstancePerformance{
+		"char-1": {
+			PlayerStats: api.PlayerStats{Kills: statVal(12), Deaths: statVal(4)},
+			Extra:       &extra,
+			Weapons: map[string]api.WeaponInstanceMetrics{
+				"1001": weaponMetrics(1001, 12, "Rose", "/img/rose.png"),
+			},
+		},
+	}
+
+	ctx2 := clog.NewContext(context.Background())
+	resp2, err := svc.RunTick(ctx2, TickOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run Tick 2 failed: %v", err)
+	}
+	if resp2.SessionsProcessed != 1 || resp2.SessionsSkipped != 0 {
+		t.Fatalf("dry-run Tick 2 expected processed on complete PGCR, got %+v", resp2)
+	}
+	if got, ok := findIntAttr(clog.BagFromContext(ctx2).Attrs(), "aggregatesRefreshed"); !ok || got != 1 {
+		t.Fatalf("dry-run Tick 2 expected aggregatesRefreshed=1, got %d (found=%v)", got, ok)
+	}
+	if store.writes.Load() != 0 || aggSvc.writes.Load() != 0 || snapSvc.writes.Load() != 0 {
+		t.Fatalf("dry-run Tick 2 must perform zero writes, got store=%d agg=%d snap=%d", store.writes.Load(), aggSvc.writes.Load(), snapSvc.writes.Load())
 	}
 }
 
@@ -2496,6 +2770,62 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			t.Fatal("expected warning recorded when final check-in fails")
 		}
 		assertAllWarningsAreStrings(t, clog.BagFromContext(ctx).Attrs())
+	})
+
+	t.Run("bounded check-in timeout preserves parent context for completeDoc", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-4"] = &api.Session{
+			ID:          "ses-4",
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			StartedAt:   t0.Add(-10 * time.Minute),
+			Status:      new(api.SessionPending),
+		}
+
+		var hasDeadline bool
+		var checkInErr error
+		snapSvc := &fakeSessionSnapshotService{
+			checkInCtxFn: func(ctx context.Context, _, _, _ string, _ snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+				_, hasDeadline = ctx.Deadline()
+				<-ctx.Done()
+				checkInErr = ctx.Err()
+				return snapshot.SessionCheckInResult{}, checkInErr
+			},
+		}
+		uSvc := &fakeSessionUserService{
+			u: &user.User{
+				ID:                  "user-1",
+				PrimaryMembershipID: "12345",
+				Memberships:         []user.Membership{{ID: "12345", Type: 3}},
+			},
+		}
+		svc := &service{
+			store:               store,
+			userService:         uSvc,
+			snapshotService:     snapSvc,
+			nowFn:               func() time.Time { return t0 },
+			finalCheckInTimeout: 25 * time.Millisecond,
+		}
+
+		parentCtx := clog.NewContext(context.Background())
+		if err := svc.Complete(parentCtx, "ses-4"); err != nil {
+			t.Fatalf("Complete should still succeed when final check-in times out, got: %v", err)
+		}
+		if !hasDeadline {
+			t.Fatal("expected final check-in to receive a bounded context deadline")
+		}
+		if !errors.Is(checkInErr, context.DeadlineExceeded) {
+			t.Fatalf("expected check-in to terminate with DeadlineExceeded, got %v", checkInErr)
+		}
+		if parentCtx.Err() != nil {
+			t.Fatalf("expected parent context to remain uncanceled, got %v", parentCtx.Err())
+		}
+		if store.docs["ses-4"].CompletedAt == nil || *store.docs["ses-4"].Status != api.SessionComplete {
+			t.Fatalf("expected session marked complete after check-in timeout, got %+v", store.docs["ses-4"])
+		}
+		if !clog.BagFromContext(parentCtx).HasWarning() {
+			t.Fatal("expected warning recorded when final check-in times out")
+		}
 	})
 }
 
