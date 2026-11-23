@@ -6,6 +6,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"strconv"
+	"sync"
 
 	clog "github.com/Shannor/canonical-logger"
 )
@@ -171,25 +172,71 @@ func (a *service) getEquipableItemSetsBestEffort(ctx context.Context) map[string
 	return itemSets
 }
 
+const maxConcurrentItemFetches = 5
+
 func (a *service) fetchEquippedItems(ctx context.Context, membershipID, membershipType int64, items []bungie.ItemComponent) ([]fetchedItem, error) {
-	fetched := make([]fetchedItem, 0, len(items))
+	targets := make([]bungie.ItemComponent, 0, len(items))
 	for _, item := range items {
-		if item.ItemInstanceId == nil {
-			continue
+		if item.ItemInstanceId != nil {
+			targets = append(targets, item)
 		}
-		detail, err := a.GetItemDetails(ctx, membershipID, membershipType, *item.ItemInstanceId)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch item details for instance %s: %w", *item.ItemInstanceId, err)
-		}
-		if detail == nil {
-			return nil, fmt.Errorf("empty item details for instance %s", *item.ItemInstanceId)
-		}
-		f := fetchedItem{
-			instanceID: *item.ItemInstanceId,
-			detail:     detail,
-		}
-		f.applyFallbackOverrideStyle(item.OverrideStyleItemHash)
-		fetched = append(fetched, f)
+	}
+	if len(targets) == 0 {
+		return nil, nil
+	}
+
+	fetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	fetched := make([]fetchedItem, len(targets))
+	sem := make(chan struct{}, maxConcurrentItemFetches)
+
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+	recordErr := func(err error) {
+		errOnce.Do(func() {
+			firstErr = err
+			cancel()
+		})
+	}
+
+	for i, item := range targets {
+		wg.Go(func() {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-fetchCtx.Done():
+				return
+			}
+
+			instanceID := *item.ItemInstanceId
+			detail, err := a.GetItemDetails(fetchCtx, membershipID, membershipType, instanceID)
+			if err != nil {
+				recordErr(fmt.Errorf("failed to fetch item details for instance %s: %w", instanceID, err))
+				return
+			}
+			if detail == nil {
+				recordErr(fmt.Errorf("empty item details for instance %s", instanceID))
+				return
+			}
+			f := fetchedItem{
+				instanceID: instanceID,
+				detail:     detail,
+			}
+			f.applyFallbackOverrideStyle(item.OverrideStyleItemHash)
+			fetched[i] = f
+		})
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return fetched, nil
 }
