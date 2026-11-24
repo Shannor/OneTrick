@@ -3,6 +3,7 @@ package utils
 import (
 	"oneTrick/set"
 	"slices"
+	"strings"
 )
 
 func UniqueNonZero[T comparable](items []T) []T {
@@ -21,6 +22,29 @@ func UniqueNonZero[T comparable](items []T) []T {
 		return nil
 	}
 	return unique.ToSlice()
+}
+
+func UniqueTrimmedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func Chunk[T any](items []T, size int) [][]T {

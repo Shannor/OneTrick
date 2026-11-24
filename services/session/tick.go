@@ -21,28 +21,28 @@ type TickOptions struct {
 	SkipSave bool
 }
 
-func (c tickCandidate) isCompleted() bool {
-	return c.session.Status != nil && *c.session.Status == api.SessionComplete
+func (c TickCandidate) isCompleted() bool {
+	return c.Session.Status != nil && *c.Session.Status == api.SessionComplete
 }
 
-func (c tickCandidate) isStale(now time.Time) bool {
-	return !c.isCompleted() && IsStaleSession(c.session, c.updatedAt, now)
+func (c TickCandidate) isStale(now time.Time) bool {
+	return !c.isCompleted() && IsStaleSession(c.Session, c.UpdatedAt, now)
 }
 
-func (c tickCandidate) isInactive(now time.Time) bool {
-	return !c.isCompleted() && c.session.LastSeenTimestamp == nil && IsInactiveSession(c.session, now)
+func (c TickCandidate) isInactive(now time.Time) bool {
+	return !c.isCompleted() && c.Session.LastSeenTimestamp == nil && IsInactiveSession(c.Session, now)
 }
 
-func (c tickCandidate) hasAggregates() bool {
-	return len(c.session.AggregateIDs) > 0
+func (c TickCandidate) hasAggregates() bool {
+	return len(c.Session.AggregateIDs) > 0
 }
 
-func (c tickCandidate) hasSeenActivity(activityID string) bool {
-	return c.session.LastSeenActivityID != nil && *c.session.LastSeenActivityID == activityID
+func (c TickCandidate) hasSeenActivity(activityID string) bool {
+	return c.Session.LastSeenActivityID != nil && *c.Session.LastSeenActivityID == activityID
 }
 
-func (c tickCandidate) activityGraceCutoff() time.Time {
-	return c.session.StartedAt.Add(-activityStartGracePeriod)
+func (c TickCandidate) activityGraceCutoff() time.Time {
+	return c.Session.StartedAt.Add(-activityStartGracePeriod)
 }
 
 type tickMembership struct {
@@ -106,7 +106,7 @@ func (r *tickRunner) recordSummary(ctx context.Context, tickStart time.Time) {
 }
 
 func (r *tickRunner) run(ctx context.Context) (*api.SessionTickResponse, error) {
-	candidates, err := r.svc.store.getTickCandidates(ctx, r.now.Add(-completedGracePeriod))
+	candidates, err := r.svc.store.GetTickCandidates(ctx, r.now.Add(-completedGracePeriod))
 	if err != nil {
 		r.resp.ErrorsTotal++
 		return nil, fmt.Errorf("failed to get sessions: %w", err)
@@ -132,13 +132,13 @@ func (r *tickRunner) failSession(err error) error {
 	return err
 }
 
-func (r *tickRunner) processCandidates(ctx context.Context, candidates []tickCandidate) {
-	_ = clog.LoopRollup(ctx, "sessionService.processSession", candidates, func(iterCtx context.Context, _ int, cand tickCandidate) error {
+func (r *tickRunner) processCandidates(ctx context.Context, candidates []TickCandidate) {
+	_ = clog.LoopRollup(ctx, "sessionService.processSession", candidates, func(iterCtx context.Context, _ int, cand TickCandidate) error {
 		return r.processSession(iterCtx, ctx, cand)
 	})
 }
 
-func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand tickCandidate) error {
+func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand TickCandidate) error {
 	defer func() {
 		if bag := clog.BagFromContext(iterCtx); bag != nil && bag.HasWarning() {
 			clog.WithGroupField(parentCtx, "sessionService.processSession", "warning", "one or more sessions recorded a warning")
@@ -146,14 +146,14 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand tic
 	}()
 
 	clog.WithGroupFields(iterCtx, "session", clog.Fields{
-		"sessionId":   cand.session.ID,
-		"userId":      cand.session.UserID,
-		"characterId": cand.session.CharacterID,
+		"sessionId":   cand.Session.ID,
+		"userId":      cand.Session.UserID,
+		"characterId": cand.Session.CharacterID,
 	})
 
 	if cand.isCompleted() {
 		defer func() {
-			r.queueCompFinalize(cand.session)
+			r.queueCompFinalize(cand.Session)
 		}()
 	}
 
@@ -161,7 +161,7 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand tic
 		return err
 	}
 
-	membership, err := r.resolveMembership(iterCtx, cand.session)
+	membership, err := r.resolveMembership(iterCtx, cand.Session)
 	if err != nil {
 		return err
 	}
@@ -181,15 +181,15 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand tic
 
 	r.resp.ActivitiesFoundTotal += len(histories)
 
-	linkRes, err := r.linkActivities(iterCtx, cand.session, histories)
+	linkRes, err := r.linkActivities(iterCtx, cand.Session, histories)
 	if err != nil {
 		return err
 	}
 	if len(linkRes.aggregateIDs) == 0 {
 		if !linkRes.hasPendingRetry && !cand.isCompleted() && !r.opts.DryRun && latestID != "" && !cand.hasSeenActivity(latestID) {
-			if err := r.svc.store.setLastActivity(iterCtx, cand.session.ID, latestID, r.svc.now()); err != nil {
+			if err := r.svc.store.SetLastActivity(iterCtx, cand.Session.ID, latestID, r.svc.now()); err != nil {
 				r.resp.ErrorsTotal++
-				return fmt.Errorf("failed to save last activity for session %s: %w", cand.session.ID, err)
+				return fmt.Errorf("failed to save last activity for session %s: %w", cand.Session.ID, err)
 			}
 		}
 		r.resp.SessionsSkipped++
@@ -199,7 +199,7 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand tic
 	return r.persistSessionProgress(iterCtx, &cand, latestID, linkRes)
 }
 
-func (r *tickRunner) expireIfNeeded(ctx context.Context, cand tickCandidate) (bool, error) {
+func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bool, error) {
 	var (
 		reason       string
 		emptyCounter *int
@@ -216,8 +216,8 @@ func (r *tickRunner) expireIfNeeded(ctx context.Context, cand tickCandidate) (bo
 	}
 
 	if !r.opts.DryRun {
-		if err := r.svc.endOrDeleteSession(ctx, cand.session); err != nil {
-			return true, r.failSession(fmt.Errorf("failed to process %s session %s: %w", reason, cand.session.ID, err))
+		if err := r.svc.endOrDeleteSession(ctx, cand.Session); err != nil {
+			return true, r.failSession(fmt.Errorf("failed to process %s session %s: %w", reason, cand.Session.ID, err))
 		}
 	}
 
@@ -225,7 +225,7 @@ func (r *tickRunner) expireIfNeeded(ctx context.Context, cand tickCandidate) (bo
 		*emptyCounter++
 	} else {
 		r.resp.SessionsStaleEnded++
-		r.queueCompFinalize(cand.session)
+		r.queueCompFinalize(cand.Session)
 	}
 	return true, nil
 }
@@ -245,49 +245,49 @@ func (r *tickRunner) resolveMembership(ctx context.Context, ses api.Session) (ti
 	}, nil
 }
 
-func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *tickCandidate, membership tickMembership) error {
+func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *TickCandidate, membership tickMembership) error {
 	if cand.isCompleted() || r.opts.SkipSave || r.opts.DryRun {
 		return nil
 	}
 	if r.svc.snapshotService == nil {
 		r.resp.LoadoutsFailed++
 		r.resp.ErrorsTotal++
-		return fmt.Errorf("snapshot service not configured for session %s", cand.session.ID)
+		return fmt.Errorf("snapshot service not configured for session %s", cand.Session.ID)
 	}
-	res, err := r.svc.snapshotService.SaveSessionCheckIn(ctx, cand.session.UserID, membership.id, cand.session.CharacterID, snapshot.SessionCheckInOptions{
-		LastSnapshotID:         cand.lastSnapshotID,
-		LastSnapshotHash:       cand.lastSnapshotHash,
-		LastSnapshotRecordedAt: cand.lastSnapshotRecordedAt,
+	res, err := r.svc.snapshotService.SaveSessionCheckIn(ctx, cand.Session.UserID, membership.id, cand.Session.CharacterID, snapshot.SessionCheckInOptions{
+		LastSnapshotID:         cand.LastSnapshotID,
+		LastSnapshotHash:       cand.LastSnapshotHash,
+		LastSnapshotRecordedAt: cand.LastSnapshotRecordedAt,
 		HeartbeatInterval:      snapshotHeartbeatPeriod,
 	})
 	if err != nil {
 		r.resp.LoadoutsFailed++
 		r.resp.ErrorsTotal++
-		return fmt.Errorf("failed to save loadout for session %s: %w", cand.session.ID, err)
+		return fmt.Errorf("failed to save loadout for session %s: %w", cand.Session.ID, err)
 	}
 	if !res.HistoryRecorded {
 		r.loadoutsThrottled++
 		return nil
 	}
-	if err := r.svc.store.setLastSnapshot(ctx, cand.session.ID, res.SnapshotID, res.SnapshotHash, res.RecordedAt); err != nil {
+	if err := r.svc.store.SetLastSnapshot(ctx, cand.Session.ID, res.SnapshotID, res.SnapshotHash, res.RecordedAt); err != nil {
 		clog.WithGroupFields(ctx, "sessionService.saveLoadout", clog.Fields{
 			"warning":           "failed to persist last snapshot metadata on session",
-			"sessionId":         cand.session.ID,
+			"sessionId":         cand.Session.ID,
 			"lastSnapshotError": err.Error(),
 		})
 	} else {
-		cand.lastSnapshotID = res.SnapshotID
-		cand.lastSnapshotHash = res.SnapshotHash
-		cand.lastSnapshotRecordedAt = res.RecordedAt
+		cand.LastSnapshotID = res.SnapshotID
+		cand.LastSnapshotHash = res.SnapshotHash
+		cand.LastSnapshotRecordedAt = res.RecordedAt
 	}
 	r.resp.LoadoutsSaved++
 	return nil
 }
 
-func (r *tickRunner) fetchNewActivities(ctx context.Context, cand tickCandidate, membership tickMembership) (string, []api.ActivityHistory, error) {
-	rawActivities, err := r.svc.d2Service.GetAllPVPActivity(ctx, membership.id, membership.membershipType, cand.session.CharacterID, 5, 0)
+func (r *tickRunner) fetchNewActivities(ctx context.Context, cand TickCandidate, membership tickMembership) (string, []api.ActivityHistory, error) {
+	rawActivities, err := r.svc.d2Service.GetAllPVPActivity(ctx, membership.id, membership.membershipType, cand.Session.CharacterID, 5, 0)
 	if err != nil {
-		return "", nil, r.failSession(fmt.Errorf("failed to get activities for session %s: %w", cand.session.ID, err))
+		return "", nil, r.failSession(fmt.Errorf("failed to get activities for session %s: %w", cand.Session.ID, err))
 	}
 
 	activityHistories := filterTickActivities(rawActivities)
@@ -461,8 +461,8 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 	}, nil
 }
 
-func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *tickCandidate, latestID string, linkRes linkActivitiesResult) error {
-	ses := &cand.session
+func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickCandidate, latestID string, linkRes linkActivitiesResult) error {
+	ses := &cand.Session
 	newAggIDs := make([]string, 0, len(linkRes.aggregateIDs))
 	for _, id := range linkRes.aggregateIDs {
 		if id != "" && !slices.Contains(ses.AggregateIDs, id) && !slices.Contains(newAggIDs, id) {
@@ -481,12 +481,12 @@ func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *tickC
 	var postErrs []error
 	if !cand.isCompleted() {
 		if !linkRes.hasPendingRetry {
-			if err := r.svc.store.setLastActivity(iterCtx, ses.ID, latestID, r.svc.now()); err != nil {
+			if err := r.svc.store.SetLastActivity(iterCtx, ses.ID, latestID, r.svc.now()); err != nil {
 				r.resp.ErrorsTotal++
 				postErrs = append(postErrs, fmt.Errorf("failed to save last activity for session %s: %w", ses.ID, err))
 			}
 		} else if len(newAggIDs) > 0 {
-			if err := r.svc.store.touchLastSeen(iterCtx, ses.ID, r.svc.now()); err != nil {
+			if err := r.svc.store.TouchLastSeen(iterCtx, ses.ID, r.svc.now()); err != nil {
 				r.resp.ErrorsTotal++
 				postErrs = append(postErrs, fmt.Errorf("failed to update last seen timestamp for session %s: %w", ses.ID, err))
 			}
@@ -627,7 +627,7 @@ func filterTickActivities(activities []api.ActivityHistory) []api.ActivityHistor
 
 func (s service) endOrDeleteSession(ctx context.Context, ses api.Session) error {
 	if len(ses.AggregateIDs) == 0 {
-		return s.store.deleteDoc(ctx, ses.ID)
+		return s.store.DeleteDoc(ctx, ses.ID)
 	}
 	return s.endSession(ctx, ses)
 }
@@ -646,7 +646,7 @@ func (s service) endSession(ctx context.Context, ses api.Session) error {
 		})
 		summary = nil
 	}
-	if err := s.store.endSessionDoc(ctx, ses.ID, completedBy, s.now(), summary); err != nil {
+	if err := s.store.EndSessionDoc(ctx, ses.ID, completedBy, s.now(), summary); err != nil {
 		return fmt.Errorf("failed to end session: %w", err)
 	}
 	return nil
@@ -656,7 +656,7 @@ func (s service) CleanupEmptyCompleted(ctx context.Context, dryRun bool) (int, e
 	now := s.now()
 	windowEnd := now.Add(-completedGracePeriod)
 	windowStart := now.Add(-emptyCleanupLookback)
-	sessions, err := s.store.listCompletedInWindow(ctx, windowStart, windowEnd)
+	sessions, err := s.store.ListCompletedInWindow(ctx, windowStart, windowEnd)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch completed sessions for cleanup: %w", err)
 	}
@@ -669,7 +669,7 @@ func (s service) CleanupEmptyCompleted(ctx context.Context, dryRun bool) (int, e
 				return nil
 			}
 			if !dryRun {
-				if err := s.store.deleteDoc(iterCtx, ses.ID); err != nil {
+				if err := s.store.DeleteDoc(iterCtx, ses.ID); err != nil {
 					return fmt.Errorf("failed to delete empty completed session %s: %w", ses.ID, err)
 				}
 			}

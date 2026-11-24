@@ -3,8 +3,11 @@ package user
 import (
 	"context"
 	"errors"
+	"fmt"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
+	"oneTrick/utils"
+	"os"
 	"reflect"
 	"strconv"
 	"sync"
@@ -12,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
 )
 
@@ -40,6 +44,11 @@ func (f *fakeD2SearchService) Search(ctx context.Context, prefix string, page in
 }
 
 type fakeUserSearchStore struct {
+	usersByLookupID map[string]User
+	lookupErr       error
+	lookupCalls     int
+	capturedLookups []string
+
 	prefixUsers       []User
 	prefixErr         error
 	prefixFn          func(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error)
@@ -49,6 +58,24 @@ type fakeUserSearchStore struct {
 	crossRefCalls     int
 	capturedBungieIDs []string
 	capturedPrimIDs   []string
+
+	partyUsers          []User
+	partyErr            error
+	partyLookupCalls    int
+	capturedPartyMemIDs []string
+}
+
+func (f *fakeUserSearchStore) findUserByLookupID(_ context.Context, id string) (*User, error) {
+	f.lookupCalls++
+	f.capturedLookups = append(f.capturedLookups, id)
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	if u, ok := f.usersByLookupID[id]; ok {
+		cp := u
+		return &cp, nil
+	}
+	return nil, NotFound
 }
 
 func (f *fakeUserSearchStore) findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error) {
@@ -70,6 +97,15 @@ func (f *fakeUserSearchStore) findUsersByMembershipIDs(_ context.Context, bungie
 		return nil, f.crossRefErr
 	}
 	return f.crossRefUsers, nil
+}
+
+func (f *fakeUserSearchStore) findUsersByPartyMembershipIDs(_ context.Context, membershipIDs []string) ([]User, error) {
+	f.partyLookupCalls++
+	f.capturedPartyMemIDs = append([]string(nil), membershipIDs...)
+	if f.partyErr != nil {
+		return nil, f.partyErr
+	}
+	return f.partyUsers, nil
 }
 
 func TestUserPrimaryMembership(t *testing.T) {
@@ -540,7 +576,7 @@ func TestUserServiceSearch(t *testing.T) {
 func TestLegacyUnindexedUsersCache(t *testing.T) {
 	t.Run("serializes concurrent cold-cache refreshes without stampede", func(t *testing.T) {
 		var loadCalls atomic.Int32
-		store := &firestoreUserSearchStore{
+		store := &firestoreUserStore{
 			loadAllUsersFn: func(_ context.Context) ([]User, error) {
 				loadCalls.Add(1)
 				time.Sleep(25 * time.Millisecond)
@@ -575,7 +611,7 @@ func TestLegacyUnindexedUsersCache(t *testing.T) {
 
 	t.Run("short-circuits future scans once all users are indexed and evicts backfilled users in-place", func(t *testing.T) {
 		var loadCalls atomic.Int32
-		store := &firestoreUserSearchStore{
+		store := &firestoreUserStore{
 			loadAllUsersFn: func(_ context.Context) ([]User, error) {
 				loadCalls.Add(1)
 				return []User{
@@ -635,20 +671,101 @@ func TestLegacyUnindexedUsersCache(t *testing.T) {
 	})
 }
 
-func TestChunkUniqueStrings(t *testing.T) {
+func TestBatchChunkLimits(t *testing.T) {
 	input := make([]string, 0, 70)
 	for i := 0; i < 65; i++ {
 		input = append(input, "id-"+strconv.Itoa(i))
 	}
-	// Add duplicates and empty strings.
 	input = append(input, "", "   ", "id-0", "id-10", "id-64")
 
-	chunks := chunkUniqueStrings(input, firestoreInBatchLimit)
+	unique := utils.UniqueTrimmedStrings(input)
+	chunks := utils.Chunk(unique, firestoreInBatchLimit)
 	if len(chunks) != 3 {
 		t.Fatalf("expected 3 chunks (30, 30, 5), got %d", len(chunks))
 	}
 	if len(chunks[0]) != 30 || len(chunks[1]) != 30 || len(chunks[2]) != 5 {
 		t.Fatalf("unexpected chunk sizes: %d, %d, %d", len(chunks[0]), len(chunks[1]), len(chunks[2]))
+	}
+
+	orChunks := utils.Chunk(unique, firestoreOrInBatchLimit)
+	if len(orChunks) != 5 {
+		t.Fatalf("expected 5 OrFilter chunks (15, 15, 15, 15, 5), got %d", len(orChunks))
+	}
+	if len(orChunks[0]) != 15 || len(orChunks[4]) != 5 {
+		t.Fatalf("unexpected OrFilter chunk sizes: first=%d last=%d", len(orChunks[0]), len(orChunks[4]))
+	}
+}
+
+func TestFirestoreEmulatorFindUsersByPartyMembershipIDs(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("skipping Firestore emulator integration test; set FIRESTORE_EMULATOR_HOST to run")
+	}
+
+	ctx := context.Background()
+	db, err := firestore.NewClient(ctx, "gruntt-destiny-test")
+	if err != nil {
+		t.Fatalf("failed to create Firestore emulator client: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := newFirestoreUserStore(db)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	uPrimary := User{
+		ID:                  "emu-party-primary-" + runID,
+		MemberID:            "bnet-primary-" + runID,
+		PrimaryMembershipID: "pm-primary-" + runID,
+		DisplayName:         "PrimaryMatch",
+	}
+	uMember := User{
+		ID:                  "emu-party-member-" + runID,
+		MemberID:            "bnet-member-" + runID,
+		PrimaryMembershipID: "pm-member-" + runID,
+		DisplayName:         "MemberMatch",
+	}
+	uOther := User{
+		ID:                  "emu-party-other-" + runID,
+		MemberID:            "bnet-other-" + runID,
+		PrimaryMembershipID: "pm-other-" + runID,
+		DisplayName:         "OtherUser",
+	}
+
+	seeded := []User{uPrimary, uMember, uOther}
+	for _, u := range seeded {
+		if _, err := db.Collection(userCollection).Doc(u.ID).Set(ctx, u); err != nil {
+			t.Fatalf("failed to seed user %s: %v", u.ID, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, u := range seeded {
+			_, _ = db.Collection(userCollection).Doc(u.ID).Delete(ctx)
+		}
+	})
+
+	// Build >15 IDs to verify multi-chunk OrFilter batching without hitting Firestore's 30-disjunction cap.
+	lookupIDs := make([]string, 0, 20)
+	lookupIDs = append(lookupIDs, uPrimary.PrimaryMembershipID, uPrimary.MemberID)
+	for i := 0; i < 16; i++ {
+		lookupIDs = append(lookupIDs, fmt.Sprintf("unmatched-%s-%d", runID, i))
+	}
+	lookupIDs = append(lookupIDs, uMember.MemberID)
+
+	got, err := store.findUsersByPartyMembershipIDs(ctx, lookupIDs)
+	if err != nil {
+		t.Fatalf("findUsersByPartyMembershipIDs failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 deduplicated matched users, got %d: %+v", len(got), got)
+	}
+	byID := make(map[string]User, len(got))
+	for _, u := range got {
+		byID[u.ID] = u
+	}
+	if _, ok := byID[uPrimary.ID]; !ok {
+		t.Fatalf("expected %s to match via primaryMembershipId/memberId", uPrimary.ID)
+	}
+	if _, ok := byID[uMember.ID]; !ok {
+		t.Fatalf("expected %s to match via memberId in second chunk", uMember.ID)
 	}
 }
 

@@ -12,15 +12,14 @@ import (
 
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
-	"google.golang.org/api/iterator"
 )
 
 type Service interface {
 	GetUser(ctx context.Context, ID string) (*User, error)
+	FindByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
 	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
 	GetPrimaryMembership(ctx context.Context, userID string) (int64, int64, error)
-	GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error)
 	// BackfillCharacters fetches characters from Destiny for the user's primary membership
 	// and updates the user's characterIds field in Firestore.
 	BackfillCharacters(ctx context.Context, userID string) error
@@ -35,7 +34,7 @@ type Service interface {
 type userService struct {
 	db            *firestore.Client
 	d2Service     destiny.Service
-	store         userSearchStore
+	store         userStore
 	bungieTimeout time.Duration
 }
 
@@ -50,7 +49,7 @@ func NewUserService(client *firestore.Client, service destiny.Service) Service {
 	return &userService{
 		db:        client,
 		d2Service: service,
-		store:     newFirestoreUserSearchStore(client),
+		store:     newFirestoreUserStore(client),
 	}
 }
 
@@ -58,47 +57,23 @@ var NotFound = errors.New("user not found")
 
 func (s *userService) GetUser(ctx context.Context, ID string) (*User, error) {
 	clog.WithGroupField(ctx, "userService.getUser", "lookupId", ID)
-	user := User{}
-
-	q1 := firestore.PropertyFilter{
-		Path:     "id",
-		Operator: "==",
-		Value:    ID,
+	if s.store == nil {
+		return nil, NotFound
 	}
-
-	q2 := firestore.PropertyFilter{
-		Path:     "memberId",
-		Operator: "==",
-		Value:    ID,
+	u, err := s.store.findUserByLookupID(ctx, ID)
+	if err != nil {
+		return nil, err
 	}
-	q3 := firestore.PropertyFilter{
-		Path:     "primaryMembershipId",
-		Operator: "==",
-		Value:    ID,
-	}
-	orFilter := firestore.OrFilter{
-		Filters: []firestore.EntityFilter{q1, q2, q3},
-	}
+	clog.WithGroupField(ctx, "userService.getUser", "userId", u.ID)
+	return u, nil
+}
 
-	iter := s.db.Collection(userCollection).WhereEntity(orFilter).Documents(ctx)
-
-	for {
-		doc, err := iter.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		err = doc.DataTo(&user)
-		if err != nil {
-			return nil, err
-		}
-		clog.WithGroupField(ctx, "userService.getUser", "userId", user.ID)
-		return &user, nil
+func (s *userService) FindByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error) {
+	uniqueIDs := utils.UniqueTrimmedStrings(membershipIDs)
+	if s.store == nil || len(uniqueIDs) == 0 {
+		return []User{}, nil
 	}
-
-	return nil, NotFound
+	return s.store.findUsersByPartyMembershipIDs(ctx, uniqueIDs)
 }
 
 func (s *userService) CreateUser(ctx context.Context, user *User) (*User, error) {
@@ -161,49 +136,6 @@ func (s *userService) GetPrimaryMembership(ctx context.Context, userID string) (
 		"membershipType": membershipType,
 	})
 	return pmID, membershipType, nil
-}
-
-func (s *userService) GetFireteam(ctx context.Context, userID string) ([]api.FireteamMember, error) {
-	clog.WithGroupField(ctx, "userService.getFireteam", "userId", userID)
-	pmId, t, err := s.GetPrimaryMembership(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	partyMembers, err := s.d2Service.GetPartyMembers(ctx, pmId, t)
-	if err != nil {
-		if errors.Is(err, destiny.ErrDestinyServerDown) {
-			return nil, fmt.Errorf("destiny 3rd party service is down")
-		}
-		return nil, fmt.Errorf("failed to fetch characters: %w", err)
-	}
-
-	fireteam := make([]api.FireteamMember, 0)
-	missingMembershipIds := 0
-	for _, member := range partyMembers {
-		if member.MembershipId == nil {
-			missingMembershipIds++
-			continue
-		}
-		member, err := s.GetUser(ctx, *member.MembershipId)
-		if err != nil {
-			// TODO: Add a case here for telling people to join one trick
-			continue
-		}
-		fireteam = append(fireteam, api.FireteamMember{
-			DisplayName:  member.DisplayName,
-			ID:           member.ID,
-			MembershipID: member.PrimaryMembershipID,
-			Characters:   member.Characters,
-		})
-	}
-	clog.WithGroupFields(ctx, "userService.getFireteam", clog.Fields{
-		"userId":               userID,
-		"partySize":            len(partyMembers),
-		"fireteamMatches":      len(fireteam),
-		"missingMembershipIds": missingMembershipIds,
-	})
-
-	return fireteam, nil
 }
 
 // BackfillCharacters fetches the user's characters from Destiny and updates the
@@ -313,7 +245,7 @@ func (s *userService) UpdateSearchFields(ctx context.Context, userID string, dis
 	if err != nil {
 		return fmt.Errorf("failed to update user search fields: %w", err)
 	}
-	if fsStore, ok := s.store.(*firestoreUserSearchStore); ok && fsStore != nil {
+	if fsStore, ok := s.store.(*firestoreUserStore); ok && fsStore != nil {
 		fsStore.evictLegacyUser(userID)
 	}
 	return nil
