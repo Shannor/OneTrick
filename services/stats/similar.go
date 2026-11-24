@@ -5,10 +5,25 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
+	"oneTrick/set"
 	"slices"
 	"strconv"
 	"strings"
 )
+
+type SimilarTierFilter string
+
+const (
+	SimilarTierAll  SimilarTierFilter = "all"
+	SimilarTierHigh SimilarTierFilter = "high"
+)
+
+type SimilarSnapshotsParams struct {
+	SnapshotID   string
+	IncludeStats bool
+	Tier         SimilarTierFilter
+	GameMode     string
+}
 
 const (
 	exoticTierType   int32 = 6
@@ -106,7 +121,7 @@ func CompareSimilarLoadout(target, candidate *api.CharacterSnapshot, tierLookup 
 	}
 }
 
-func resolveItemTierType(item api.ItemSnapshot, tierLookup func(int64) int32) int32 {
+func resolveInlineItemTierType(item api.ItemSnapshot) int32 {
 	if item.ItemProperties.BaseInfo.TierType != 0 {
 		return item.ItemProperties.BaseInfo.TierType
 	}
@@ -119,10 +134,47 @@ func resolveItemTierType(item api.ItemSnapshot, tierLookup func(int64) int32) in
 	if strings.EqualFold(tierName, "Legendary") || strings.HasPrefix(displayTypeAndTier, "legendary ") {
 		return legendaryTierTyp
 	}
+	return 0
+}
+
+func resolveItemTierType(item api.ItemSnapshot, tierLookup func(int64) int32) int32 {
+	if tier := resolveInlineItemTierType(item); tier != 0 {
+		return tier
+	}
 	if tierLookup != nil && item.ItemHash != 0 {
 		return tierLookup(item.ItemHash)
 	}
 	return 0
+}
+
+func collectMissingArmorTierHashes(target *api.CharacterSnapshot, allSnapshots []api.CharacterSnapshot, candidateIndices []int) []int64 {
+	missing := set.NewOrdered[int64]()
+	collectFromLoadout := func(loadout api.Loadout) {
+		for _, bucketKey := range armorBucketKeys {
+			item, ok := loadout[bucketKey]
+			if !ok {
+				continue
+			}
+			tier := resolveInlineItemTierType(item)
+			if tier == exoticTierType {
+				return
+			}
+			if tier == 0 && item.ItemHash != 0 {
+				missing.Add(item.ItemHash)
+			}
+		}
+	}
+
+	if target != nil {
+		collectFromLoadout(target.Loadout)
+	}
+	for _, idx := range candidateIndices {
+		collectFromLoadout(allSnapshots[idx].Loadout)
+	}
+	if missing.Size() == 0 {
+		return nil
+	}
+	return missing.ToSlice()
 }
 
 func findEquippedExoticArmor(loadout api.Loadout, tierLookup func(int64) int32) (string, api.ItemSnapshot, bool) {

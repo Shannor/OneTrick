@@ -144,11 +144,16 @@ func TestFilterSnapshotsByGameModeAndMinGames(t *testing.T) {
 
 type mockManifestService struct {
 	destiny.ManifestService
-	items     map[int64]*destiny.ItemDefinition
-	callCount map[int64]int
+	items              map[int64]*destiny.ItemDefinition
+	callCount          map[int64]int
+	getItemCalls       int
+	getItemsByIDsCalls int
+	requestedBatches   [][]int64
+	getItemsByIDsErr   error
 }
 
 func (m *mockManifestService) GetItem(_ context.Context, hash int64) (*destiny.ItemDefinition, error) {
+	m.getItemCalls++
 	if m.callCount != nil {
 		m.callCount[hash]++
 	}
@@ -158,6 +163,25 @@ func (m *mockManifestService) GetItem(_ context.Context, hash int64) (*destiny.I
 		}
 	}
 	return nil, fmt.Errorf("item %d not found", hash)
+}
+
+func (m *mockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map[string]destiny.ItemDefinition, error) {
+	m.getItemsByIDsCalls++
+	copied := make([]int64, len(ids))
+	copy(copied, ids)
+	m.requestedBatches = append(m.requestedBatches, copied)
+	if m.getItemsByIDsErr != nil {
+		return nil, m.getItemsByIDsErr
+	}
+	out := make(map[string]destiny.ItemDefinition, len(ids))
+	for _, id := range ids {
+		if m.items != nil {
+			if def, ok := m.items[id]; ok && def != nil {
+				out[strconv.FormatInt(id, 10)] = *def
+			}
+		}
+	}
+	return out, nil
 }
 
 func makeBaseTestLoadout(kinID string, enID string, subclassHash int64, powerID string, powerHash int64) api.Loadout {
@@ -924,7 +948,11 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 		}
 
 		svc := NewService(nil, store, snaps, nil, nil)
-		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), target.ID)
+		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   target.ID,
+			IncludeStats: true,
+			Tier:         SimilarTierAll,
+		})
 		if err != nil {
 			t.Fatalf("GetSimilarSnapshots failed: %v", err)
 		}
@@ -952,15 +980,345 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 			},
 		}
 		svc := NewService(nil, store, snaps, nil, nil)
-		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), archived.ID)
+		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   archived.ID,
+			IncludeStats: true,
+			GameMode:     string(api.GameModeTrials),
+		})
 		if err != nil {
 			t.Fatalf("GetSimilarSnapshots(archived) failed: %v", err)
 		}
 		if snaps.getAllHits.Load() != 0 {
 			t.Fatalf("expected archived target not to call GetAllByCharacter, got %d", snaps.getAllHits.Load())
 		}
+		if store.capturedGameMode != string(api.GameModeTrials) {
+			t.Fatalf("expected archived target to pass gameMode=%q, got %q", api.GameModeTrials, store.capturedGameMode)
+		}
 		if gotTarget.ID != archived.ID || len(items) != 0 || (*countsMap)[archived.ID] != 1 || *(*statsMap)[archived.ID].Kd.Value != 2.0 {
 			t.Fatalf("unexpected archived target result: items=%+v stats=%+v counts=%+v", items, statsMap, countsMap)
+		}
+	})
+
+	t.Run("archived target with includeStats=false skips store and GetAllByCharacter", func(t *testing.T) {
+		archived := &api.CharacterSnapshot{
+			ID:           "snap-arch-fast",
+			UserID:       "user-1",
+			CharacterID:  "char-1",
+			MergedIntoID: new("snap-target"),
+		}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{archived.ID: archived},
+		}
+		store := &fakeStatsStore{}
+		svc := NewService(nil, store, snaps, nil, nil)
+		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   archived.ID,
+			IncludeStats: false,
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots(archived, includeStats=false) failed: %v", err)
+		}
+		if store.calls.Load() != 0 {
+			t.Fatalf("expected 0 store calls for archived includeStats=false, got %d", store.calls.Load())
+		}
+		if snaps.getAllHits.Load() != 0 {
+			t.Fatalf("expected 0 GetAllByCharacter calls for archived target, got %d", snaps.getAllHits.Load())
+		}
+		if gotTarget.ID != archived.ID || len(items) != 0 || statsMap != nil || countsMap != nil {
+			t.Fatalf("expected nil stats/counts and empty items, got items=%+v stats=%v counts=%v", items, statsMap, countsMap)
+		}
+	})
+}
+
+func TestGetSimilarSnapshotsParamsAndBatchedManifestFallback(t *testing.T) {
+	now := time.Now().UTC()
+	helmetKey := strconv.FormatUint(uint64(destiny.HelmetArmor), 10)
+	chestKey := strconv.FormatUint(uint64(destiny.ChestArmor), 10)
+
+	makeSnapWithHelmet := func(id string, createdAt time.Time, kin, en string, helmetHash int64, tierType int32) api.CharacterSnapshot {
+		lo := makeBaseTestLoadout(kin, en, 3003, "pow-"+id, 4001)
+		if helmetHash != 0 {
+			lo[helmetKey] = api.ItemSnapshot{
+				InstanceID: "helm-" + id,
+				ItemHash:   helmetHash,
+				ItemProperties: api.ItemProperties{
+					BaseInfo: api.BaseItemInfo{TierType: tierType},
+				},
+			}
+		}
+		return api.CharacterSnapshot{
+			ID:          id,
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			CreatedAt:   createdAt,
+			Loadout:     lo,
+		}
+	}
+
+	t.Run("includeStats=false executes 0 aggregate reads, omits stats/count, and sorts by tier -> createdAt desc -> ID asc", func(t *testing.T) {
+		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 999001, 6)
+		candHighOlder := makeSnapWithHelmet("cand-high-older", now.Add(-3*time.Minute), "kin-1", "en-1", 999001, 6)
+		candHighNewerB := makeSnapWithHelmet("cand-high-b", now.Add(-1*time.Minute), "kin-1", "en-1", 999001, 6)
+		candHighNewerA := makeSnapWithHelmet("cand-high-a", now.Add(-1*time.Minute), "kin-1", "en-1", 999001, 6)
+		candBaseNewest := makeSnapWithHelmet("cand-base-newest", now.Add(5*time.Minute), "kin-1", "en-1", 999002, 6)
+
+		store := &fakeStatsStore{
+			matches: []CharacterMatchStat{
+				{SnapshotID: candHighOlder.ID, Kills: 20, Deaths: 5, Won: true},
+				{SnapshotID: candHighOlder.ID, Kills: 20, Deaths: 5, Won: true},
+			},
+		}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
+			all:  []api.CharacterSnapshot{targetSnap, candBaseNewest, candHighOlder, candHighNewerB, candHighNewerA},
+		}
+		svc := NewService(nil, store, snaps, nil, nil)
+
+		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: false,
+			Tier:         SimilarTierAll,
+			GameMode:     string(api.GameModeTrials),
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots(includeStats=false) failed: %v", err)
+		}
+		if store.calls.Load() != 0 {
+			t.Fatalf("expected 0 store calls when includeStats=false, got %d", store.calls.Load())
+		}
+		if statsMap != nil || countsMap != nil {
+			t.Fatalf("expected nil stats and count maps when includeStats=false, got stats=%v counts=%v", statsMap, countsMap)
+		}
+		if gotTarget == nil || gotTarget.ID != targetSnap.ID {
+			t.Fatalf("unexpected target: %+v", gotTarget)
+		}
+		wantOrder := []string{"cand-high-a", "cand-high-b", "cand-high-older", "cand-base-newest"}
+		if len(items) != len(wantOrder) {
+			t.Fatalf("got %d items, want %d: %+v", len(items), len(wantOrder), items)
+		}
+		for i, wantID := range wantOrder {
+			if items[i].Snapshot.ID != wantID {
+				t.Fatalf("items[%d].Snapshot.ID = %q, want %q (full order: %+v)", i, items[i].Snapshot.ID, wantID, items)
+			}
+		}
+	})
+
+	t.Run("tier=high filters out base-tier candidates and omits base keys from stats/counts", func(t *testing.T) {
+		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 999001, 6)
+		candHigh := makeSnapWithHelmet("cand-high", now.Add(-2*time.Minute), "kin-1", "en-1", 999001, 6)
+		candBase := makeSnapWithHelmet("cand-base", now.Add(-1*time.Minute), "kin-1", "en-1", 999002, 6)
+
+		store := &fakeStatsStore{
+			matches: []CharacterMatchStat{
+				{SnapshotID: targetSnap.ID, Kills: 10, Deaths: 5, Won: true},
+				{SnapshotID: candHigh.ID, Kills: 12, Deaths: 6, Won: true},
+				{SnapshotID: candBase.ID, Kills: 30, Deaths: 5, Won: true},
+			},
+		}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
+			all:  []api.CharacterSnapshot{targetSnap, candHigh, candBase},
+		}
+		svc := NewService(nil, store, snaps, nil, nil)
+
+		_, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: true,
+			Tier:         SimilarTierHigh,
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots(tier=high) failed: %v", err)
+		}
+		if len(items) != 1 || items[0].Snapshot.ID != candHigh.ID || items[0].Tier != api.SimilarityTierHigh {
+			t.Fatalf("expected only [cand-high], got %+v", items)
+		}
+		if _, exists := (*countsMap)[candBase.ID]; exists {
+			t.Fatalf("expected filtered base candidate excluded from countsMap, got %+v", countsMap)
+		}
+		if _, exists := (*statsMap)[candBase.ID]; exists {
+			t.Fatalf("expected filtered base candidate excluded from statsMap, got %+v", statsMap)
+		}
+		if (*countsMap)[targetSnap.ID] != 1 || (*countsMap)[candHigh.ID] != 1 {
+			t.Fatalf("expected target and cand-high counts=1, got %+v", countsMap)
+		}
+	})
+
+	t.Run("gameMode forwards normalized mode to projected store and sorts by mode match count", func(t *testing.T) {
+		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 999001, 6)
+		candLowMatches := makeSnapWithHelmet("cand-newer-low-games", now.Add(-1*time.Minute), "kin-1", "en-1", 999001, 6)
+		candHighMatches := makeSnapWithHelmet("cand-older-high-games", now.Add(-5*time.Minute), "kin-1", "en-1", 999001, 6)
+
+		store := &fakeStatsStore{
+			matches: []CharacterMatchStat{
+				{SnapshotID: targetSnap.ID, Kills: 15, Deaths: 5, Won: true},
+				{SnapshotID: candHighMatches.ID, Kills: 10, Deaths: 5, Won: true},
+				{SnapshotID: candHighMatches.ID, Kills: 14, Deaths: 7, Won: false},
+				{SnapshotID: candLowMatches.ID, Kills: 8, Deaths: 8, Won: false},
+			},
+		}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
+			all:  []api.CharacterSnapshot{targetSnap, candLowMatches, candHighMatches},
+		}
+		svc := NewService(nil, store, snaps, nil, nil)
+
+		_, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: true,
+			Tier:         SimilarTierAll,
+			GameMode:     string(api.GameModeTrials),
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots(gameMode=trials) failed: %v", err)
+		}
+		if store.capturedGameMode != string(api.GameModeTrials) {
+			t.Fatalf("expected store gameMode=%q, got %q", api.GameModeTrials, store.capturedGameMode)
+		}
+		if len(items) != 2 || items[0].Snapshot.ID != candHighMatches.ID || items[1].Snapshot.ID != candLowMatches.ID {
+			t.Fatalf("expected match-count desc ordering [cand-older-high-games, cand-newer-low-games], got %+v", items)
+		}
+		if (*countsMap)[candHighMatches.ID] != 2 || (*countsMap)[candLowMatches.ID] != 1 {
+			t.Fatalf("unexpected countsMap: %+v", countsMap)
+		}
+		if *(*statsMap)[targetSnap.ID].Kd.Value != 3.0 {
+			t.Fatalf("expected target KD 3.0, got %+v", (*statsMap)[targetSnap.ID])
+		}
+
+		// Verify allGameModes normalizes to empty string for the store query.
+		_, _, _, _, err = svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: true,
+			GameMode:     string(api.GameModeAll),
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots(gameMode=allGameModes) failed: %v", err)
+		}
+		if store.capturedGameMode != "" {
+			t.Fatalf("expected allGameModes normalized to empty string, got %q", store.capturedGameMode)
+		}
+	})
+
+	t.Run("legacy snapshots missing BaseInfo.TierType batch-fetch via a single GetItemsByIDs call with 0 GetItem calls", func(t *testing.T) {
+		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 888001, 0)
+		// Also give target a legacy Legendary chest piece (tierType=0) to prove multiple armor hashes batch together.
+		targetSnap.Loadout[chestKey] = api.ItemSnapshot{
+			InstanceID: "chest-target",
+			ItemHash:   777001,
+		}
+		candHigh := makeSnapWithHelmet("cand-high", now.Add(-1*time.Minute), "kin-1", "en-1", 888001, 0)
+		candBase := makeSnapWithHelmet("cand-base", now.Add(-2*time.Minute), "kin-1", "en-1", 888002, 0)
+		// Non-mergeable snapshot and archived snapshot should NOT trigger manifest lookups for their armor hashes.
+		nonMergeable := makeSnapWithHelmet("non-mergeable", now.Add(-3*time.Minute), "kin-diff", "en-diff", 666001, 0)
+		archived := makeSnapWithHelmet("archived", now.Add(-4*time.Minute), "kin-1", "en-1", 666002, 0)
+		archived.MergedIntoID = new("target")
+
+		manifestMock := &mockManifestService{
+			items: map[int64]*destiny.ItemDefinition{
+				888001: {Hash: 888001, Inventory: destiny.Inventory{TierType: 6, TierTypeName: "Exotic"}},
+				888002: {Hash: 888002, Inventory: destiny.Inventory{TierType: 6, TierTypeName: "Exotic"}},
+				777001: {Hash: 777001, Inventory: destiny.Inventory{TierType: 5, TierTypeName: "Legendary"}},
+			},
+			callCount: make(map[int64]int),
+		}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
+			all:  []api.CharacterSnapshot{targetSnap, candHigh, candBase, nonMergeable, archived},
+		}
+		svc := NewService(nil, nil, snaps, nil, manifestMock)
+
+		_, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: false,
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots failed: %v", err)
+		}
+		if statsMap != nil || countsMap != nil {
+			t.Fatalf("expected nil stats/counts when includeStats=false")
+		}
+		if manifestMock.getItemCalls != 0 {
+			t.Fatalf("expected 0 N+1 GetItem calls, got %d", manifestMock.getItemCalls)
+		}
+		if manifestMock.getItemsByIDsCalls != 1 {
+			t.Fatalf("expected exactly 1 batched GetItemsByIDs call, got %d", manifestMock.getItemsByIDsCalls)
+		}
+		wantBatch := []int64{888001, 777001, 888002}
+		if !slices.Equal(manifestMock.requestedBatches[0], wantBatch) {
+			t.Fatalf("requested GetItemsByIDs batch = %v, want %v", manifestMock.requestedBatches[0], wantBatch)
+		}
+		if len(items) != 2 {
+			t.Fatalf("expected 2 items, got %d", len(items))
+		}
+		if items[0].Snapshot.ID != candHigh.ID || items[0].Tier != api.SimilarityTierHigh {
+			t.Fatalf("expected items[0]=cand-high (high tier), got %+v", items[0])
+		}
+		if items[1].Snapshot.ID != candBase.ID || items[1].Tier != api.SimilarityTierBase {
+			t.Fatalf("expected items[1]=cand-base (base tier), got %+v", items[1])
+		}
+	})
+
+	t.Run("skips manifest GetItemsByIDs when inline tier types already identify armor", func(t *testing.T) {
+		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 888001, 6)
+		cand := makeSnapWithHelmet("cand", now.Add(-1*time.Minute), "kin-1", "en-1", 888001, 6)
+		manifestMock := &mockManifestService{}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
+			all:  []api.CharacterSnapshot{targetSnap, cand},
+		}
+		svc := NewService(nil, nil, snaps, nil, manifestMock)
+
+		_, items, _, _, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: false,
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots failed: %v", err)
+		}
+		if manifestMock.getItemsByIDsCalls != 0 || manifestMock.getItemCalls != 0 {
+			t.Fatalf("expected 0 manifest calls when inline tiers present, got batch=%d single=%d", manifestMock.getItemsByIDsCalls, manifestMock.getItemCalls)
+		}
+		if len(items) != 1 || items[0].Tier != api.SimilarityTierHigh {
+			t.Fatalf("expected 1 high-tier item, got %+v", items)
+		}
+	})
+
+	t.Run("degrades gracefully when GetItemsByIDs returns an error and skips manifest lookup when 0 mergeable candidates exist", func(t *testing.T) {
+		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 888001, 0)
+		cand := makeSnapWithHelmet("cand", now.Add(-1*time.Minute), "kin-1", "en-1", 888002, 0)
+		manifestMock := &mockManifestService{getItemsByIDsErr: errors.New("manifest unavailable")}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
+			all:  []api.CharacterSnapshot{targetSnap, cand},
+		}
+		svc := NewService(nil, nil, snaps, nil, manifestMock)
+
+		_, items, _, _, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: false,
+		})
+		if err != nil {
+			t.Fatalf("expected graceful degradation on manifest error, got %v", err)
+		}
+		if len(items) != 1 || manifestMock.getItemsByIDsCalls != 1 || manifestMock.getItemCalls != 0 {
+			t.Fatalf("unexpected result on manifest error: items=%d batchCalls=%d singleCalls=%d", len(items), manifestMock.getItemsByIDsCalls, manifestMock.getItemCalls)
+		}
+
+		// When 0 mergeable candidates exist, GetItemsByIDs should not be called even if target has tierType==0.
+		manifestMockNoCand := &mockManifestService{}
+		snapsNoCand := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
+			all:  []api.CharacterSnapshot{targetSnap},
+		}
+		svcNoCand := NewService(nil, nil, snapsNoCand, nil, manifestMockNoCand)
+		_, noCandItems, _, _, err := svcNoCand.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   targetSnap.ID,
+			IncludeStats: false,
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots(0 candidates) failed: %v", err)
+		}
+		if len(noCandItems) != 0 || manifestMockNoCand.getItemsByIDsCalls != 0 || manifestMockNoCand.getItemCalls != 0 {
+			t.Fatalf("expected 0 items and 0 manifest calls, got items=%d batch=%d single=%d", len(noCandItems), manifestMockNoCand.getItemsByIDsCalls, manifestMockNoCand.getItemCalls)
 		}
 	})
 }

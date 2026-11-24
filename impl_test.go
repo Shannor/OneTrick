@@ -307,12 +307,13 @@ type mockStatsService struct {
 	bestStats            map[string]api.PlayerStats
 	bestCounts           map[string]int
 	bestErr              error
-	similarCountsResp    *map[string]int
-	similarTarget        *api.CharacterSnapshot
-	similarItems         []api.SimilarSnapshotItem
-	similarStats         *map[string]api.PlayerStats
-	similarCountsMap     *map[string]int
-	similarErr           error
+	similarCountsResp     *map[string]int
+	similarTarget         *api.CharacterSnapshot
+	similarItems          []api.SimilarSnapshotItem
+	similarStats          *map[string]api.PlayerStats
+	similarCountsMap      *map[string]int
+	similarErr            error
+	capturedSimilarParams stats.SimilarSnapshotsParams
 }
 
 func (m *mockStatsService) GetBestPerformingLoadouts(
@@ -353,15 +354,16 @@ func (m *mockStatsService) GetSnapshotsWithMetrics(
 
 func (m *mockStatsService) GetSimilarSnapshots(
 	ctx context.Context,
-	snapshotID string,
+	params stats.SimilarSnapshotsParams,
 ) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error) {
+	m.capturedSimilarParams = params
 	if m.similarErr != nil {
 		return nil, nil, nil, nil, m.similarErr
 	}
 	if m.similarTarget != nil {
 		return m.similarTarget, m.similarItems, m.similarStats, m.similarCountsMap, nil
 	}
-	return &api.CharacterSnapshot{ID: snapshotID, Name: "Trials Hawkmoon", Loadout: api.Loadout{}}, []api.SimilarSnapshotItem{}, nil, nil, nil
+	return &api.CharacterSnapshot{ID: params.SnapshotID, Name: "Trials Hawkmoon", Loadout: api.Loadout{}}, []api.SimilarSnapshotItem{}, nil, nil, nil
 }
 
 func (m *mockStatsService) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error) {
@@ -735,29 +737,28 @@ func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("returns 200 with target, tiered items, stats, and counts", func(t *testing.T) {
+	t.Run("returns 200 with target, tiered items, stats, and counts using default params", func(t *testing.T) {
 		counts := map[string]int{"target-1": 12, "cand-1": 3}
 		statsMap := map[string]api.PlayerStats{
 			"target-1": {Kd: new(api.StatsValuePair{Value: new(1.50)})},
 			"cand-1":   {Kd: new(api.StatsValuePair{Value: new(2.00)})},
 		}
 		diffs := map[string]int{"Recovery": 10}
-		server := Server{
-			StatsService: &mockStatsService{
-				similarTarget: &api.CharacterSnapshot{ID: "target-1", Name: "Trials Hawkmoon", Loadout: api.Loadout{}},
-				similarItems: []api.SimilarSnapshotItem{
-					{
-						Snapshot:         api.CharacterSnapshot{ID: "cand-1", Name: "Offshoot", Loadout: api.Loadout{}},
-						Tier:             api.SimilarityTierHigh,
-						ExoticArmorMatch: true,
-						PowerWeaponMatch: false,
-						StatDiffs:        &diffs,
-					},
+		statsMock := &mockStatsService{
+			similarTarget: &api.CharacterSnapshot{ID: "target-1", Name: "Trials Hawkmoon", Loadout: api.Loadout{}},
+			similarItems: []api.SimilarSnapshotItem{
+				{
+					Snapshot:         api.CharacterSnapshot{ID: "cand-1", Name: "Offshoot", Loadout: api.Loadout{}},
+					Tier:             api.SimilarityTierHigh,
+					ExoticArmorMatch: true,
+					PowerWeaponMatch: false,
+					StatDiffs:        &diffs,
 				},
-				similarCountsMap: &counts,
-				similarStats:     &statsMap,
 			},
+			similarCountsMap: &counts,
+			similarStats:     &statsMap,
 		}
+		server := Server{StatsService: statsMock}
 		resp, err := server.GetSimilarSnapshots(context.Background(), api.GetSimilarSnapshotsRequestObject{
 			SnapshotID: "target-1",
 		})
@@ -768,11 +769,71 @@ func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected GetSimilarSnapshots200JSONResponse, got %T", resp)
 		}
+		if !statsMock.capturedSimilarParams.IncludeStats || statsMock.capturedSimilarParams.Tier != stats.SimilarTierAll || statsMock.capturedSimilarParams.GameMode != "" {
+			t.Fatalf("expected default params (includeStats=true, tier=all, gameMode=''), got %+v", statsMock.capturedSimilarParams)
+		}
 		if okResp.Target.ID != "target-1" || len(okResp.Items) != 1 || okResp.Items[0].Tier != api.SimilarityTierHigh {
 			t.Fatalf("unexpected response payload: %+v", okResp)
 		}
 		if okResp.Count == nil || (*okResp.Count)["cand-1"] != 3 {
 			t.Fatalf("expected candidate count 3, got %+v", okResp.Count)
+		}
+	})
+
+	t.Run("forwards includeStats=false, tier=high, and gameMode and omits stats/count in JSON", func(t *testing.T) {
+		includeStats := false
+		tier := api.SimilarTierFilterHigh
+		gameMode := api.GameModeTrials
+		statsMock := &mockStatsService{
+			similarTarget: &api.CharacterSnapshot{ID: "target-1", Name: "Trials Hawkmoon", Loadout: api.Loadout{}},
+			similarItems: []api.SimilarSnapshotItem{
+				{
+					Snapshot:         api.CharacterSnapshot{ID: "cand-1", Name: "Offshoot", Loadout: api.Loadout{}},
+					Tier:             api.SimilarityTierHigh,
+					ExoticArmorMatch: true,
+				},
+			},
+		}
+		server := Server{StatsService: statsMock}
+
+		resp, err := server.GetSimilarSnapshots(context.Background(), api.GetSimilarSnapshotsRequestObject{
+			SnapshotID: "target-1",
+			Params: api.GetSimilarSnapshotsParams{
+				IncludeStats: &includeStats,
+				Tier:         &tier,
+				GameMode:     &gameMode,
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		okResp, ok := resp.(api.GetSimilarSnapshots200JSONResponse)
+		if !ok {
+			t.Fatalf("expected GetSimilarSnapshots200JSONResponse, got %T", resp)
+		}
+		if statsMock.capturedSimilarParams.SnapshotID != "target-1" ||
+			statsMock.capturedSimilarParams.IncludeStats != false ||
+			statsMock.capturedSimilarParams.Tier != stats.SimilarTierHigh ||
+			statsMock.capturedSimilarParams.GameMode != string(api.GameModeTrials) {
+			t.Fatalf("unexpected forwarded params: %+v", statsMock.capturedSimilarParams)
+		}
+		if okResp.Stats != nil || okResp.Count != nil {
+			t.Fatalf("expected nil Stats and Count, got stats=%v count=%v", okResp.Stats, okResp.Count)
+		}
+
+		raw, err := json.Marshal(okResp)
+		if err != nil {
+			t.Fatalf("failed to marshal response: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if _, hasStats := payload["stats"]; hasStats {
+			t.Fatalf("expected stats omitted from JSON payload, got %s", string(raw))
+		}
+		if _, hasCount := payload["count"]; hasCount {
+			t.Fatalf("expected count omitted from JSON payload, got %s", string(raw))
 		}
 	})
 
@@ -866,6 +927,24 @@ func TestHTTPRouterOpenAPIMiddlewareEndpoints(t *testing.T) {
 		r.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+		if !statsMock.capturedSimilarParams.IncludeStats || statsMock.capturedSimilarParams.Tier != stats.SimilarTierAll || statsMock.capturedSimilarParams.GameMode != "" {
+			t.Fatalf("expected default similar params, got %+v", statsMock.capturedSimilarParams)
+		}
+	})
+
+	t.Run("GET /snapshots/{snapshotId}/similar binds includeStats, tier, and gameMode query params", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/snapshots/target-1/similar?includeStats=false&tier=high&gameMode=trials", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+		if statsMock.capturedSimilarParams.SnapshotID != "target-1" ||
+			statsMock.capturedSimilarParams.IncludeStats != false ||
+			statsMock.capturedSimilarParams.Tier != stats.SimilarTierHigh ||
+			statsMock.capturedSimilarParams.GameMode != string(api.GameModeTrials) {
+			t.Fatalf("unexpected bound similar params: %+v", statsMock.capturedSimilarParams)
 		}
 	})
 

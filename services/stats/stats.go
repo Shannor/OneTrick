@@ -26,7 +26,7 @@ type Service interface {
 
 	GetBestPerformingLoadouts(ctx context.Context, characterID string, gameMode *api.GameMode, limit int, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
 	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameMode *api.GameMode, minimumGames int, sortBy string, includeStats bool, hasSimilar bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error)
-	GetSimilarSnapshots(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error)
+	GetSimilarSnapshots(ctx context.Context, params SimilarSnapshotsParams) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error)
 
 	GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error)
 }
@@ -131,11 +131,18 @@ func hasGameModeFilter(gameMode *api.GameMode) bool {
 	return gameMode != nil && *gameMode != "" && *gameMode != api.GameModeAll
 }
 
+func normalizeGameModeString(gameMode string) string {
+	if gameMode == "" || gameMode == string(api.GameModeAll) {
+		return ""
+	}
+	return gameMode
+}
+
 func normalizeGameModeFilter(gameMode *api.GameMode) string {
 	if !hasGameModeFilter(gameMode) {
 		return ""
 	}
-	return string(*gameMode)
+	return normalizeGameModeString(string(*gameMode))
 }
 
 func filterSnapshotsByGameModeAndMinGames(allSnapshots []api.CharacterSnapshot, counts map[string]int, gameMode *api.GameMode, minimumGames int) []api.CharacterSnapshot {
@@ -389,17 +396,31 @@ func (s *service) GetSnapshotsWithMetrics(
 
 func (s *service) GetSimilarSnapshots(
 	ctx context.Context,
-	snapshotID string,
+	params SimilarSnapshotsParams,
 ) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error) {
-	if snapshotID == "" {
+	if params.SnapshotID == "" {
 		return nil, nil, nil, nil, snapshot.NotFound
 	}
-	if s.store == nil {
+	if params.IncludeStats && s.store == nil {
 		return nil, nil, nil, nil, fmt.Errorf("stats store is not configured")
 	}
-	clog.WithGroupField(ctx, "statsService.getSimilarSnapshots", "snapshotId", snapshotID)
 
-	target, err := s.snapshotService.Get(ctx, snapshotID)
+	gameMode := normalizeGameModeString(params.GameMode)
+	tier := params.Tier
+	if tier == "" {
+		tier = SimilarTierAll
+	}
+
+	clog.WithGroupFields(ctx, "statsService.getSimilarSnapshots", clog.Fields{
+		"snapshotId":   params.SnapshotID,
+		"includeStats": params.IncludeStats,
+		"tier":         string(tier),
+	})
+	if gameMode != "" {
+		clog.WithGroupField(ctx, "statsService.getSimilarSnapshots", "gameMode", gameMode)
+	}
+
+	target, err := s.snapshotService.Get(ctx, params.SnapshotID)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -408,7 +429,14 @@ func (s *service) GetSimilarSnapshots(
 	}
 
 	if snapshot.IsArchived(target) {
-		matchStats, err := s.store.ListCharacterMatchStats(ctx, target.CharacterID, "")
+		clog.WithGroupFields(ctx, "statsService.getSimilarSnapshots", clog.Fields{
+			"characterId":    target.CharacterID,
+			"candidateCount": 0,
+		})
+		if !params.IncludeStats {
+			return target, []api.SimilarSnapshotItem{}, nil, nil, nil
+		}
+		matchStats, err := s.store.ListCharacterMatchStats(ctx, target.CharacterID, gameMode)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -424,46 +452,36 @@ func (s *service) GetSimilarSnapshots(
 		allSnapshots []api.CharacterSnapshot
 	)
 
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		matchStats, err := s.store.ListCharacterMatchStats(gctx, target.CharacterID, "")
-		if err != nil {
-			return err
+	if params.IncludeStats {
+		g, gctx := errgroup.WithContext(ctx)
+		g.Go(func() error {
+			matchStats, err := s.store.ListCharacterMatchStats(gctx, target.CharacterID, gameMode)
+			if err != nil {
+				return err
+			}
+			aggStats, aggCounts = summarizeCharacterMatchStats(matchStats)
+			return nil
+		})
+		g.Go(func() error {
+			snaps, err := s.snapshotService.GetAllByCharacter(gctx, target.UserID, target.CharacterID, 0, 0)
+			if err != nil {
+				return err
+			}
+			allSnapshots = snaps
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, nil, nil, nil, err
 		}
-		aggStats, aggCounts = summarizeCharacterMatchStats(matchStats)
-		return nil
-	})
-	g.Go(func() error {
-		snaps, err := s.snapshotService.GetAllByCharacter(gctx, target.UserID, target.CharacterID, 0, 0)
+	} else {
+		snaps, err := s.snapshotService.GetAllByCharacter(ctx, target.UserID, target.CharacterID, 0, 0)
 		if err != nil {
-			return err
+			return nil, nil, nil, nil, err
 		}
 		allSnapshots = snaps
-		return nil
-	})
-	if err := g.Wait(); err != nil {
-		return nil, nil, nil, nil, err
 	}
 
-	tierCache := make(map[int64]int32)
-	tierLookup := func(itemHash int64) int32 {
-		if itemHash == 0 || s.manifestService == nil {
-			return 0
-		}
-		if cached, ok := tierCache[itemHash]; ok {
-			return cached
-		}
-		def, err := s.manifestService.GetItem(ctx, itemHash)
-		if err != nil || def == nil {
-			tierCache[itemHash] = 0
-			return 0
-		}
-		tier := int32(def.Inventory.TierType)
-		tierCache[itemHash] = tier
-		return tier
-	}
-
-	items := make([]api.SimilarSnapshotItem, 0)
+	candidateIndices := make([]int, 0)
 	for i := range allSnapshots {
 		cand := &allSnapshots[i]
 		if cand.ID == "" || cand.ID == target.ID || snapshot.IsArchived(cand) {
@@ -472,7 +490,24 @@ func (s *service) GetSimilarSnapshots(
 		if !snapshot.CanMerge(target, cand) {
 			continue
 		}
-		items = append(items, CompareSimilarLoadout(target, cand, tierLookup))
+		candidateIndices = append(candidateIndices, i)
+	}
+
+	tierByHash := s.batchResolveItemTiers(ctx, target, allSnapshots, candidateIndices)
+	var tierLookup func(int64) int32
+	if len(tierByHash) > 0 {
+		tierLookup = func(itemHash int64) int32 {
+			return tierByHash[itemHash]
+		}
+	}
+
+	items := make([]api.SimilarSnapshotItem, 0, len(candidateIndices))
+	for _, idx := range candidateIndices {
+		item := CompareSimilarLoadout(target, &allSnapshots[idx], tierLookup)
+		if tier == SimilarTierHigh && item.Tier != api.SimilarityTierHigh {
+			continue
+		}
+		items = append(items, item)
 	}
 
 	slices.SortFunc(items, func(a, b api.SimilarSnapshotItem) int {
@@ -482,15 +517,26 @@ func (s *service) GetSimilarSnapshots(
 			}
 			return 1
 		}
-		ca, cb := aggCounts[a.Snapshot.ID], aggCounts[b.Snapshot.ID]
-		if ca != cb {
-			return cb - ca
+		if params.IncludeStats {
+			ca, cb := aggCounts[a.Snapshot.ID], aggCounts[b.Snapshot.ID]
+			if ca != cb {
+				return cb - ca
+			}
 		}
 		if cmpTime := b.Snapshot.CreatedAt.Compare(a.Snapshot.CreatedAt); cmpTime != 0 {
 			return cmpTime
 		}
 		return strings.Compare(a.Snapshot.ID, b.Snapshot.ID)
 	})
+
+	clog.WithGroupFields(ctx, "statsService.getSimilarSnapshots", clog.Fields{
+		"characterId":    target.CharacterID,
+		"candidateCount": len(items),
+	})
+
+	if !params.IncludeStats {
+		return target, items, nil, nil, nil
+	}
 
 	psMap := make(map[string]api.PlayerStats, len(items)+1)
 	cMap := make(map[string]int, len(items)+1)
@@ -505,12 +551,40 @@ func (s *service) GetSimilarSnapshots(
 		psMap[item.Snapshot.ID] = buildPlayerStats(aggStats[item.Snapshot.ID], c)
 	}
 
-	clog.WithGroupFields(ctx, "statsService.getSimilarSnapshots", clog.Fields{
-		"characterId":    target.CharacterID,
-		"candidateCount": len(items),
-	})
-
 	return target, items, &psMap, &cMap, nil
+}
+
+func (s *service) batchResolveItemTiers(
+	ctx context.Context,
+	target *api.CharacterSnapshot,
+	allSnapshots []api.CharacterSnapshot,
+	candidateIndices []int,
+) map[int64]int32 {
+	if len(candidateIndices) == 0 || s.manifestService == nil {
+		return nil
+	}
+	missingHashes := collectMissingArmorTierHashes(target, allSnapshots, candidateIndices)
+	if len(missingHashes) == 0 {
+		return nil
+	}
+	defs, err := s.manifestService.GetItemsByIDs(ctx, missingHashes)
+	if err != nil {
+		clog.WithGroupField(ctx, "statsService.getSimilarSnapshots", "manifestLookupError", err.Error())
+		return nil
+	}
+	tiers := make(map[int64]int32, len(defs))
+	for k, def := range defs {
+		hash := def.Hash
+		if hash == 0 {
+			parsed, parseErr := strconv.ParseInt(k, 10, 64)
+			if parseErr != nil {
+				continue
+			}
+			hash = parsed
+		}
+		tiers[hash] = int32(def.Inventory.TierType)
+	}
+	return tiers
 }
 
 func (s *service) GetBestPerformingLoadouts(ctx context.Context, characterID string, gameMode *api.GameMode, limit int, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error) {
