@@ -6,6 +6,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
+	"oneTrick/set"
 )
 
 type userServiceGetter interface {
@@ -34,32 +35,21 @@ func (a *UserReaderAdapter) GetUser(ctx context.Context, lookupID string) (User,
 		return User{}, ErrNotFound
 	}
 
-	seen := make(map[string]struct{}, len(u.CharacterIDs)+len(u.Characters))
-	charIDs := make([]string, 0, len(u.CharacterIDs)+len(u.Characters))
+	charIDs := set.NewOrdered[string]()
 	for _, id := range u.CharacterIDs {
-		if id == "" {
-			continue
+		if id != "" {
+			charIDs.Add(id)
 		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		charIDs = append(charIDs, id)
 	}
 	for _, c := range u.Characters {
-		if c.Id == "" {
-			continue
+		if c.Id != "" {
+			charIDs.Add(c.Id)
 		}
-		if _, ok := seen[c.Id]; ok {
-			continue
-		}
-		seen[c.Id] = struct{}{}
-		charIDs = append(charIDs, c.Id)
 	}
 
 	return User{
 		ID:           u.ID,
-		CharacterIDs: charIDs,
+		CharacterIDs: charIDs.ToSlice(),
 	}, nil
 }
 

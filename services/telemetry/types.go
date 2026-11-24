@@ -124,6 +124,14 @@ func (s Snapshot) IsArchived() bool {
 	return s.MergedIntoID != ""
 }
 
+func (s Snapshot) BelongsTo(userID, characterID string) bool {
+	return s.CharacterID == characterID && (s.UserID == "" || s.UserID == userID)
+}
+
+func (s Snapshot) IsActiveFor(userID, characterID string) bool {
+	return !s.IsArchived() && s.BelongsTo(userID, characterID)
+}
+
 type SnapshotSummary struct {
 	ID   string
 	Name string

@@ -777,3 +777,55 @@ func TestAdaptersTranslateNotFoundAndDomainTypes(t *testing.T) {
 	})
 }
 
+func TestSnapshotOwnershipHelpers(t *testing.T) {
+	cases := []struct {
+		name           string
+		snap           Snapshot
+		wantBelongsTo  bool
+		wantIsActiveTo bool
+	}{
+		{
+			name:           "active matching user and character",
+			snap:           Snapshot{ID: "s1", UserID: "u1", CharacterID: "c1"},
+			wantBelongsTo:  true,
+			wantIsActiveTo: true,
+		},
+		{
+			name:           "active legacy snapshot with empty userId",
+			snap:           Snapshot{ID: "s2", CharacterID: "c1"},
+			wantBelongsTo:  true,
+			wantIsActiveTo: true,
+		},
+		{
+			name:           "archived matching user and character",
+			snap:           Snapshot{ID: "s3", UserID: "u1", CharacterID: "c1", MergedIntoID: "s1"},
+			wantBelongsTo:  true,
+			wantIsActiveTo: false,
+		},
+		{
+			name:           "different user",
+			snap:           Snapshot{ID: "s4", UserID: "u2", CharacterID: "c1"},
+			wantBelongsTo:  false,
+			wantIsActiveTo: false,
+		},
+		{
+			name:           "different character",
+			snap:           Snapshot{ID: "s5", UserID: "u1", CharacterID: "c2"},
+			wantBelongsTo:  false,
+			wantIsActiveTo: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.snap.BelongsTo("u1", "c1"); got != tc.wantBelongsTo {
+				t.Fatalf("BelongsTo() = %v, want %v", got, tc.wantBelongsTo)
+			}
+			if got := tc.snap.IsActiveFor("u1", "c1"); got != tc.wantIsActiveTo {
+				t.Fatalf("IsActiveFor() = %v, want %v", got, tc.wantIsActiveTo)
+			}
+		})
+	}
+}
+
+

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/services/destiny"
+	"oneTrick/set"
 	"slices"
 	"time"
 
@@ -26,21 +27,25 @@ type MatchStore interface {
 	StreamMatches(ctx context.Context, characterID, snapshotID string, from, to time.Time, fn func(RawMatch) error) error
 }
 
-type Service struct {
+type Service interface {
+	GetCharacterTelemetry(ctx context.Context, query Query) (Result, error)
+}
+
+type service struct {
 	users     UserReader
 	snapshots SnapshotReader
 	matches   MatchStore
 }
 
-func NewService(users UserReader, snapshots SnapshotReader, matches MatchStore) *Service {
-	return &Service{
+func NewService(users UserReader, snapshots SnapshotReader, matches MatchStore) Service {
+	return &service{
 		users:     users,
 		snapshots: snapshots,
 		matches:   matches,
 	}
 }
 
-func (s *Service) GetCharacterTelemetry(ctx context.Context, query Query) (Result, error) {
+func (s *service) GetCharacterTelemetry(ctx context.Context, query Query) (Result, error) {
 	q, err := query.NormalizeAndValidate()
 	if err != nil {
 		return Result{}, err
@@ -84,7 +89,7 @@ func (s *Service) GetCharacterTelemetry(ctx context.Context, query Query) (Resul
 			}
 			return Result{}, fmt.Errorf("fetch snapshot %s: %w", q.SnapshotID, err)
 		}
-		if snap.CharacterID != q.CharacterID || (snap.UserID != "" && snap.UserID != u.ID) {
+		if !snap.BelongsTo(u.ID, q.CharacterID) {
 			return Result{}, fmt.Errorf("snapshot %s does not belong to character %s: %w", q.SnapshotID, q.CharacterID, ErrNotFound)
 		}
 		preloadedSnapshots[snap.ID] = snap
@@ -96,7 +101,7 @@ func (s *Service) GetCharacterTelemetry(ctx context.Context, query Query) (Resul
 				}
 				return Result{}, fmt.Errorf("fetch merged target snapshot %s: %w", snap.MergedIntoID, err)
 			}
-			if target.CharacterID != q.CharacterID || (target.UserID != "" && target.UserID != u.ID) || target.IsArchived() {
+			if !target.IsActiveFor(u.ID, q.CharacterID) {
 				return Result{}, fmt.Errorf("merged target snapshot %s unavailable: %w", snap.MergedIntoID, ErrNotFound)
 			}
 			effectiveSnapshotID = target.ID
@@ -176,7 +181,7 @@ func (s *Service) GetCharacterTelemetry(ctx context.Context, query Query) (Resul
 	}, nil
 }
 
-func (s *Service) resolveSnapshots(ctx context.Context, matches []Match, preloaded map[string]Snapshot) (map[string]SnapshotSummary, error) {
+func (s *service) resolveSnapshots(ctx context.Context, matches []Match, preloaded map[string]Snapshot) (map[string]SnapshotSummary, error) {
 	if len(matches) == 0 {
 		return make(map[string]SnapshotSummary), nil
 	}
@@ -186,16 +191,12 @@ func (s *Service) resolveSnapshots(ctx context.Context, matches []Match, preload
 		fetched[id] = snap
 	}
 
-	neededSet := make(map[string]struct{})
+	neededSet := set.NewOrdered[string]()
 	var missingIDs []string
 	for _, m := range matches {
-		if m.SnapshotID == "" {
+		if m.SnapshotID == "" || !neededSet.Add(m.SnapshotID) {
 			continue
 		}
-		if _, seen := neededSet[m.SnapshotID]; seen {
-			continue
-		}
-		neededSet[m.SnapshotID] = struct{}{}
 		if _, alreadyLoaded := fetched[m.SnapshotID]; !alreadyLoaded {
 			missingIDs = append(missingIDs, m.SnapshotID)
 		}
@@ -212,26 +213,21 @@ func (s *Service) resolveSnapshots(ctx context.Context, matches []Match, preload
 	}
 
 	// Follow 1-hop soft-archive merges so matches normalize to their active target snapshot.
-	targetSeen := make(map[string]struct{})
-	var missingTargets []string
-	for id := range neededSet {
+	neededIDs := neededSet.ToSlice()
+	missingTargets := set.NewOrdered[string]()
+	for _, id := range neededIDs {
 		snap, ok := fetched[id]
 		if !ok || !snap.IsArchived() {
 			continue
 		}
-		targetID := snap.MergedIntoID
-		if _, exists := fetched[targetID]; exists {
+		if _, exists := fetched[snap.MergedIntoID]; exists {
 			continue
 		}
-		if _, queued := targetSeen[targetID]; queued {
-			continue
-		}
-		targetSeen[targetID] = struct{}{}
-		missingTargets = append(missingTargets, targetID)
+		missingTargets.Add(snap.MergedIntoID)
 	}
 
-	if len(missingTargets) > 0 {
-		targets, err := s.snapshots.GetSnapshotsByIDs(ctx, missingTargets)
+	if missingTargets.Size() > 0 {
+		targets, err := s.snapshots.GetSnapshotsByIDs(ctx, missingTargets.ToSlice())
 		if err != nil {
 			return nil, fmt.Errorf("fetch merged target snapshots: %w", err)
 		}
@@ -240,8 +236,8 @@ func (s *Service) resolveSnapshots(ctx context.Context, matches []Match, preload
 		}
 	}
 
-	resolvedByOrigID := make(map[string]SnapshotSummary, len(neededSet))
-	for id := range neededSet {
+	resolvedByOrigID := make(map[string]SnapshotSummary, len(neededIDs))
+	for _, id := range neededIDs {
 		snap, ok := fetched[id]
 		if !ok {
 			continue
