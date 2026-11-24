@@ -76,7 +76,8 @@ func main() {
 		fireteamdriven.NewPartyReader(destinyService),
 		fireteamdriven.NewActiveSessionReader(sessionService),
 	)
-	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
+	statsStore := firestoredriven.NewStatsStore(firestore)
+	statsService := stats.NewService(firestore, statsStore, snapshotService, userService, manifestService)
 	telemetryService := telemetry.NewService(
 		telemetrydriven.NewUserReader(userService),
 		telemetrydriven.NewSnapshotReader(snapshotService),

@@ -24,6 +24,9 @@ sync-app-db:
 count-prod-db:
 	go run ./scripts/count_prod_docs/main.go
 
+deploy-indexes:
+	npx --yes firebase-tools deploy --only firestore:indexes --project gruntt-destiny --non-interactive
+
 monitor-logs:
 	go run ./scripts/monitor_logs/main.go $(ARGS)
 

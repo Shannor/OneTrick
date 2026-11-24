@@ -296,16 +296,40 @@ func TestGetUserSessionsEmptyCharacterID(t *testing.T) {
 
 type mockStatsService struct {
 	stats.Service
-	capturedCount      int
-	capturedOffset     int
-	capturedGameMode   *api.GameMode
-	capturedHasSimilar bool
-	similarCountsResp  *map[string]int
-	similarTarget      *api.CharacterSnapshot
-	similarItems       []api.SimilarSnapshotItem
-	similarStats       *map[string]api.PlayerStats
-	similarCountsMap   *map[string]int
-	similarErr         error
+	capturedCount        int
+	capturedOffset       int
+	capturedGameMode     *api.GameMode
+	capturedHasSimilar   bool
+	capturedCharacterID  string
+	capturedMinimumGames int
+	capturedLimit        int
+	bestLoadouts         []api.CharacterSnapshot
+	bestStats            map[string]api.PlayerStats
+	bestCounts           map[string]int
+	bestErr              error
+	similarCountsResp    *map[string]int
+	similarTarget        *api.CharacterSnapshot
+	similarItems         []api.SimilarSnapshotItem
+	similarStats         *map[string]api.PlayerStats
+	similarCountsMap     *map[string]int
+	similarErr           error
+}
+
+func (m *mockStatsService) GetBestPerformingLoadouts(
+	ctx context.Context,
+	characterID string,
+	gameMode *api.GameMode,
+	limit int,
+	minimumGames int,
+) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error) {
+	m.capturedCharacterID = characterID
+	m.capturedGameMode = gameMode
+	m.capturedLimit = limit
+	m.capturedMinimumGames = minimumGames
+	if m.bestErr != nil {
+		return nil, nil, nil, m.bestErr
+	}
+	return m.bestLoadouts, m.bestStats, m.bestCounts, nil
 }
 
 func (m *mockStatsService) GetSnapshotsWithMetrics(
@@ -351,6 +375,43 @@ func (m *mockStatsService) GetFeaturedLoadouts(ctx context.Context, count int, g
 			},
 		},
 	}, nil
+}
+
+func TestGetBestPerformingLoadoutsHandler(t *testing.T) {
+	mode := api.GameModeAll
+	statsMock := &mockStatsService{
+		bestLoadouts: []api.CharacterSnapshot{{ID: "snap-1", Name: "Best Loadout"}},
+		bestStats: map[string]api.PlayerStats{
+			"snap-1": {Kd: new(api.StatsValuePair{Value: new(2.5)})},
+		},
+		bestCounts: map[string]int{"snap-1": 12},
+	}
+	server := Server{StatsService: statsMock}
+
+	resp, err := server.GetBestPerformingLoadouts(context.Background(), api.GetBestPerformingLoadoutsRequestObject{
+		Params: api.GetBestPerformingLoadoutsParams{
+			CharacterID:  "char-123",
+			Count:        new(3),
+			MinimumGames: new(10),
+			GameMode:     &mode,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	okResp, ok := resp.(api.GetBestPerformingLoadouts200JSONResponse)
+	if !ok {
+		t.Fatalf("expected GetBestPerformingLoadouts200JSONResponse, got %T", resp)
+	}
+	if statsMock.capturedCharacterID != "char-123" || statsMock.capturedLimit != 3 || statsMock.capturedMinimumGames != 10 {
+		t.Fatalf("unexpected captured args: char=%q limit=%d minGames=%d", statsMock.capturedCharacterID, statsMock.capturedLimit, statsMock.capturedMinimumGames)
+	}
+	if statsMock.capturedGameMode == nil || *statsMock.capturedGameMode != api.GameModeAll {
+		t.Fatalf("expected allGameModes forwarded, got %v", statsMock.capturedGameMode)
+	}
+	if len(okResp.Items) != 1 || okResp.Items[0].ID != "snap-1" || okResp.Count["snap-1"] != 12 {
+		t.Fatalf("unexpected response body: %+v", okResp)
+	}
 }
 
 func TestGetFeaturedLoadouts(t *testing.T) {
