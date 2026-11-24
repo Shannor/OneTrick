@@ -1,0 +1,7 @@
+type: string
+enum:
+  - started
+  - skipped_active
+x-enum-varnames:
+  - FireteamSessionOutcomeStarted
+  - FireteamSessionOutcomeSkippedActive

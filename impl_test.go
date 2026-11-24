@@ -96,9 +96,19 @@ func (m *mockUserService) Search(ctx context.Context, query string, page int) ([
 
 type mockFireteamService struct {
 	fireteam.Service
-	members        []fireteam.Member
-	err            error
-	capturedUserID string
+	members               []fireteam.Member
+	err                   error
+	capturedUserID        string
+	capturedActorUserID   string
+	capturedTargetUserID  string
+	capturedCharacterID   string
+	capturedTrackComp     bool
+	startedSession        *fireteam.Session
+	startErr              error
+	capturedBulkTargets   []fireteam.StartSessionTarget
+	capturedBulkTrackComp bool
+	bulkResults           []fireteam.StartSessionResult
+	bulkErr               error
 }
 
 func (m *mockFireteamService) GetFireteam(_ context.Context, userID string) ([]fireteam.Member, error) {
@@ -107,6 +117,38 @@ func (m *mockFireteamService) GetFireteam(_ context.Context, userID string) ([]f
 		return nil, m.err
 	}
 	return m.members, nil
+}
+
+func (m *mockFireteamService) StartSession(_ context.Context, actorUserID string, target fireteam.StartSessionTarget, trackComp bool) (fireteam.Session, error) {
+	m.capturedActorUserID = actorUserID
+	m.capturedTargetUserID = target.UserID
+	m.capturedCharacterID = target.CharacterID
+	m.capturedTrackComp = trackComp
+	if m.startErr != nil {
+		return fireteam.Session{}, m.startErr
+	}
+	if m.startedSession != nil {
+		return *m.startedSession, nil
+	}
+	return fireteam.Session{
+		ID:           "ses-comp-1",
+		UserID:       target.UserID,
+		CharacterID:  target.CharacterID,
+		Status:       fireteam.SessionStatusPending,
+		StartedAt:    time.Now(),
+		AggregateIDs: []string{},
+		StartedBy:    &fireteam.AuditField{ID: actorUserID},
+	}, nil
+}
+
+func (m *mockFireteamService) StartSessions(_ context.Context, actorUserID string, targets []fireteam.StartSessionTarget, trackComp bool) ([]fireteam.StartSessionResult, error) {
+	m.capturedActorUserID = actorUserID
+	m.capturedBulkTargets = targets
+	m.capturedBulkTrackComp = trackComp
+	if m.bulkErr != nil {
+		return nil, m.bulkErr
+	}
+	return m.bulkResults, nil
 }
 
 type mockD2Service struct {
@@ -551,6 +593,9 @@ func TestOpenAPISpecLoadsAndValidates(t *testing.T) {
 	if swagger.Paths.Find("/users/{userId}/characters/{characterId}/telemetry") == nil {
 		t.Fatal("expected /users/{userId}/characters/{characterId}/telemetry path in swagger spec")
 	}
+	if swagger.Paths.Find("/fireteam/sessions") == nil {
+		t.Fatal("expected /fireteam/sessions path in swagger spec")
+	}
 }
 
 func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
@@ -925,25 +970,8 @@ func TestGetSessionAggregatesEmptySession(t *testing.T) {
 
 type mockCompSessionService struct {
 	session.Service
-	capturedTrackComp bool
-	startedSession    *api.Session
-	finalizeErrors    map[string]error
-	finalizedIDs      []string
-}
-
-func (m *mockCompSessionService) Start(_ context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
-	m.capturedTrackComp = trackComp
-	if m.startedSession != nil {
-		return m.startedSession, nil
-	}
-	return &api.Session{
-		ID:           "ses-comp-1",
-		UserID:       userID,
-		CharacterID:  characterID,
-		StartedAt:    time.Now(),
-		AggregateIDs: []string{},
-		StartedBy:    &startedBy,
-	}, nil
+	finalizeErrors map[string]error
+	finalizedIDs   []string
 }
 
 func (m *mockCompSessionService) FinalizeCompTracking(_ context.Context, sessionID string) error {
@@ -955,33 +983,26 @@ func (m *mockCompSessionService) FinalizeCompTracking(_ context.Context, session
 }
 
 func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
-	uMock := &mockUserService{
-		existingUser: &user.User{
-			ID:          "user-1",
-			DisplayName: "Zone 6 Weegee",
-		},
-	}
-
 	t.Run("StartSession and StartUserSession forward trackComp=true", func(t *testing.T) {
-		sesMock := &mockCompSessionService{
-			startedSession: &api.Session{
+		ftMock := &mockFireteamService{
+			startedSession: &fireteam.Session{
 				ID:           "ses-1",
 				UserID:       "user-1",
 				CharacterID:  "char-1",
+				Status:       fireteam.SessionStatusPending,
 				StartedAt:    time.Now(),
 				AggregateIDs: []string{},
-				CompTracking: &api.CompTracking{
+				CompTracking: &fireteam.CompTracking{
 					Enabled: true,
-					Start: &api.CompRankSnapshot{
+					Start: &fireteam.CompRankSnapshot{
 						Points:       5820,
-						DivisionName: new("Platinum III"),
+						DivisionName: "Platinum III",
 					},
 				},
 			},
 		}
 		server := Server{
-			UserService:    uMock,
-			SessionService: sesMock,
+			FireteamService: ftMock,
 		}
 
 		resp, err := server.StartSession(context.Background(), api.StartSessionRequestObject{
@@ -995,15 +1016,15 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StartSession failed: %v", err)
 		}
-		if !sesMock.capturedTrackComp {
-			t.Fatal("expected trackComp=true to be forwarded to SessionService.Start")
+		if !ftMock.capturedTrackComp {
+			t.Fatal("expected trackComp=true to be forwarded to FireteamService.StartSession")
 		}
 		created, ok := resp.(api.StartSession201JSONResponse)
 		if !ok || created.CompTracking == nil || !created.CompTracking.Enabled {
 			t.Fatalf("expected 201 with CompTracking.Enabled=true, got %+v", resp)
 		}
 
-		sesMock.capturedTrackComp = false
+		ftMock.capturedTrackComp = false
 		uResp, err := server.StartUserSession(context.Background(), api.StartUserSessionRequestObject{
 			UserID: "user-1",
 			Params: api.StartUserSessionParams{XUserID: "user-1", XMembershipID: "4611686018467484863"},
@@ -1016,7 +1037,7 @@ func TestStartSessionAndFinalizeSessionsCompHandlers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StartUserSession failed: %v", err)
 		}
-		if !sesMock.capturedTrackComp {
+		if !ftMock.capturedTrackComp {
 			t.Fatal("expected trackComp=true to be forwarded in StartUserSession")
 		}
 		uCreated, ok := uResp.(api.StartUserSession201JSONResponse)
@@ -1947,3 +1968,302 @@ func TestGetFireteamEndpoint(t *testing.T) {
 		}
 	})
 }
+
+func TestStartFireteamSessionsEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	newRouter := func(ftMock *mockFireteamService) *gin.Engine {
+		server := Server{FireteamService: ftMock}
+		r := gin.New()
+		r.ContextWithFallback = true
+		r.Use(logger.CanonicalLogger())
+		r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+			ErrorHandler: logger.GinValidationErrorHandler,
+			Options: openapi3filter.Options{
+				AuthenticationFunc: validator.Authenticate,
+			},
+		}))
+		h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+			logger.GinStrictMiddleware[api.StrictHandlerFunc],
+		})
+		api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+			ErrorHandler: logger.GinParamErrorHandler,
+		})
+		return r
+	}
+
+	newAuthRequest := func(body string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/fireteam/sessions", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-User-ID", "actor-1")
+		req.Header.Set("X-Membership-ID", "4611686018467484863")
+		return req
+	}
+
+	t.Run("200 returns started and skipped_active results and forwards actor, targets, and trackComp", func(t *testing.T) {
+		startedAt := time.Date(2026, 5, 2, 18, 0, 0, 0, time.UTC)
+		ftMock := &mockFireteamService{
+			bulkResults: []fireteam.StartSessionResult{
+				{
+					UserID:      "actor-1",
+					CharacterID: "char-1",
+					Outcome:     fireteam.StartSessionOutcomeStarted,
+					Session: fireteam.Session{
+						ID:           "ses-new-1",
+						UserID:       "actor-1",
+						CharacterID:  "char-1",
+						Status:       fireteam.SessionStatusPending,
+						StartedAt:    startedAt,
+						AggregateIDs: []string{},
+						StartedBy:    &fireteam.AuditField{ID: "actor-1", Username: "Leader"},
+					},
+				},
+				{
+					UserID:      "mate-2",
+					CharacterID: "char-2",
+					Outcome:     fireteam.StartSessionOutcomeSkippedActive,
+					Session: fireteam.Session{
+						ID:           "ses-existing-2",
+						UserID:       "mate-2",
+						CharacterID:  "char-2",
+						Status:       fireteam.SessionStatusPending,
+						StartedAt:    startedAt.Add(-time.Hour),
+						AggregateIDs: []string{},
+					},
+				},
+			},
+		}
+
+		r := newRouter(ftMock)
+		req := newAuthRequest(`{"members":[{"userId":"actor-1","characterId":"char-1"},{"userId":"mate-2","characterId":"char-2"}],"trackComp":true}`)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+		if ftMock.capturedActorUserID != "actor-1" {
+			t.Fatalf("expected actorUserID=actor-1, got %q", ftMock.capturedActorUserID)
+		}
+		if !ftMock.capturedBulkTrackComp {
+			t.Fatal("expected trackComp=true forwarded to StartSessions")
+		}
+		if len(ftMock.capturedBulkTargets) != 2 || ftMock.capturedBulkTargets[1].UserID != "mate-2" || ftMock.capturedBulkTargets[1].CharacterID != "char-2" {
+			t.Fatalf("unexpected forwarded targets: %+v", ftMock.capturedBulkTargets)
+		}
+
+		var got api.StartFireteamSessionsResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("failed to decode 200 JSON: %v", err)
+		}
+		if len(got.Results) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(got.Results))
+		}
+		if got.Results[0].Outcome != api.FireteamSessionOutcomeStarted || got.Results[0].Session.ID != "ses-new-1" {
+			t.Fatalf("unexpected first result: %+v", got.Results[0])
+		}
+		if got.Results[1].Outcome != api.FireteamSessionOutcomeSkippedActive || got.Results[1].Session.ID != "ses-existing-2" {
+			t.Fatalf("unexpected second result: %+v", got.Results[1])
+		}
+	})
+
+	t.Run("400 rejects empty members array and ErrInvalidRequest", func(t *testing.T) {
+		r := newRouter(&mockFireteamService{})
+		req := newAuthRequest(`{"members":[]}`)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for empty members, got %d: %s", w.Code, w.Body.String())
+		}
+
+		rInvalid := newRouter(&mockFireteamService{
+			bulkErr: fmt.Errorf("%w: empty characterId", fireteam.ErrInvalidRequest),
+		})
+		reqInvalid := newAuthRequest(`{"members":[{"userId":"actor-1","characterId":"   "}]}`)
+		wInvalid := httptest.NewRecorder()
+		rInvalid.ServeHTTP(wInvalid, reqInvalid)
+		if wInvalid.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for ErrInvalidRequest, got %d: %s", wInvalid.Code, wInvalid.Body.String())
+		}
+	})
+
+	t.Run("rejects missing bearer auth and maps ErrUnauthorized to 401", func(t *testing.T) {
+		r := newRouter(&mockFireteamService{})
+		reqNoAuth := httptest.NewRequest(http.MethodPost, "/fireteam/sessions", strings.NewReader(`{"members":[{"userId":"actor-1","characterId":"char-1"}]}`))
+		reqNoAuth.Header.Set("Content-Type", "application/json")
+		reqNoAuth.Header.Set("X-User-ID", "actor-1")
+		reqNoAuth.Header.Set("X-Membership-ID", "4611686018467484863")
+		wNoAuth := httptest.NewRecorder()
+		r.ServeHTTP(wNoAuth, reqNoAuth)
+		if wNoAuth.Code != http.StatusBadRequest && wNoAuth.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 400 or 401 without Authorization header, got %d: %s", wNoAuth.Code, wNoAuth.Body.String())
+		}
+
+		rUnauth := newRouter(&mockFireteamService{bulkErr: fireteam.ErrUnauthorized})
+		wUnauth := httptest.NewRecorder()
+		rUnauth.ServeHTTP(wUnauth, newAuthRequest(`{"members":[{"userId":"actor-1","characterId":"char-1"}]}`))
+		if wUnauth.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 on ErrUnauthorized, got %d: %s", wUnauth.Code, wUnauth.Body.String())
+		}
+	})
+
+	t.Run("maps sentinel errors to 403, 404, 500, and 503", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			err        error
+			wantCode   int
+			wantStatus api.InternalError
+		}{
+			{
+				name:     "403 not in fireteam",
+				err:      fmt.Errorf("%w: outsider", fireteam.ErrNotInFireteam),
+				wantCode: http.StatusForbidden,
+			},
+			{
+				name:     "404 user not found",
+				err:      fmt.Errorf("%w: actor-1", fireteam.ErrUserNotFound),
+				wantCode: http.StatusNotFound,
+			},
+			{
+				name:       "500 internal error",
+				err:        errors.New("firestore write failed"),
+				wantCode:   http.StatusInternalServerError,
+				wantStatus: api.ErrInternalSystemDown,
+			},
+			{
+				name:       "503 destiny unavailable",
+				err:        fmt.Errorf("%w: %w", fireteam.ErrDestinyUnavailable, destiny.ErrDestinyServerDown),
+				wantCode:   http.StatusServiceUnavailable,
+				wantStatus: api.ErrDestinyServerDown,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				r := newRouter(&mockFireteamService{bulkErr: tc.err})
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, newAuthRequest(`{"members":[{"userId":"outsider","characterId":"char-9"}]}`))
+				if w.Code != tc.wantCode {
+					t.Fatalf("expected %d, got %d: %s", tc.wantCode, w.Code, w.Body.String())
+				}
+				var body api.OneTrickError
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+					t.Fatalf("failed to decode OneTrickError: %v", err)
+				}
+				if body.Message == "" {
+					t.Fatal("expected non-empty error message")
+				}
+				if tc.wantStatus != "" && body.Status != tc.wantStatus {
+					t.Fatalf("expected status %q, got %q", tc.wantStatus, body.Status)
+				}
+			})
+		}
+	})
+}
+
+func TestStartSessionAndStartUserSessionFireteamGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	newRouter := func(ftMock *mockFireteamService) *gin.Engine {
+		server := Server{FireteamService: ftMock}
+		r := gin.New()
+		r.ContextWithFallback = true
+		r.Use(logger.CanonicalLogger())
+		r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+			ErrorHandler: logger.GinValidationErrorHandler,
+			Options: openapi3filter.Options{
+				AuthenticationFunc: validator.Authenticate,
+			},
+		}))
+		h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+			logger.GinStrictMiddleware[api.StrictHandlerFunc],
+		})
+		api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+			ErrorHandler: logger.GinParamErrorHandler,
+		})
+		return r
+	}
+
+	postJSON := func(r *gin.Engine, path, actorID, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-User-ID", actorID)
+		req.Header.Set("X-Membership-ID", "4611686018467484863")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	endpoints := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "POST /sessions",
+			path: "/sessions",
+			body: `{"userId":"target-user","characterId":"char-1","trackComp":false}`,
+		},
+		{
+			name: "POST /users/{userId}/sessions",
+			path: "/users/target-user/sessions",
+			body: `{"userId":"target-user","characterId":"char-1","trackComp":false}`,
+		},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.name+" maps 201, 400, 403, 404, 500, and 503", func(t *testing.T) {
+			cases := []struct {
+				name     string
+				err      error
+				wantCode int
+			}{
+				{name: "201 created", err: nil, wantCode: http.StatusCreated},
+				{name: "400 already active", err: fireteam.ErrAlreadyActive, wantCode: http.StatusBadRequest},
+				{name: "400 invalid request", err: fireteam.ErrInvalidRequest, wantCode: http.StatusBadRequest},
+				{name: "403 not in fireteam", err: fireteam.ErrNotInFireteam, wantCode: http.StatusForbidden},
+				{name: "404 user not found", err: fireteam.ErrUserNotFound, wantCode: http.StatusNotFound},
+				{name: "500 unexpected", err: errors.New("boom"), wantCode: http.StatusInternalServerError},
+				{name: "503 destiny down", err: fireteam.ErrDestinyUnavailable, wantCode: http.StatusServiceUnavailable},
+			}
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					ftMock := &mockFireteamService{startErr: tc.err}
+					r := newRouter(ftMock)
+					w := postJSON(r, ep.path, "actor-1", ep.body)
+					if w.Code != tc.wantCode {
+						t.Fatalf("expected %d, got %d: %s", tc.wantCode, w.Code, w.Body.String())
+					}
+					if ftMock.capturedTargetUserID != "target-user" || ftMock.capturedActorUserID != "actor-1" {
+						t.Fatalf("expected targetUserID=target-user and actorID=actor-1, got target=%q actor=%q", ftMock.capturedTargetUserID, ftMock.capturedActorUserID)
+					}
+				})
+			}
+		})
+	}
+
+	t.Run("POST /users/{userId}/sessions rejects mismatched path and body userId with 400", func(t *testing.T) {
+		ftMock := &mockFireteamService{}
+		r := newRouter(ftMock)
+		w := postJSON(r, "/users/path-user/sessions", "actor-1", `{"userId":"different-user","characterId":"char-1"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 on mismatched path/body userId, got %d: %s", w.Code, w.Body.String())
+		}
+		if ftMock.capturedTargetUserID != "" {
+			t.Fatalf("expected FireteamService.StartSession not to be called on mismatch, got %q", ftMock.capturedTargetUserID)
+		}
+	})
+}
+

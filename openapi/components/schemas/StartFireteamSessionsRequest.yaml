@@ -1,0 +1,11 @@
+type: object
+required:
+  - members
+properties:
+  members:
+    type: array
+    minItems: 1
+    items:
+      $ref: ./FireteamSessionMemberTarget.yaml
+  trackComp:
+    type: boolean

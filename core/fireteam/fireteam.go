@@ -2,7 +2,6 @@ package fireteam
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"oneTrick/set"
@@ -17,23 +16,36 @@ const defaultBungiePartyTimeout = 4 * time.Second
 
 type Service interface {
 	GetFireteam(ctx context.Context, userID string) ([]Member, error)
+	StartSession(ctx context.Context, actorUserID string, target StartSessionTarget, trackComp bool) (Session, error)
+	StartSessions(ctx context.Context, actorUserID string, targets []StartSessionTarget, trackComp bool) ([]StartSessionResult, error)
 }
 
 type service struct {
 	users        UserReader
 	party        PartyReader
-	sessions     ActiveSessionReader
+	sessions     SessionStore
+	compRanks    CompRankReader
 	partyTimeout time.Duration
+	now          func() time.Time
 }
 
 var _ Service = (*service)(nil)
 
-func NewService(users UserReader, party PartyReader, sessions ActiveSessionReader) Service {
+func NewService(users UserReader, party PartyReader, sessions SessionStore, compRanks CompRankReader) Service {
 	return &service{
-		users:    users,
-		party:    party,
-		sessions: sessions,
+		users:     users,
+		party:     party,
+		sessions:  sessions,
+		compRanks: compRanks,
+		now:       time.Now,
 	}
+}
+
+func (s *service) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 func (s *service) bungiePartyTimeout() time.Duration {
@@ -56,14 +68,9 @@ func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, err
 		return nil, err
 	}
 
-	partyCtx, cancel := context.WithTimeout(ctx, s.bungiePartyTimeout())
-	rawPartyIDs, err := s.party.GetPartyMembershipIDs(partyCtx, pmID, membershipType)
-	cancel()
+	rawPartyIDs, err := fetchPartyMembershipIDs(ctx, s.party, s.bungiePartyTimeout(), pmID, membershipType)
 	if err != nil {
-		if errors.Is(err, ErrDestinyUnavailable) || (ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)) {
-			return nil, fmt.Errorf("%w: %w", ErrDestinyUnavailable, err)
-		}
-		return nil, fmt.Errorf("failed to fetch party members: %w", err)
+		return nil, err
 	}
 
 	if len(rawPartyIDs) == 0 {

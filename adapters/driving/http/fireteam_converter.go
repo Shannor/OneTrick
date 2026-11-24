@@ -3,6 +3,7 @@ package httpadapter
 import (
 	"oneTrick/api"
 	"oneTrick/core/fireteam"
+	"oneTrick/ptr"
 )
 
 func ToAPIFireteamMembers(members []fireteam.Member) []api.FireteamMember {
@@ -65,5 +66,129 @@ func ToAPICharacter(c fireteam.Character) api.Character {
 			Alpha: c.EmblemColor.Alpha,
 		},
 		Stats: statsPtr,
+	}
+}
+
+func ToStartSessionTargets(members []api.FireteamSessionMemberTarget) []fireteam.StartSessionTarget {
+	out := make([]fireteam.StartSessionTarget, 0, len(members))
+	for _, m := range members {
+		out = append(out, fireteam.StartSessionTarget{
+			UserID:      m.UserID,
+			CharacterID: m.CharacterID,
+		})
+	}
+	return out
+}
+
+func ToAPIStartFireteamSessionsResponse(results []fireteam.StartSessionResult) api.StartFireteamSessions200JSONResponse {
+	apiResults := make([]api.FireteamSessionResult, 0, len(results))
+	for _, r := range results {
+		outcome := api.FireteamSessionOutcomeStarted
+		if r.Outcome == fireteam.StartSessionOutcomeSkippedActive {
+			outcome = api.FireteamSessionOutcomeSkippedActive
+		}
+		apiResults = append(apiResults, api.FireteamSessionResult{
+			UserID:      r.UserID,
+			CharacterID: r.CharacterID,
+			Outcome:     outcome,
+			Session:     ToAPISession(r.Session),
+		})
+	}
+	return api.StartFireteamSessions200JSONResponse{
+		Results: apiResults,
+	}
+}
+
+func ToAPISession(ses fireteam.Session) api.Session {
+	aggs := ses.AggregateIDs
+	if aggs == nil {
+		aggs = make([]string, 0)
+	}
+	out := api.Session{
+		ID:                 ses.ID,
+		UserID:             ses.UserID,
+		CharacterID:        ses.CharacterID,
+		Name:               ptr.NonEmpty(ses.Name),
+		Description:        ptr.NonEmpty(ses.Description),
+		StartedAt:          ses.StartedAt,
+		CompletedAt:        ses.CompletedAt,
+		StartedBy:          toAPIAuditField(ses.StartedBy),
+		CompletedBy:        toAPIAuditField(ses.CompletedBy),
+		AggregateIDs:       aggs,
+		LastSeenActivityID: ptr.NonEmpty(ses.LastSeenActivityID),
+		LastSeenTimestamp:  ses.LastSeenTimestamp,
+		CompTracking:       toAPICompTracking(ses.CompTracking),
+		Summary:            toAPISessionSummary(ses.Summary),
+	}
+	if ses.Status != "" {
+		status := api.SessionStatus(ses.Status)
+		out.Status = &status
+	}
+	return out
+}
+
+func toAPIAuditField(a *fireteam.AuditField) *api.AuditField {
+	if a == nil {
+		return nil
+	}
+	return &api.AuditField{
+		ID:       a.ID,
+		Username: a.Username,
+	}
+}
+
+func toAPICompTracking(ct *fireteam.CompTracking) *api.CompTracking {
+	if ct == nil {
+		return nil
+	}
+	return &api.CompTracking{
+		Enabled:    ct.Enabled,
+		Start:      toAPICompRankSnapshot(ct.Start),
+		End:        toAPICompRankSnapshot(ct.End),
+		PointDelta: ct.PointDelta,
+	}
+}
+
+func toAPICompRankSnapshot(snap *fireteam.CompRankSnapshot) *api.CompRankSnapshot {
+	if snap == nil {
+		return nil
+	}
+	return &api.CompRankSnapshot{
+		Points:       snap.Points,
+		StepIndex:    snap.StepIndex,
+		DivisionName: ptr.NonEmpty(snap.DivisionName),
+		Icon:         ptr.NonEmpty(snap.Icon),
+		RecordedAt:   snap.RecordedAt,
+	}
+}
+
+func toAPISessionSummary(sum *fireteam.SessionSummary) *api.SessionSummary {
+	if sum == nil {
+		return nil
+	}
+	modes := sum.ModesPlayed
+	if modes == nil {
+		modes = make([]string, 0)
+	}
+	weapons := make([]api.SessionWeaponSummary, 0, len(sum.TopWeapons))
+	for _, w := range sum.TopWeapons {
+		weapons = append(weapons, api.SessionWeaponSummary{
+			Name:  ptr.NonEmpty(w.Name),
+			Icon:  ptr.NonEmpty(w.Icon),
+			Kills: new(w.Kills),
+		})
+	}
+	return &api.SessionSummary{
+		TotalMatches: new(sum.TotalMatches),
+		Wins:         new(sum.Wins),
+		Losses:       new(sum.Losses),
+		Kills:        new(sum.Kills),
+		Deaths:       new(sum.Deaths),
+		Assists:      new(sum.Assists),
+		WinRate:      new(sum.WinRate),
+		KDRatio:      new(sum.KDRatio),
+		KDARatio:     new(sum.KDARatio),
+		ModesPlayed:  &modes,
+		TopWeapons:   &weapons,
 	}
 }

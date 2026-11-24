@@ -7,7 +7,6 @@ import (
 	"oneTrick/clients/bungie"
 	corefireteam "oneTrick/core/fireteam"
 	"oneTrick/services/destiny"
-	"oneTrick/services/session"
 	"oneTrick/services/user"
 	"reflect"
 	"testing"
@@ -32,22 +31,18 @@ func (s *stubUserService) FindByPartyMembershipIDs(_ context.Context, _ []string
 
 type stubDestinyService struct {
 	destiny.Service
-	members []bungie.PartyMember
-	err     error
+	members  []bungie.PartyMember
+	err      error
+	compSnap *api.CompRankSnapshot
+	compErr  error
 }
 
 func (s *stubDestinyService) GetPartyMembers(_ context.Context, _ int64, _ int64) ([]bungie.PartyMember, error) {
 	return s.members, s.err
 }
 
-type stubSessionService struct {
-	session.Service
-	sessions []session.ActiveSession
-	err      error
-}
-
-func (s *stubSessionService) GetActiveByUserIDs(_ context.Context, _ []string) ([]session.ActiveSession, error) {
-	return s.sessions, s.err
+func (s *stubDestinyService) GetCompetitiveRank(_ context.Context, _ int64, _ int64, _ string) (*api.CompRankSnapshot, error) {
+	return s.compSnap, s.compErr
 }
 
 func TestUserReaderAdapter(t *testing.T) {
@@ -143,31 +138,31 @@ func TestPartyReaderAdapter(t *testing.T) {
 	})
 }
 
-func TestActiveSessionReaderAdapter(t *testing.T) {
-	started := time.Date(2026, 5, 1, 20, 0, 0, 0, time.UTC)
-	adapter := NewActiveSessionReader(&stubSessionService{
-		sessions: []session.ActiveSession{
-			{
-				SessionID:   "ses-1",
-				UserID:      "u-1",
-				CharacterID: "char-1",
-				StartedAt:   started,
-				TrackComp:   true,
-			},
+func TestCompRankReaderAdapter(t *testing.T) {
+	recorded := time.Date(2026, 5, 1, 20, 0, 0, 0, time.UTC)
+	step := 3
+	adapter := NewCompRankReader(&stubDestinyService{
+		compSnap: &api.CompRankSnapshot{
+			Points:       5800,
+			StepIndex:    &step,
+			DivisionName: new("Platinum III"),
+			Icon:         new("/icon/plat.png"),
+			RecordedAt:   &recorded,
 		},
 	})
-	got, err := adapter.GetActiveByUserIDs(context.Background(), []string{"u-1"})
+	got, ok, err := adapter.GetCompetitiveRank(context.Background(), 123, 3, "char-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []corefireteam.ActiveSession{
-		{
-			SessionID:   "ses-1",
-			UserID:      "u-1",
-			CharacterID: "char-1",
-			StartedAt:   started,
-			TrackComp:   true,
-		},
+	if !ok {
+		t.Fatal("expected snapshot ok=true")
+	}
+	want := corefireteam.CompRankSnapshot{
+		Points:       5800,
+		StepIndex:    &step,
+		DivisionName: "Platinum III",
+		Icon:         "/icon/plat.png",
+		RecordedAt:   &recorded,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected %+v, got %+v", want, got)

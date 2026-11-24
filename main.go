@@ -74,7 +74,8 @@ func main() {
 	fireteamService := fireteam.NewService(
 		fireteamdriven.NewUserReader(userService),
 		fireteamdriven.NewPartyReader(destinyService),
-		fireteamdriven.NewActiveSessionReader(sessionService),
+		firestoredriven.NewFireteamSessionStore(firestore),
+		fireteamdriven.NewCompRankReader(destinyService),
 	)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	telemetryService := telemetry.NewService(

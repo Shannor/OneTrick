@@ -19,6 +19,8 @@ paths:
     $ref: paths/search.yaml
   /fireteam:
     $ref: paths/fireteam.yaml
+  /fireteam/sessions:
+    $ref: paths/fireteam_sessions.yaml
   /users/{userId}:
     $ref: paths/users_{userId}.yaml
   /login:

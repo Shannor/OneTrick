@@ -169,6 +169,65 @@ paths:
                     description: User friendly description of the error
                   status:
                     $ref: '#/components/schemas/InternalError'
+  /fireteam/sessions:
+    post:
+      operationId: StartFireteamSessions
+      description: Idempotently start individual sessions for multiple fireteam members. Skips any requested (userId, characterId) pair that already has a pending session.
+      parameters:
+        - $ref: '#/components/parameters/X-User-ID'
+        - $ref: '#/components/parameters/X-Membership-ID'
+      security:
+        - bearerAuth: []
+      requestBody:
+        description: Fireteam members and characters to start sessions for
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartFireteamSessionsRequest'
+      responses:
+        '200':
+          description: Bulk start results for each requested member
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartFireteamSessionsResponse'
+        '400':
+          description: Request is invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '403':
+          description: Target user is not in caller's current Bungie fireteam
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: Caller user not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '503':
+          description: Destiny 2 servers are currently unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /users/{userId}:
     get:
       operationId: GetUser
@@ -291,6 +350,36 @@ paths:
                 properties:
                   message:
                     type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '403':
+          description: Target user is not in caller's current Bungie fireteam
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: Caller user not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '503':
+          description: Destiny 2 servers are currently unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
     get:
       parameters:
         - in: path
@@ -985,6 +1074,36 @@ paths:
                 properties:
                   message:
                     type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '403':
+          description: Target user is not in caller's current Bungie fireteam
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '404':
+          description: Caller user not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '503':
+          description: Destiny 2 servers are currently unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
     get:
       parameters:
         - name: count
@@ -1652,66 +1771,38 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FireteamActiveSession'
-    Profile:
+    FireteamSessionMemberTarget:
       type: object
       required:
-        - id
-        - displayName
-        - uniqueName
-        - membershipId
-        - characters
+        - userId
+        - characterId
       properties:
-        id:
+        userId:
           type: string
-        membershipId:
+          x-go-name: UserID
+        characterId:
           type: string
-        displayName:
-          type: string
-        uniqueName:
-          type: string
-        characters:
+          x-go-name: CharacterID
+    StartFireteamSessionsRequest:
+      type: object
+      required:
+        - members
+      properties:
+        members:
           type: array
+          minItems: 1
           items:
-            $ref: '#/components/schemas/Character'
-    AuthResponse:
-      type: object
-      properties:
-        id:
-          type: string
-        accessToken:
-          type: string
-          description: Access token value.
-        tokenType:
-          type: string
-          description: Type of the access token.
-        expiresIn:
-          type: integer
-          description: The time duration in which the access token will be expired.
-        refreshToken:
-          type: string
-          description: Refresh token for acquiring new access token after it is expired.
-        refreshExpiresIn:
-          type: integer
-          description: The time duration in which the refresh token will be expired.
-        membershipId:
-          type: string
-          description: Membership identification value.
-        primaryMembershipId:
-          type: string
-          description: Membership that is mainly used
-        timestamp:
-          type: string
-          format: date-time
-      required:
-        - accessToken
-        - tokenType
-        - expiresIn
-        - refreshToken
-        - refreshExpiresIn
-        - membershipId
-        - primaryMembershipId
-        - id
-        - timestamp
+            $ref: '#/components/schemas/FireteamSessionMemberTarget'
+        trackComp:
+          type: boolean
+    FireteamSessionOutcome:
+      type: string
+      enum:
+        - started
+        - skipped_active
+      x-enum-varnames:
+        - FireteamSessionOutcomeStarted
+        - FireteamSessionOutcomeSkippedActive
     AuditField:
       type: object
       required:
@@ -1947,6 +2038,93 @@ components:
           $ref: '#/components/schemas/CompTracking'
           x-oapi-codegen-extra-tags:
             firestore: compTracking
+    FireteamSessionResult:
+      type: object
+      required:
+        - userId
+        - characterId
+        - outcome
+        - session
+      properties:
+        userId:
+          type: string
+          x-go-name: UserID
+        characterId:
+          type: string
+          x-go-name: CharacterID
+        outcome:
+          $ref: '#/components/schemas/FireteamSessionOutcome'
+        session:
+          $ref: '#/components/schemas/Session'
+    StartFireteamSessionsResponse:
+      type: object
+      required:
+        - results
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/FireteamSessionResult'
+    Profile:
+      type: object
+      required:
+        - id
+        - displayName
+        - uniqueName
+        - membershipId
+        - characters
+      properties:
+        id:
+          type: string
+        membershipId:
+          type: string
+        displayName:
+          type: string
+        uniqueName:
+          type: string
+        characters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Character'
+    AuthResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        accessToken:
+          type: string
+          description: Access token value.
+        tokenType:
+          type: string
+          description: Type of the access token.
+        expiresIn:
+          type: integer
+          description: The time duration in which the access token will be expired.
+        refreshToken:
+          type: string
+          description: Refresh token for acquiring new access token after it is expired.
+        refreshExpiresIn:
+          type: integer
+          description: The time duration in which the refresh token will be expired.
+        membershipId:
+          type: string
+          description: Membership identification value.
+        primaryMembershipId:
+          type: string
+          description: Membership that is mainly used
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - accessToken
+        - tokenType
+        - expiresIn
+        - refreshToken
+        - refreshExpiresIn
+        - membershipId
+        - primaryMembershipId
+        - id
+        - timestamp
     GameMode:
       type: string
       enum:
