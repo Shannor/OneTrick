@@ -232,16 +232,8 @@ func (s Server) GetSimilarSnapshots(ctx context.Context, request api.GetSimilarS
 	if target == nil {
 		return api.GetSimilarSnapshots404JSONResponse{Message: "snapshot not found"}, nil
 	}
-	if items == nil {
-		items = []api.SimilarSnapshotItem{}
-	}
 
-	return api.GetSimilarSnapshots200JSONResponse{
-		Target: *target,
-		Items:  items,
-		Stats:  stats,
-		Count:  counts,
-	}, nil
+	return httpadapter.ToAPISimilarSnapshotsResponse(*target, items, stats, counts), nil
 }
 
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {

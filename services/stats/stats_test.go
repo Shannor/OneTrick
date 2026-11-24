@@ -959,7 +959,7 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 		if gotTarget.ID != target.ID || len(items) != 1 || items[0].Snapshot.ID != cand.ID {
 			t.Fatalf("unexpected GetSimilarSnapshots output: target=%v items=%+v", gotTarget, items)
 		}
-		if (*countsMap)[target.ID] != 1 || (*countsMap)[cand.ID] != 1 || *(*statsMap)[target.ID].Kd.Value != 2.0 {
+		if countsMap[target.ID] != 1 || countsMap[cand.ID] != 1 || *statsMap[target.ID].Kd.Value != 2.0 {
 			t.Fatalf("unexpected stats/counts: stats=%+v counts=%+v", statsMap, countsMap)
 		}
 	})
@@ -994,7 +994,7 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 		if store.capturedGameMode != string(api.GameModeTrials) {
 			t.Fatalf("expected archived target to pass gameMode=%q, got %q", api.GameModeTrials, store.capturedGameMode)
 		}
-		if gotTarget.ID != archived.ID || len(items) != 0 || (*countsMap)[archived.ID] != 1 || *(*statsMap)[archived.ID].Kd.Value != 2.0 {
+		if gotTarget.ID != archived.ID || len(items) != 0 || countsMap[archived.ID] != 1 || *statsMap[archived.ID].Kd.Value != 2.0 {
 			t.Fatalf("unexpected archived target result: items=%+v stats=%+v counts=%+v", items, statsMap, countsMap)
 		}
 	})
@@ -1132,13 +1132,13 @@ func TestGetSimilarSnapshotsParamsAndBatchedManifestFallback(t *testing.T) {
 		if len(items) != 1 || items[0].Snapshot.ID != candHigh.ID || items[0].Tier != api.SimilarityTierHigh {
 			t.Fatalf("expected only [cand-high], got %+v", items)
 		}
-		if _, exists := (*countsMap)[candBase.ID]; exists {
+		if _, exists := countsMap[candBase.ID]; exists {
 			t.Fatalf("expected filtered base candidate excluded from countsMap, got %+v", countsMap)
 		}
-		if _, exists := (*statsMap)[candBase.ID]; exists {
+		if _, exists := statsMap[candBase.ID]; exists {
 			t.Fatalf("expected filtered base candidate excluded from statsMap, got %+v", statsMap)
 		}
-		if (*countsMap)[targetSnap.ID] != 1 || (*countsMap)[candHigh.ID] != 1 {
+		if countsMap[targetSnap.ID] != 1 || countsMap[candHigh.ID] != 1 {
 			t.Fatalf("expected target and cand-high counts=1, got %+v", countsMap)
 		}
 	})
@@ -1177,11 +1177,11 @@ func TestGetSimilarSnapshotsParamsAndBatchedManifestFallback(t *testing.T) {
 		if len(items) != 2 || items[0].Snapshot.ID != candHighMatches.ID || items[1].Snapshot.ID != candLowMatches.ID {
 			t.Fatalf("expected match-count desc ordering [cand-older-high-games, cand-newer-low-games], got %+v", items)
 		}
-		if (*countsMap)[candHighMatches.ID] != 2 || (*countsMap)[candLowMatches.ID] != 1 {
+		if countsMap[candHighMatches.ID] != 2 || countsMap[candLowMatches.ID] != 1 {
 			t.Fatalf("unexpected countsMap: %+v", countsMap)
 		}
-		if *(*statsMap)[targetSnap.ID].Kd.Value != 3.0 {
-			t.Fatalf("expected target KD 3.0, got %+v", (*statsMap)[targetSnap.ID])
+		if *statsMap[targetSnap.ID].Kd.Value != 3.0 {
+			t.Fatalf("expected target KD 3.0, got %+v", statsMap[targetSnap.ID])
 		}
 
 		// Verify allGameModes normalizes to empty string for the store query.
@@ -1257,9 +1257,25 @@ func TestGetSimilarSnapshotsParamsAndBatchedManifestFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("skips manifest GetItemsByIDs when inline tier types already identify armor", func(t *testing.T) {
-		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 888001, 6)
-		cand := makeSnapWithHelmet("cand", now.Add(-1*time.Minute), "kin-1", "en-1", 888001, 6)
+	t.Run("skips manifest GetItemsByIDs when inline tier types already identify armor including non-helmet Exotic slots", func(t *testing.T) {
+		// Helmet has tierType==0, while ChestArmor carries inline TierType==6 (Exotic).
+		// Because Destiny 2 equips at most 1 Exotic armor piece, no manifest lookup is needed for Helmet.
+		targetSnap := makeSnapWithHelmet("target", now, "kin-1", "en-1", 777001, 0)
+		targetSnap.Loadout[chestKey] = api.ItemSnapshot{
+			InstanceID: "exotic-chest-1",
+			ItemHash:   999555,
+			ItemProperties: api.ItemProperties{
+				BaseInfo: api.BaseItemInfo{TierType: 6},
+			},
+		}
+		cand := makeSnapWithHelmet("cand", now.Add(-1*time.Minute), "kin-1", "en-1", 777002, 0)
+		cand.Loadout[chestKey] = api.ItemSnapshot{
+			InstanceID: "exotic-chest-2",
+			ItemHash:   999555,
+			ItemProperties: api.ItemProperties{
+				BaseInfo: api.BaseItemInfo{TierType: 6},
+			},
+		}
 		manifestMock := &mockManifestService{}
 		snaps := &fakeSnapshotService{
 			byID: map[string]*api.CharacterSnapshot{targetSnap.ID: &targetSnap},
@@ -1275,7 +1291,7 @@ func TestGetSimilarSnapshotsParamsAndBatchedManifestFallback(t *testing.T) {
 			t.Fatalf("GetSimilarSnapshots failed: %v", err)
 		}
 		if manifestMock.getItemsByIDsCalls != 0 || manifestMock.getItemCalls != 0 {
-			t.Fatalf("expected 0 manifest calls when inline tiers present, got batch=%d single=%d", manifestMock.getItemsByIDsCalls, manifestMock.getItemCalls)
+			t.Fatalf("expected 0 manifest calls when inline Exotic present in Chest slot, got batch=%d single=%d", manifestMock.getItemsByIDsCalls, manifestMock.getItemCalls)
 		}
 		if len(items) != 1 || items[0].Tier != api.SimilarityTierHigh {
 			t.Fatalf("expected 1 high-tier item, got %+v", items)

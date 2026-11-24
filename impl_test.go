@@ -310,8 +310,8 @@ type mockStatsService struct {
 	similarCountsResp     *map[string]int
 	similarTarget         *api.CharacterSnapshot
 	similarItems          []api.SimilarSnapshotItem
-	similarStats          *map[string]api.PlayerStats
-	similarCountsMap      *map[string]int
+	similarStats          map[string]api.PlayerStats
+	similarCountsMap      map[string]int
 	similarErr            error
 	capturedSimilarParams stats.SimilarSnapshotsParams
 }
@@ -355,7 +355,7 @@ func (m *mockStatsService) GetSnapshotsWithMetrics(
 func (m *mockStatsService) GetSimilarSnapshots(
 	ctx context.Context,
 	params stats.SimilarSnapshotsParams,
-) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error) {
+) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, map[string]api.PlayerStats, map[string]int, error) {
 	m.capturedSimilarParams = params
 	if m.similarErr != nil {
 		return nil, nil, nil, nil, m.similarErr
@@ -755,8 +755,8 @@ func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
 					StatDiffs:        &diffs,
 				},
 			},
-			similarCountsMap: &counts,
-			similarStats:     &statsMap,
+			similarCountsMap: counts,
+			similarStats:     statsMap,
 		}
 		server := Server{StatsService: statsMock}
 		resp, err := server.GetSimilarSnapshots(context.Background(), api.GetSimilarSnapshotsRequestObject{

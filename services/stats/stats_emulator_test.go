@@ -296,10 +296,10 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 	if simItems[1].Snapshot.ID != snapC || simItems[1].Tier != api.SimilarityTierBase {
 		t.Fatalf("expected second candidate to be snapC (base tier), got %+v", simItems[1])
 	}
-	if (*simAllCounts)[snapA] != 20 || (*simAllCounts)[snapB] != 1 || (*simAllCounts)[snapC] != 2 {
+	if simAllCounts[snapA] != 20 || simAllCounts[snapB] != 1 || simAllCounts[snapC] != 2 {
 		t.Fatalf("expected global counts {A:20, B:1, C:2}, got %+v", simAllCounts)
 	}
-	if simStats == nil || *(*simStats)[snapA].Kd.Value != 2.0 {
+	if simStats == nil || *simStats[snapA].Kd.Value != 2.0 {
 		t.Fatalf("expected target KD 2.0 in GetSimilarSnapshots stats, got %+v", simStats)
 	}
 	if manifestMock.getItemCalls != 0 {
@@ -334,7 +334,7 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSimilarSnapshots(gameMode=trials) failed: %v", err)
 	}
-	if trialsStats == nil || trialsCounts == nil || (*trialsCounts)[snapA] != 5 || (*trialsCounts)[snapB] != 0 || (*trialsCounts)[snapC] != 2 {
+	if trialsStats == nil || trialsCounts == nil || trialsCounts[snapA] != 5 || trialsCounts[snapB] != 0 || trialsCounts[snapC] != 2 {
 		t.Fatalf("expected Trials counts {A:5, B:0, C:2}, got %+v", trialsCounts)
 	}
 

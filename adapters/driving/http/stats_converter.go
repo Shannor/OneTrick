@@ -28,3 +28,28 @@ func ToSimilarSnapshotsParams(request api.GetSimilarSnapshotsRequestObject) stat
 		GameMode:     gameMode,
 	}
 }
+
+func ToAPISimilarSnapshotsResponse(
+	target api.CharacterSnapshot,
+	items []api.SimilarSnapshotItem,
+	statsMap map[string]api.PlayerStats,
+	countsMap map[string]int,
+) api.GetSimilarSnapshots200JSONResponse {
+	if items == nil {
+		items = []api.SimilarSnapshotItem{}
+	}
+	var statsPtr *map[string]api.PlayerStats
+	if statsMap != nil {
+		statsPtr = &statsMap
+	}
+	var countsPtr *map[string]int
+	if countsMap != nil {
+		countsPtr = &countsMap
+	}
+	return api.GetSimilarSnapshots200JSONResponse{
+		Target: target,
+		Items:  items,
+		Stats:  statsPtr,
+		Count:  countsPtr,
+	}
+}

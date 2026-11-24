@@ -26,7 +26,7 @@ type Service interface {
 
 	GetBestPerformingLoadouts(ctx context.Context, characterID string, gameMode *api.GameMode, limit int, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
 	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameMode *api.GameMode, minimumGames int, sortBy string, includeStats bool, hasSimilar bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error)
-	GetSimilarSnapshots(ctx context.Context, params SimilarSnapshotsParams) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error)
+	GetSimilarSnapshots(ctx context.Context, params SimilarSnapshotsParams) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, map[string]api.PlayerStats, map[string]int, error)
 
 	GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error)
 }
@@ -397,7 +397,7 @@ func (s *service) GetSnapshotsWithMetrics(
 func (s *service) GetSimilarSnapshots(
 	ctx context.Context,
 	params SimilarSnapshotsParams,
-) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error) {
+) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, map[string]api.PlayerStats, map[string]int, error) {
 	if params.SnapshotID == "" {
 		return nil, nil, nil, nil, snapshot.NotFound
 	}
@@ -443,7 +443,7 @@ func (s *service) GetSimilarSnapshots(
 		aggStats, aggCounts := summarizeCharacterMatchStats(matchStats)
 		cMap := map[string]int{target.ID: aggCounts[target.ID]}
 		psMap := map[string]api.PlayerStats{target.ID: buildPlayerStats(aggStats[target.ID], aggCounts[target.ID])}
-		return target, []api.SimilarSnapshotItem{}, &psMap, &cMap, nil
+		return target, []api.SimilarSnapshotItem{}, psMap, cMap, nil
 	}
 
 	var (
@@ -551,7 +551,7 @@ func (s *service) GetSimilarSnapshots(
 		psMap[item.Snapshot.ID] = buildPlayerStats(aggStats[item.Snapshot.ID], c)
 	}
 
-	return target, items, &psMap, &cMap, nil
+	return target, items, psMap, cMap, nil
 }
 
 func (s *service) batchResolveItemTiers(
