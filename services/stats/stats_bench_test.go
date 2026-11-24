@@ -7,6 +7,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/snapshot"
+	"oneTrick/utils"
 	"os"
 	"strconv"
 	"testing"
@@ -165,6 +166,16 @@ func legacySummarizeAggregates(aggs []api.Aggregate, characterID string) (map[st
 	return stats, counts
 }
 
+func legacyGetAggregatesByCharacterID(ctx context.Context, db *firestore.Client, characterID string) ([]api.Aggregate, error) {
+	aggDocs, err := db.Collection(aggregatesCollection).
+		Where("characterIds", "array-contains", characterID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	return utils.GetAllToStructs[api.Aggregate](aggDocs)
+}
+
 func BenchmarkSummarize600Matches(b *testing.B) {
 	const numMatches = 600
 	const numSnaps = 40
@@ -172,17 +183,17 @@ func BenchmarkSummarize600Matches(b *testing.B) {
 	now := time.Now().UTC()
 
 	aggs := make([]api.Aggregate, numMatches)
-	matches := make([]characterMatchStat, numMatches)
+	matches := make([]CharacterMatchStat, numMatches)
 	for i := 0; i < numMatches; i++ {
 		snapID := fmt.Sprintf("snap-%02d", i%numSnaps)
 		aggs[i] = buildRealisticAggregate(fmt.Sprintf("agg-%04d", i), charID, snapID, i, now)
 		ps := aggs[i].Performance[charID].PlayerStats
-		matches[i] = characterMatchStat{
-			snapshotID: snapID,
-			kills:      int(*ps.Kills.Value),
-			deaths:     int(*ps.Deaths.Value),
-			assists:    int(*ps.Assists.Value),
-			won:        *ps.Standing.Value == 0,
+		matches[i] = CharacterMatchStat{
+			SnapshotID: snapID,
+			Kills:      int(*ps.Kills.Value),
+			Deaths:     int(*ps.Deaths.Value),
+			Assists:    int(*ps.Assists.Value),
+			Won:        *ps.Standing.Value == 0,
 		}
 	}
 
@@ -196,7 +207,7 @@ func BenchmarkSummarize600Matches(b *testing.B) {
 		}
 	})
 
-	b.Run("projected_characterMatchStat", func(b *testing.B) {
+	b.Run("projected_CharacterMatchStat", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			st, cnt := summarizeCharacterMatchStats(matches)
@@ -229,7 +240,6 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 
 	snapIDs := make([]string, numSnaps)
 	aggIDs := make([]string, numAggs)
-
 	b.Cleanup(func() {
 		bw := db.BulkWriter(context.Background())
 		for _, id := range snapIDs {
@@ -272,8 +282,8 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 
 	aggSvc := aggregate.NewService(db)
 	snapSvc := snapshot.NewService(db, nil, nil, aggSvc)
-	statsSvc := NewService(db, snapSvc, nil, nil).(*service)
-	store := newFirestoreStatsStore(db)
+	store := NewFirestoreStore(db)
+	statsSvc := NewService(db, store, snapSvc, nil, nil)
 
 	fullSampleDocs, err := db.Collection(aggregatesCollection).Where("characterIds", "array-contains", charID).Limit(1).Documents(ctx).GetAll()
 	if err != nil || len(fullSampleDocs) == 0 {
@@ -281,7 +291,7 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 	}
 	fullJSON, _ := json.Marshal(fullSampleDocs[0].Data())
 
-	projSampleDocs, err := store.buildCharacterMatchStatsQuery(charID, nil).Limit(1).Documents(ctx).GetAll()
+	projSampleDocs, err := store.buildCharacterMatchStatsQuery(charID, "").Limit(1).Documents(ctx).GetAll()
 	if err != nil || len(projSampleDocs) == 0 {
 		b.Fatalf("failed reading sample projected doc: %v", err)
 	}
@@ -293,7 +303,7 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			aggs, err := statsSvc.GetAggregatesByCharacterID(ctx, charID, nil)
+			aggs, err := legacyGetAggregatesByCharacterID(ctx, db, charID)
 			if err != nil || len(aggs) != numAggs {
 				b.Fatalf("expected %d aggs, got %d err=%v", numAggs, len(aggs), err)
 			}
@@ -306,7 +316,7 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ms, err := store.listCharacterMatchStats(ctx, charID, nil)
+			ms, err := store.ListCharacterMatchStats(ctx, charID, "")
 			if err != nil || len(ms) != numAggs {
 				b.Fatalf("expected %d matchStats, got %d err=%v", numAggs, len(ms), err)
 			}
@@ -324,7 +334,7 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 				b.Fatal(err)
 			}
 			_, _ = ComputeSimilarCounts(allSnaps)
-			aggs, err := statsSvc.GetAggregatesByCharacterID(ctx, charID, nil)
+			aggs, err := legacyGetAggregatesByCharacterID(ctx, db, charID)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -347,7 +357,7 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			aggs, err := statsSvc.GetAggregatesByCharacterID(ctx, charID, nil)
+			aggs, err := legacyGetAggregatesByCharacterID(ctx, db, charID)
 			if err != nil {
 				b.Fatal(err)
 			}

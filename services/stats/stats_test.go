@@ -726,7 +726,7 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 
 	aggSvc := aggregate.NewService(db)
 	snapSvc := snapshot.NewService(db, nil, nil, aggSvc)
-	statsSvc := NewService(db, snapSvc, nil, manifestMock)
+	statsSvc := NewService(db, NewFirestoreStore(db), snapSvc, nil, manifestMock)
 
 	// 1. Critical Regression Test: minimumGames = 5, hasSimilar = false
 	// Loadout B (1 game) and C (2 games) are filtered out by minimumGames=5, yet Loadout A MUST still report similarCounts[A] == 2!
@@ -818,15 +818,17 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 }
 
 type fakeStatsStore struct {
-	matches           []characterMatchStat
-	err               error
-	fn                func(ctx context.Context, characterID string, gameMode *api.GameMode) ([]characterMatchStat, error)
-	calls             atomic.Int32
-	capturedCharID    string
-	capturedGameMode  *api.GameMode
+	matches          []CharacterMatchStat
+	err              error
+	fn               func(ctx context.Context, characterID string, gameMode string) ([]CharacterMatchStat, error)
+	calls            atomic.Int32
+	capturedCharID   string
+	capturedGameMode string
 }
 
-func (f *fakeStatsStore) listCharacterMatchStats(ctx context.Context, characterID string, gameMode *api.GameMode) ([]characterMatchStat, error) {
+var _ Store = (*fakeStatsStore)(nil)
+
+func (f *fakeStatsStore) ListCharacterMatchStats(ctx context.Context, characterID string, gameMode string) ([]CharacterMatchStat, error) {
 	f.calls.Add(1)
 	f.capturedCharID = characterID
 	f.capturedGameMode = gameMode
@@ -885,9 +887,7 @@ func (f *fakeSnapshotService) GetByIDs(ctx context.Context, ids []string) ([]api
 }
 
 func TestGetBestPerformingLoadoutsEmpty(t *testing.T) {
-	s := &service{
-		store: &fakeStatsStore{},
-	}
+	s := NewService(nil, &fakeStatsStore{}, nil, nil, nil)
 	loadouts, perfStats, counts, err := s.GetBestPerformingLoadouts(context.Background(), "char-1", nil, 3, 10)
 	if err != nil {
 		t.Fatalf("expected nil error when no loadouts found, got %v", err)
@@ -898,59 +898,125 @@ func TestGetBestPerformingLoadoutsEmpty(t *testing.T) {
 }
 
 func TestGetBestPerformingLoadoutsWithFakeStore(t *testing.T) {
-	mode := api.GameModeTrials
-	store := &fakeStatsStore{
-		matches: []characterMatchStat{
-			// snap-top: 2 games, 30 kills, 10 deaths (3.0 KD), 1 win -> passes minGames=2
-			{snapshotID: "snap-top", kills: 20, deaths: 5, assists: 4, won: true},
-			{snapshotID: "snap-top", kills: 10, deaths: 5, assists: 2, won: false},
-			// snap-zero-partial: 2 games with zero/missing stats (e.g. nil PlayerStats fields) -> must not panic
-			{snapshotID: "snap-zero-partial", kills: 0, deaths: 0, assists: 0, won: false},
-			{snapshotID: "snap-zero-partial", kills: 4, deaths: 2, assists: 0, won: false},
-			// snap-archived: 2 games, 100 kills, 1 death (100 KD) -> should be stripped as archived
-			{snapshotID: "snap-archived", kills: 50, deaths: 1, assists: 0, won: true},
-			{snapshotID: "snap-archived", kills: 50, deaths: 0, assists: 0, won: true},
-			// snap-below-min: 1 game -> filtered out by minimumGames=2
-			{snapshotID: "snap-below-min", kills: 99, deaths: 1, assists: 0, won: true},
-			// blank snapshotID ignored
-			{snapshotID: "", kills: 50, deaths: 1, assists: 0, won: true},
-		},
-	}
-	snaps := &fakeSnapshotService{
-		byID: map[string]*api.CharacterSnapshot{
-			"snap-top":          {ID: "snap-top", Name: "Top"},
-			"snap-zero-partial": {ID: "snap-zero-partial", Name: "Partial"},
-			"snap-archived":     {ID: "snap-archived", Name: "Archived", MergedIntoID: new("snap-top")},
-			"snap-below-min":    {ID: "snap-below-min", Name: "BelowMin"},
-		},
-	}
-	s := &service{
-		store:           store,
-		snapshotService: snaps,
-	}
+	t.Run("filters min games, archived, deleted snapshots, and backfills to limit without orphaned map keys", func(t *testing.T) {
+		mode := api.GameModeTrials
+		store := &fakeStatsStore{
+			matches: []CharacterMatchStat{
+				// snap-archived: 2 games, 100 KD -> ranked #1, archived
+				{SnapshotID: "snap-archived", Kills: 50, Deaths: 1, Assists: 0, Won: true},
+				{SnapshotID: "snap-archived", Kills: 50, Deaths: 0, Assists: 0, Won: true},
+				// snap-deleted: 2 games, 20 KD -> ranked #2, missing from snapshot store (omitted by GetByIDs)
+				{SnapshotID: "snap-deleted", Kills: 20, Deaths: 1, Assists: 0, Won: true},
+				{SnapshotID: "snap-deleted", Kills: 20, Deaths: 1, Assists: 0, Won: true},
+				// snap-top: 2 games, 30 kills, 10 deaths (3.0 KD), 1 win -> ranked #3 (1st active)
+				{SnapshotID: "snap-top", Kills: 20, Deaths: 5, Assists: 4, Won: true},
+				{SnapshotID: "snap-top", Kills: 10, Deaths: 5, Assists: 2, Won: false},
+				// snap-zero-partial: 2 games, 4 kills, 2 deaths (2.0 KD) -> ranked #4 (2nd active, outside initial limit=2 slice)
+				{SnapshotID: "snap-zero-partial", Kills: 0, Deaths: 0, Assists: 0, Won: false},
+				{SnapshotID: "snap-zero-partial", Kills: 4, Deaths: 2, Assists: 0, Won: false},
+				// snap-third-active: 2 games, 2 kills, 2 deaths (1.0 KD) -> ranked #5 (should not be returned when limit=2)
+				{SnapshotID: "snap-third-active", Kills: 1, Deaths: 1, Assists: 0, Won: false},
+				{SnapshotID: "snap-third-active", Kills: 1, Deaths: 1, Assists: 0, Won: false},
+				// snap-below-min: 1 game -> filtered out by minimumGames=2
+				{SnapshotID: "snap-below-min", Kills: 99, Deaths: 1, Assists: 0, Won: true},
+				// blank snapshotID ignored
+				{SnapshotID: "", Kills: 50, Deaths: 1, Assists: 0, Won: true},
+			},
+		}
+		snaps := &fakeSnapshotService{
+			byID: map[string]*api.CharacterSnapshot{
+				"snap-top":          {ID: "snap-top", Name: "Top"},
+				"snap-zero-partial": {ID: "snap-zero-partial", Name: "Partial"},
+				"snap-third-active": {ID: "snap-third-active", Name: "Third"},
+				"snap-archived":     {ID: "snap-archived", Name: "Archived", MergedIntoID: new("snap-top")},
+				"snap-below-min":    {ID: "snap-below-min", Name: "BelowMin"},
+			},
+		}
+		s := NewService(nil, store, snaps, nil, nil)
 
-	loadouts, perfStats, counts, err := s.GetBestPerformingLoadouts(context.Background(), "char-1", &mode, 3, 2)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if store.capturedCharID != "char-1" || store.capturedGameMode == nil || *store.capturedGameMode != api.GameModeTrials {
-		t.Fatalf("expected store called with char-1 and trials mode, got char=%q mode=%v", store.capturedCharID, store.capturedGameMode)
-	}
-	if len(loadouts) != 2 || loadouts[0].ID != "snap-top" || loadouts[1].ID != "snap-zero-partial" {
-		t.Fatalf("expected [snap-top, snap-zero-partial], got %+v", loadouts)
-	}
-	if _, archivedPresent := perfStats["snap-archived"]; archivedPresent {
-		t.Fatalf("expected archived snapshot removed from perfStats")
-	}
-	if _, archivedCountPresent := counts["snap-archived"]; archivedCountPresent {
-		t.Fatalf("expected archived snapshot removed from counts")
-	}
-	if counts["snap-top"] != 2 || *perfStats["snap-top"].Kd.Value != 3.0 || *perfStats["snap-top"].Standing.Value != 0.5 {
-		t.Fatalf("unexpected snap-top stats: count=%d stats=%+v", counts["snap-top"], perfStats["snap-top"])
-	}
-	if counts["snap-zero-partial"] != 2 || *perfStats["snap-zero-partial"].Kd.Value != 2.0 || *perfStats["snap-zero-partial"].Standing.Value != 0.0 {
-		t.Fatalf("unexpected snap-zero-partial stats: count=%d stats=%+v", counts["snap-zero-partial"], perfStats["snap-zero-partial"])
-	}
+		loadouts, perfStats, counts, err := s.GetBestPerformingLoadouts(context.Background(), "char-1", &mode, 2, 2)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if store.capturedCharID != "char-1" || store.capturedGameMode != string(api.GameModeTrials) {
+			t.Fatalf("expected store called with char-1 and trials mode, got char=%q mode=%q", store.capturedCharID, store.capturedGameMode)
+		}
+		if len(loadouts) != 2 || loadouts[0].ID != "snap-top" || loadouts[1].ID != "snap-zero-partial" {
+			t.Fatalf("expected [snap-top, snap-zero-partial], got %+v", loadouts)
+		}
+		if len(perfStats) != 2 || len(counts) != 2 {
+			t.Fatalf("expected stats/counts maps to contain only surviving loadouts, got len(stats)=%d len(counts)=%d", len(perfStats), len(counts))
+		}
+		for _, excluded := range []string{"snap-archived", "snap-deleted", "snap-third-active", "snap-below-min"} {
+			if _, ok := perfStats[excluded]; ok {
+				t.Fatalf("expected %s excluded from perfStats", excluded)
+			}
+			if _, ok := counts[excluded]; ok {
+				t.Fatalf("expected %s excluded from counts", excluded)
+			}
+		}
+		if counts["snap-top"] != 2 || *perfStats["snap-top"].Kd.Value != 3.0 || *perfStats["snap-top"].Standing.Value != 0.5 {
+			t.Fatalf("unexpected snap-top stats: count=%d stats=%+v", counts["snap-top"], perfStats["snap-top"])
+		}
+		if counts["snap-zero-partial"] != 2 || *perfStats["snap-zero-partial"].Kd.Value != 2.0 || *perfStats["snap-zero-partial"].Standing.Value != 0.0 {
+			t.Fatalf("unexpected snap-zero-partial stats: count=%d stats=%+v", counts["snap-zero-partial"], perfStats["snap-zero-partial"])
+		}
+	})
+
+	t.Run("walks multiple GetByIDs batches when more than 10 leading candidates are archived or deleted", func(t *testing.T) {
+		matches := make([]CharacterMatchStat, 0, 14)
+		byID := make(map[string]*api.CharacterSnapshot, 14)
+
+		for i := 0; i < 11; i++ {
+			id := fmt.Sprintf("snap-skip-%02d", i)
+			matches = append(matches, CharacterMatchStat{SnapshotID: id, Kills: 100 - i, Deaths: 1, Won: true})
+			if i%2 == 0 {
+				byID[id] = &api.CharacterSnapshot{ID: id, MergedIntoID: new("snap-active-1")}
+			}
+		}
+		matches = append(matches,
+			CharacterMatchStat{SnapshotID: "snap-active-1", Kills: 10, Deaths: 2, Won: true},
+			CharacterMatchStat{SnapshotID: "snap-active-2", Kills: 8, Deaths: 2, Won: false},
+			CharacterMatchStat{SnapshotID: "snap-active-3", Kills: 6, Deaths: 2, Won: false},
+		)
+		byID["snap-active-1"] = &api.CharacterSnapshot{ID: "snap-active-1", Name: "Active 1"}
+		byID["snap-active-2"] = &api.CharacterSnapshot{ID: "snap-active-2", Name: "Active 2"}
+		byID["snap-active-3"] = &api.CharacterSnapshot{ID: "snap-active-3", Name: "Active 3"}
+
+		var batchCalls int
+		snaps := &fakeSnapshotService{
+			byID: byID,
+			getByIDsFn: func(_ context.Context, ids []string) ([]api.CharacterSnapshot, error) {
+				batchCalls++
+				out := make([]api.CharacterSnapshot, 0, len(ids))
+				for i := len(ids) - 1; i >= 0; i-- {
+					if s, ok := byID[ids[i]]; ok {
+						out = append(out, *s)
+					}
+				}
+				return out, nil
+			},
+		}
+		store := &fakeStatsStore{matches: matches}
+		s := NewService(nil, store, snaps, nil, nil)
+
+		loadouts, perfStats, counts, err := s.GetBestPerformingLoadouts(context.Background(), "char-1", new(api.GameModeAll), 2, 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if store.capturedGameMode != "" {
+			t.Fatalf("expected allGameModes normalized to empty string, got %q", store.capturedGameMode)
+		}
+		if batchCalls != 2 {
+			t.Fatalf("expected 2 GetByIDs batch calls, got %d", batchCalls)
+		}
+		if len(loadouts) != 2 || loadouts[0].ID != "snap-active-1" || loadouts[1].ID != "snap-active-2" {
+			t.Fatalf("expected [snap-active-1, snap-active-2] in ranked order, got %+v", loadouts)
+		}
+		if len(perfStats) != 2 || len(counts) != 2 || counts["snap-active-1"] != 1 || counts["snap-active-2"] != 1 {
+			t.Fatalf("unexpected stats/counts maps: stats=%+v counts=%+v", perfStats, counts)
+		}
+	})
 }
 
 func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
@@ -976,13 +1042,13 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 			},
 		}
 		store := &fakeStatsStore{
-			fn: func(ctx context.Context, _ string, _ *api.GameMode) ([]characterMatchStat, error) {
+			fn: func(ctx context.Context, _ string, _ string) ([]CharacterMatchStat, error) {
 				close(storeStarted)
 				select {
 				case <-snapStarted:
-					return []characterMatchStat{
-						{snapshotID: "snap-1", kills: 20, deaths: 5, assists: 4, won: true},
-						{snapshotID: "snap-2", kills: 5, deaths: 10, assists: 1, won: false},
+					return []CharacterMatchStat{
+						{SnapshotID: "snap-1", Kills: 20, Deaths: 5, Assists: 4, Won: true},
+						{SnapshotID: "snap-2", Kills: 5, Deaths: 10, Assists: 1, Won: false},
 					}, nil
 				case <-time.After(2 * time.Second):
 					return nil, errors.New("timed out waiting for snapshot query to run concurrently")
@@ -990,7 +1056,7 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 			},
 		}
 
-		svc := &service{store: store, snapshotService: snaps}
+		svc := NewService(nil, store, snaps, nil, nil)
 		items, statsMap, countsMap, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "kd_ratio", true, false, 10, 0)
 		if err != nil {
 			t.Fatalf("GetSnapshotsWithMetrics failed: %v", err)
@@ -1006,7 +1072,7 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 	t.Run("fast path skips statsStore when needsAggs is false and sortBy is created_at", func(t *testing.T) {
 		store := &fakeStatsStore{}
 		snaps := &fakeSnapshotService{all: baseSnaps}
-		svc := &service{store: store, snapshotService: snaps}
+		svc := NewService(nil, store, snaps, nil, nil)
 
 		items, statsMap, countsMap, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "created_at", false, false, 10, 0)
 		if err != nil {
@@ -1029,7 +1095,7 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 			},
 		}
 		store := &fakeStatsStore{err: wantErr}
-		svc := &service{store: store, snapshotService: snaps}
+		svc := NewService(nil, store, snaps, nil, nil)
 
 		_, _, _, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "kd_ratio", true, false, 10, 0)
 		if !errors.Is(err, wantErr) {
@@ -1072,13 +1138,13 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 			},
 		}
 		store := &fakeStatsStore{
-			fn: func(ctx context.Context, _ string, _ *api.GameMode) ([]characterMatchStat, error) {
+			fn: func(ctx context.Context, _ string, _ string) ([]CharacterMatchStat, error) {
 				close(storeStarted)
 				select {
 				case <-snapStarted:
-					return []characterMatchStat{
-						{snapshotID: target.ID, kills: 12, deaths: 6, assists: 3, won: true},
-						{snapshotID: cand.ID, kills: 10, deaths: 5, assists: 2, won: false},
+					return []CharacterMatchStat{
+						{SnapshotID: target.ID, Kills: 12, Deaths: 6, Assists: 3, Won: true},
+						{SnapshotID: cand.ID, Kills: 10, Deaths: 5, Assists: 2, Won: false},
 					}, nil
 				case <-time.After(2 * time.Second):
 					return nil, errors.New("timed out waiting for GetAllByCharacter in GetSimilarSnapshots")
@@ -1086,7 +1152,7 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 			},
 		}
 
-		svc := &service{store: store, snapshotService: snaps}
+		svc := NewService(nil, store, snaps, nil, nil)
 		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), target.ID)
 		if err != nil {
 			t.Fatalf("GetSimilarSnapshots failed: %v", err)
@@ -1110,11 +1176,11 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 			byID: map[string]*api.CharacterSnapshot{archived.ID: archived},
 		}
 		store := &fakeStatsStore{
-			matches: []characterMatchStat{
-				{snapshotID: archived.ID, kills: 8, deaths: 4, assists: 2, won: true},
+			matches: []CharacterMatchStat{
+				{SnapshotID: archived.ID, Kills: 8, Deaths: 4, Assists: 2, Won: true},
 			},
 		}
-		svc := &service{store: store, snapshotService: snaps}
+		svc := NewService(nil, store, snaps, nil, nil)
 		gotTarget, items, statsMap, countsMap, err := svc.GetSimilarSnapshots(context.Background(), archived.ID)
 		if err != nil {
 			t.Fatalf("GetSimilarSnapshots(archived) failed: %v", err)

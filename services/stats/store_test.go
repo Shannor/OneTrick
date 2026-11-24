@@ -254,10 +254,39 @@ func TestFirestoreEmulatorStatsStoreProjectionAndNilPlayerStats(t *testing.T) {
 		},
 	})
 
-	store := newFirestoreStatsStore(db)
+	// 6. Explicit performance.<charID>.playerStats: null -> must be treated as missing performance, not a 0/0/0 loss
+	nullPlayerStatsDocID := runID + "-agg-null-player-stats"
+	if _, err := db.Collection("aggregates").Doc(nullPlayerStatsDocID).Set(ctx, map[string]any{
+		"id":           nullPlayerStatsDocID,
+		"activityId":   "act-6",
+		"characterIds": []string{charID},
+		"snapshotIds":  []string{snapGood},
+		"createdAt":    now,
+		"activityHistory": map[string]any{
+			"instanceId":        "act-6",
+			"period":            now,
+			"estimatedGameMode": string(api.GameModeTrials),
+		},
+		"snapshotLinks": map[string]any{
+			charID: map[string]any{
+				"characterId": charID,
+				"snapshotId":  snapGood,
+			},
+		},
+		"performance": map[string]any{
+			charID: map[string]any{
+				"playerStats": nil,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("failed seeding null-playerStats aggregate: %v", err)
+	}
+	aggIDs = append(aggIDs, nullPlayerStatsDocID)
+
+	store := NewFirestoreStore(db)
 
 	// Verify SelectPaths actually omits unprojected fields from the wire DocumentSnapshot.
-	projDocs, err := store.buildCharacterMatchStatsQuery(charID, new(api.GameModeTrials)).Documents(ctx).GetAll()
+	projDocs, err := store.buildCharacterMatchStatsQuery(charID, string(api.GameModeTrials)).Documents(ctx).GetAll()
 	if err != nil {
 		t.Fatalf("projected query failed: %v", err)
 	}
@@ -310,28 +339,28 @@ func TestFirestoreEmulatorStatsStoreProjectionAndNilPlayerStats(t *testing.T) {
 		t.Fatalf("expected to find seeded rich Trials doc in projected query")
 	}
 
-	// Verify listCharacterMatchStats with all modes returns 3 valid matches (skipping unlinked & missing perf).
-	allMatches, err := store.listCharacterMatchStats(ctx, charID, new(api.GameModeAll))
+	// Verify ListCharacterMatchStats with empty mode returns 3 valid matches (skipping unlinked, missing perf, and explicit playerStats: null).
+	allMatches, err := store.ListCharacterMatchStats(ctx, charID, "")
 	if err != nil {
-		t.Fatalf("listCharacterMatchStats(allGameModes) failed: %v", err)
+		t.Fatalf("ListCharacterMatchStats(\"\") failed: %v", err)
 	}
 	if len(allMatches) != 3 {
 		t.Fatalf("expected 3 valid projected match stats, got %d: %+v", len(allMatches), allMatches)
 	}
 
-	// Verify Trials mode filter returns only the 1 valid Trials match.
-	trialsMatches, err := store.listCharacterMatchStats(ctx, charID, new(api.GameModeTrials))
+	// Verify Trials mode filter returns only the 1 valid Trials match (and skips explicit playerStats: null).
+	trialsMatches, err := store.ListCharacterMatchStats(ctx, charID, string(api.GameModeTrials))
 	if err != nil {
-		t.Fatalf("listCharacterMatchStats(trials) failed: %v", err)
+		t.Fatalf("ListCharacterMatchStats(trials) failed: %v", err)
 	}
-	if len(trialsMatches) != 1 || trialsMatches[0].snapshotID != snapGood || trialsMatches[0].kills != 15 || trialsMatches[0].deaths != 5 || trialsMatches[0].assists != 4 || !trialsMatches[0].won {
+	if len(trialsMatches) != 1 || trialsMatches[0].SnapshotID != snapGood || trialsMatches[0].Kills != 15 || trialsMatches[0].Deaths != 5 || trialsMatches[0].Assists != 4 || !trialsMatches[0].Won {
 		t.Fatalf("unexpected Trials match stats: %+v", trialsMatches)
 	}
 
 	// Verify end-to-end GetBestPerformingLoadouts handles nil PlayerStats without panicking and does NOT count nil Standing as a win.
 	aggSvc := aggregate.NewService(db)
 	snapSvc := snapshot.NewService(db, nil, nil, aggSvc)
-	statsSvc := NewService(db, snapSvc, nil, nil)
+	statsSvc := NewService(db, store, snapSvc, nil, nil)
 
 	loadouts, perfStats, counts, err := statsSvc.GetBestPerformingLoadouts(ctx, charID, new(api.GameModeAll), 5, 1)
 	if err != nil {
@@ -339,6 +368,9 @@ func TestFirestoreEmulatorStatsStoreProjectionAndNilPlayerStats(t *testing.T) {
 	}
 	if len(loadouts) != 2 || loadouts[0].ID != snapGood || loadouts[1].ID != snapPartial {
 		t.Fatalf("expected [snapGood (3.0 KD), snapPartial (2.0 KD)], got %+v", loadouts)
+	}
+	if counts[snapGood] != 1 {
+		t.Fatalf("expected 1 counted game for snapGood (excluding null playerStats doc), got %d", counts[snapGood])
 	}
 	if counts[snapPartial] != 2 {
 		t.Fatalf("expected 2 counted games for snapPartial, got %d", counts[snapPartial])

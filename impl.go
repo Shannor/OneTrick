@@ -380,7 +380,7 @@ func (s Server) GetBestPerformingLoadouts(ctx context.Context, request api.GetBe
 	if request.Params.GameMode != nil {
 		clog.WithGroupField(ctx, "request", "gameMode", string(*request.Params.GameMode))
 	}
-	result, performanceStats, counts, err := s.StatsService.GetBestPerformingLoadouts(ctx, characterID, request.Params.GameMode, int8(count), minimumGames)
+	result, performanceStats, counts, err := s.StatsService.GetBestPerformingLoadouts(ctx, characterID, request.Params.GameMode, count, minimumGames)
 	if err != nil {
 		return api.GetBestPerformingLoadouts200JSONResponse{}, err
 	}

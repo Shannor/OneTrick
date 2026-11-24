@@ -4,36 +4,32 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"oneTrick/api"
 
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
 	"google.golang.org/api/iterator"
 )
 
-type characterMatchStat struct {
-	snapshotID string
-	kills      int
-	deaths     int
-	assists    int
-	won        bool
+type CharacterMatchStat struct {
+	SnapshotID string
+	Kills      int
+	Deaths     int
+	Assists    int
+	Won        bool
 }
 
-type statsStore interface {
-	listCharacterMatchStats(ctx context.Context, characterID string, gameMode *api.GameMode) ([]characterMatchStat, error)
+type Store interface {
+	ListCharacterMatchStats(ctx context.Context, characterID string, gameMode string) ([]CharacterMatchStat, error)
 }
 
-type firestoreStatsStore struct {
+type FirestoreStore struct {
 	db *firestore.Client
 }
 
-var _ statsStore = (*firestoreStatsStore)(nil)
+var _ Store = (*FirestoreStore)(nil)
 
-func newFirestoreStatsStore(db *firestore.Client) *firestoreStatsStore {
-	if db == nil {
-		return nil
-	}
-	return &firestoreStatsStore{db: db}
+func NewFirestoreStore(db *firestore.Client) *FirestoreStore {
+	return &FirestoreStore{db: db}
 }
 
 type projectedStatsAggregateDoc struct {
@@ -46,7 +42,7 @@ type projectedSnapshotLinkDoc struct {
 }
 
 type projectedPerformanceDoc struct {
-	PlayerStats projectedPlayerStatsDoc `firestore:"playerStats"`
+	PlayerStats *projectedPlayerStatsDoc `firestore:"playerStats"`
 }
 
 type projectedPlayerStatsDoc struct {
@@ -64,12 +60,12 @@ type projectedOptionalStatValueDoc struct {
 	Value *float64 `firestore:"value"`
 }
 
-func (f *firestoreStatsStore) buildCharacterMatchStatsQuery(characterID string, gameMode *api.GameMode) firestore.Query {
+func (f *FirestoreStore) buildCharacterMatchStatsQuery(characterID string, gameMode string) firestore.Query {
 	q := f.db.Collection(aggregatesCollection).
 		Where("characterIds", "array-contains", characterID)
 
-	if hasGameModeFilter(gameMode) {
-		q = q.Where("activityHistory.estimatedGameMode", "==", string(*gameMode))
+	if gameMode != "" {
+		q = q.Where("activityHistory.estimatedGameMode", "==", gameMode)
 	}
 
 	return q.SelectPaths(
@@ -78,7 +74,7 @@ func (f *firestoreStatsStore) buildCharacterMatchStatsQuery(characterID string, 
 	)
 }
 
-func (f *firestoreStatsStore) listCharacterMatchStats(ctx context.Context, characterID string, gameMode *api.GameMode) ([]characterMatchStat, error) {
+func (f *FirestoreStore) ListCharacterMatchStats(ctx context.Context, characterID string, gameMode string) ([]CharacterMatchStat, error) {
 	if characterID == "" {
 		return nil, fmt.Errorf("characterID is required")
 	}
@@ -87,14 +83,14 @@ func (f *firestoreStatsStore) listCharacterMatchStats(ctx context.Context, chara
 	}
 
 	clog.WithGroupField(ctx, "statsStore.listCharacterMatchStats", "characterId", characterID)
-	if hasGameModeFilter(gameMode) {
-		clog.WithGroupField(ctx, "statsStore.listCharacterMatchStats", "gameMode", string(*gameMode))
+	if gameMode != "" {
+		clog.WithGroupField(ctx, "statsStore.listCharacterMatchStats", "gameMode", gameMode)
 	}
 
 	iter := f.buildCharacterMatchStatsQuery(characterID, gameMode).Documents(ctx)
 	defer iter.Stop()
 
-	results := make([]characterMatchStat, 0, 64)
+	results := make([]CharacterMatchStat, 0, 64)
 	scanned := 0
 	missingPerf := 0
 
@@ -136,31 +132,31 @@ const (
 	decodeStatusOK
 )
 
-func decodeProjectedCharacterMatchStat(doc *firestore.DocumentSnapshot, characterID string) (characterMatchStat, decodeStatus, error) {
+func decodeProjectedCharacterMatchStat(doc *firestore.DocumentSnapshot, characterID string) (CharacterMatchStat, decodeStatus, error) {
 	var p projectedStatsAggregateDoc
 	if err := doc.DataTo(&p); err != nil {
-		return characterMatchStat{}, decodeStatusSkip, fmt.Errorf("decode projected aggregate %s: %w", doc.Ref.ID, err)
+		return CharacterMatchStat{}, decodeStatusSkip, fmt.Errorf("decode projected aggregate %s: %w", doc.Ref.ID, err)
 	}
 
 	link, hasLink := p.SnapshotLinks[characterID]
 	if !hasLink || link.SnapshotID == "" {
-		return characterMatchStat{}, decodeStatusSkip, nil
+		return CharacterMatchStat{}, decodeStatusSkip, nil
 	}
 
 	perf, hasPerf := p.Performance[characterID]
-	if !hasPerf {
-		return characterMatchStat{}, decodeStatusMissingPerformance, nil
+	if !hasPerf || perf.PlayerStats == nil {
+		return CharacterMatchStat{}, decodeStatusMissingPerformance, nil
 	}
 
 	ps := perf.PlayerStats
 	// Standing == 0 denotes a win in Destiny 2; missing/nil standing must not count as a win.
 	won := ps.Standing.Value != nil && *ps.Standing.Value == 0
 
-	return characterMatchStat{
-		snapshotID: link.SnapshotID,
-		kills:      int(ps.Kills.Value),
-		deaths:     int(ps.Deaths.Value),
-		assists:    int(ps.Assists.Value),
-		won:        won,
+	return CharacterMatchStat{
+		SnapshotID: link.SnapshotID,
+		Kills:      int(ps.Kills.Value),
+		Deaths:     int(ps.Deaths.Value),
+		Assists:    int(ps.Assists.Value),
+		Won:        won,
 	}, decodeStatusOK, nil
 }

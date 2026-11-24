@@ -302,7 +302,7 @@ type mockStatsService struct {
 	capturedHasSimilar   bool
 	capturedCharacterID  string
 	capturedMinimumGames int
-	capturedLimit        int8
+	capturedLimit        int
 	bestLoadouts         []api.CharacterSnapshot
 	bestStats            map[string]api.PlayerStats
 	bestCounts           map[string]int
@@ -319,7 +319,7 @@ func (m *mockStatsService) GetBestPerformingLoadouts(
 	ctx context.Context,
 	characterID string,
 	gameMode *api.GameMode,
-	limit int8,
+	limit int,
 	minimumGames int,
 ) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error) {
 	m.capturedCharacterID = characterID
