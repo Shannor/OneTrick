@@ -1,0 +1,17 @@
+type: object
+required:
+  - userId
+  - characterId
+  - outcome
+  - session
+properties:
+  userId:
+    type: string
+    x-go-name: UserID
+  characterId:
+    type: string
+    x-go-name: CharacterID
+  outcome:
+    $ref: ./FireteamSessionOutcome.yaml
+  session:
+    $ref: ./Session.yaml

@@ -47,6 +47,36 @@ post:
             properties:
               message:
                 type: string
+    '401':
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '403':
+      description: Target user is not in caller's current Bungie fireteam
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '404':
+      description: Caller user not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '500':
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '503':
+      description: Destiny 2 servers are currently unavailable
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
 get:
   parameters:
     - in: path

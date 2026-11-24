@@ -6,21 +6,19 @@
 // (adapters/driven/firestore, adapters/driven/bungie, adapters/driven/cache) and talk
 // directly to external systems rather than wrapping sibling application services.
 //
-// This package intentionally wraps legacy services/user, services/destiny, and
-// services/session (including a temporary api.Character -> core/fireteam.Character
+// This package intentionally wraps legacy services/user and services/destiny
+// (including a temporary api.Character / api.CompRankSnapshot -> core/fireteam
 // double-conversion) ONLY so core/fireteam can stay strictly isolated from api.*,
 // clients/bungie.*, firestore, and legacy services/* while the rest of the codebase
 // migrates incrementally.
 //
 // Migration & Removal Checklist (delete each adapter as its backing domain migrates):
-//   1. NewPartyReader: move into adapters/driven/bungie once Bungie gateway calls are
-//      extracted out of services/destiny.
+//   1. NewPartyReader & NewCompRankReader: move into adapters/driven/bungie once
+//      Bungie gateway calls are extracted out of services/destiny.
 //   2. NewUserReader (+ toCorePlayer / toCoreCharacter): remove once services/user moves
 //      into core/user + adapters/driven/firestore returning pure domain models instead of
 //      api.Character.
-//   3. NewActiveSessionReader: remove once services/session moves into core/session +
-//      adapters/driven/firestore.
-//   4. Delete this entire package once all three backing domains have migrated.
+//   3. Delete this entire package once both backing domains have migrated.
 package fireteam
 
 import (
@@ -29,8 +27,8 @@ import (
 	"fmt"
 	"oneTrick/api"
 	corefireteam "oneTrick/core/fireteam"
+	"oneTrick/ptr"
 	"oneTrick/services/destiny"
-	"oneTrick/services/session"
 	"oneTrick/services/user"
 )
 
@@ -86,39 +84,39 @@ func (a partyReaderAdapter) GetPartyMembershipIDs(ctx context.Context, primaryMe
 	}
 	ids := make([]string, 0, len(members))
 	for _, member := range members {
-		if member.MembershipId == nil {
-			ids = append(ids, "")
-			continue
-		}
-		ids = append(ids, *member.MembershipId)
+		ids = append(ids, ptr.Deref(member.MembershipId))
 	}
 	return ids, nil
 }
 
-type activeSessionReaderAdapter struct {
-	svc session.Service
+type compRankReaderAdapter struct {
+	svc destiny.Service
 }
 
-func NewActiveSessionReader(svc session.Service) corefireteam.ActiveSessionReader {
-	return activeSessionReaderAdapter{svc: svc}
+func NewCompRankReader(svc destiny.Service) corefireteam.CompRankReader {
+	return compRankReaderAdapter{svc: svc}
 }
 
-func (a activeSessionReaderAdapter) GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]corefireteam.ActiveSession, error) {
-	sessions, err := a.svc.GetActiveByUserIDs(ctx, userIDs)
+func (a compRankReaderAdapter) GetCompetitiveRank(
+	ctx context.Context,
+	primaryMembershipID int64,
+	membershipType int64,
+	characterID string,
+) (corefireteam.CompRankSnapshot, bool, error) {
+	snap, err := a.svc.GetCompetitiveRank(ctx, primaryMembershipID, membershipType, characterID)
 	if err != nil {
-		return nil, err
+		return corefireteam.CompRankSnapshot{}, false, err
 	}
-	out := make([]corefireteam.ActiveSession, 0, len(sessions))
-	for _, s := range sessions {
-		out = append(out, corefireteam.ActiveSession{
-			SessionID:   s.SessionID,
-			UserID:      s.UserID,
-			CharacterID: s.CharacterID,
-			StartedAt:   s.StartedAt,
-			TrackComp:   s.TrackComp,
-		})
+	if snap == nil {
+		return corefireteam.CompRankSnapshot{}, false, nil
 	}
-	return out, nil
+	return corefireteam.CompRankSnapshot{
+		Points:       snap.Points,
+		StepIndex:    snap.StepIndex,
+		DivisionName: ptr.Deref(snap.DivisionName),
+		Icon:         ptr.Deref(snap.Icon),
+		RecordedAt:   snap.RecordedAt,
+	}, true, nil
 }
 
 func toCorePlayer(u user.User) corefireteam.Player {

@@ -1,0 +1,11 @@
+type: object
+required:
+  - userId
+  - characterId
+properties:
+  userId:
+    type: string
+    x-go-name: UserID
+  characterId:
+    type: string
+    x-go-name: CharacterID

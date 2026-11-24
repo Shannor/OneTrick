@@ -1,0 +1,60 @@
+post:
+  operationId: StartFireteamSessions
+  description: >-
+    Idempotently start individual sessions for multiple fireteam members.
+    Skips any requested (userId, characterId) pair that already has a pending session.
+  parameters:
+    - $ref: ../components/parameters/X-User-ID.yaml
+    - $ref: ../components/parameters/X-Membership-ID.yaml
+  security:
+    - bearerAuth: []
+  requestBody:
+    description: Fireteam members and characters to start sessions for
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas/StartFireteamSessionsRequest.yaml
+  responses:
+    '200':
+      description: Bulk start results for each requested member
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/StartFireteamSessionsResponse.yaml
+    '400':
+      description: Request is invalid
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '401':
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '403':
+      description: Target user is not in caller's current Bungie fireteam
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '404':
+      description: Caller user not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '500':
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '503':
+      description: Destiny 2 servers are currently unavailable
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

@@ -237,30 +237,38 @@ func (s Server) GetSimilarSnapshots(ctx context.Context, request api.GetSimilarS
 }
 
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {
-	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	if request.Body == nil {
+		return api.StartUserSession400JSONResponse{Message: "body cannot be empty"}, nil
+	}
+	targetUserID := strings.TrimSpace(request.UserID)
+	bodyUserID := strings.TrimSpace(request.Body.UserID)
+	if bodyUserID != "" && bodyUserID != targetUserID {
+		return api.StartUserSession400JSONResponse{Message: "body userId must match path userId"}, nil
+	}
+	if targetUserID == "" {
+		targetUserID = bodyUserID
+	}
+	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupFields(ctx, "request", clog.Fields{
-		"userId":      request.UserID,
+		"userId":      targetUserID,
 		"characterId": request.Body.CharacterID,
 		"trackComp":   trackComp,
 	})
-	if request.Params.XUserID != request.UserID {
-		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
-		// If not block the users from hitting it.
-	}
-	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
+
+	result, err := s.FireteamService.StartSession(
+		ctx,
+		request.Params.XUserID,
+		fireteam.StartSessionTarget{
+			UserID:      targetUserID,
+			CharacterID: request.Body.CharacterID,
+		},
+		trackComp,
+	)
 	if err != nil {
-		return nil, err
+		return httpadapter.ToAPIStartUserSessionError(err), nil
 	}
-	createdBy := api.AuditField{
-		ID:       u.ID,
-		Username: u.DisplayName,
-	}
-	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy, trackComp)
-	if err != nil {
-		return api.StartUserSession400JSONResponse{Message: err.Error()}, nil
-	}
-	return api.StartUserSession201JSONResponse(*result), nil
+	return api.StartUserSession201JSONResponse(httpadapter.ToAPISession(result)), nil
 }
 
 func (s Server) GetUserSessions(ctx context.Context, request api.GetUserSessionsRequestObject) (api.GetUserSessionsResponseObject, error) {
@@ -428,6 +436,33 @@ func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestO
 	return api.GetFireteam200JSONResponse(httpadapter.ToAPIFireteamMembers(members)), nil
 }
 
+func (s Server) StartFireteamSessions(ctx context.Context, request api.StartFireteamSessionsRequestObject) (api.StartFireteamSessionsResponseObject, error) {
+	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	if request.Body == nil || len(request.Body.Members) == 0 {
+		return api.StartFireteamSessions400JSONResponse{
+			Message: "members must contain at least one target",
+			Status:  api.ErrUnknownError,
+		}, nil
+	}
+	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"memberCount": len(request.Body.Members),
+		"trackComp":   trackComp,
+	})
+
+	results, err := s.FireteamService.StartSessions(
+		ctx,
+		request.Params.XUserID,
+		httpadapter.ToStartSessionTargets(request.Body.Members),
+		trackComp,
+	)
+	if err != nil {
+		return httpadapter.ToAPIStartFireteamSessionsError(err), nil
+	}
+
+	return httpadapter.ToAPIStartFireteamSessionsResponse(results), nil
+}
+
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
 	sessionID := request.SessionId
 	clog.WithGroupField(ctx, "request", "sessionId", sessionID)
@@ -494,29 +529,30 @@ func (s Server) GetSessions(ctx context.Context, request api.GetSessionsRequestO
 }
 
 func (s Server) StartSession(ctx context.Context, request api.StartSessionRequestObject) (api.StartSessionResponseObject, error) {
-	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	if request.Body == nil {
+		return api.StartSession400JSONResponse{Message: "body cannot be empty"}, nil
+	}
+	trackComp := request.Body.TrackComp != nil && *request.Body.TrackComp
 	clog.WithGroupFields(ctx, "request", clog.Fields{
 		"userId":      request.Body.UserID,
 		"characterId": request.Body.CharacterID,
 		"trackComp":   trackComp,
 	})
-	if request.Params.XUserID != request.Body.UserID {
-		// TODO: Need to do a check to see if user requesting has the current user in their fireteam.
-	}
-	u, err := s.UserService.GetUser(ctx, request.Params.XUserID)
+
+	result, err := s.FireteamService.StartSession(
+		ctx,
+		request.Params.XUserID,
+		fireteam.StartSessionTarget{
+			UserID:      request.Body.UserID,
+			CharacterID: request.Body.CharacterID,
+		},
+		trackComp,
+	)
 	if err != nil {
-		return nil, err
+		return httpadapter.ToAPIStartSessionError(err), nil
 	}
-	createdBy := api.AuditField{
-		ID:       u.ID,
-		Username: u.DisplayName,
-	}
-	result, err := s.SessionService.Start(ctx, request.Body.UserID, request.Body.CharacterID, createdBy, trackComp)
-	if err != nil {
-		return api.StartSession400JSONResponse{Message: err.Error()}, nil
-	}
-	return api.StartSession201JSONResponse(*result), nil
+	return api.StartSession201JSONResponse(httpadapter.ToAPISession(result)), nil
 }
 
 func (s Server) CompleteSession(ctx context.Context, request api.CompleteSessionRequestObject) (api.CompleteSessionResponseObject, error) {
