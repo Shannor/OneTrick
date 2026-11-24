@@ -5,10 +5,25 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
+	"oneTrick/set"
 	"slices"
 	"strconv"
 	"strings"
 )
+
+type SimilarTierFilter string
+
+const (
+	SimilarTierAll  SimilarTierFilter = "all"
+	SimilarTierHigh SimilarTierFilter = "high"
+)
+
+type SimilarSnapshotsParams struct {
+	SnapshotID   string
+	IncludeStats bool
+	Tier         SimilarTierFilter
+	GameMode     string
+}
 
 const (
 	exoticTierType   int32 = 6
@@ -106,7 +121,7 @@ func CompareSimilarLoadout(target, candidate *api.CharacterSnapshot, tierLookup 
 	}
 }
 
-func resolveItemTierType(item api.ItemSnapshot, tierLookup func(int64) int32) int32 {
+func resolveInlineItemTierType(item api.ItemSnapshot) int32 {
 	if item.ItemProperties.BaseInfo.TierType != 0 {
 		return item.ItemProperties.BaseInfo.TierType
 	}
@@ -119,22 +134,73 @@ func resolveItemTierType(item api.ItemSnapshot, tierLookup func(int64) int32) in
 	if strings.EqualFold(tierName, "Legendary") || strings.HasPrefix(displayTypeAndTier, "legendary ") {
 		return legendaryTierTyp
 	}
-	if tierLookup != nil && item.ItemHash != 0 {
-		return tierLookup(item.ItemHash)
-	}
 	return 0
+}
+
+func findInlineExoticArmor(loadout api.Loadout) (string, api.ItemSnapshot, bool) {
+	for _, bucketKey := range armorBucketKeys {
+		item, ok := loadout[bucketKey]
+		if !ok {
+			continue
+		}
+		if resolveInlineItemTierType(item) == exoticTierType {
+			return bucketKey, item, true
+		}
+	}
+	return "", api.ItemSnapshot{}, false
+}
+
+func collectMissingArmorTierHashes(target *api.CharacterSnapshot, allSnapshots []api.CharacterSnapshot, candidateIndices []int) []int64 {
+	var missing *set.OrderedSet[int64]
+	collectFromLoadout := func(loadout api.Loadout) {
+		if loadout == nil {
+			return
+		}
+		if _, _, ok := findInlineExoticArmor(loadout); ok {
+			return
+		}
+		for _, bucketKey := range armorBucketKeys {
+			item, ok := loadout[bucketKey]
+			if !ok || item.ItemHash == 0 {
+				continue
+			}
+			if resolveInlineItemTierType(item) == 0 {
+				if missing == nil {
+					missing = set.NewOrdered[int64]()
+				}
+				missing.Add(item.ItemHash)
+			}
+		}
+	}
+
+	if target != nil {
+		collectFromLoadout(target.Loadout)
+	}
+	for _, idx := range candidateIndices {
+		collectFromLoadout(allSnapshots[idx].Loadout)
+	}
+	if missing == nil || missing.Size() == 0 {
+		return nil
+	}
+	return missing.ToSlice()
 }
 
 func findEquippedExoticArmor(loadout api.Loadout, tierLookup func(int64) int32) (string, api.ItemSnapshot, bool) {
 	if loadout == nil {
 		return "", api.ItemSnapshot{}, false
 	}
+	if bucketKey, item, ok := findInlineExoticArmor(loadout); ok {
+		return bucketKey, item, true
+	}
+	if tierLookup == nil {
+		return "", api.ItemSnapshot{}, false
+	}
 	for _, bucketKey := range armorBucketKeys {
 		item, ok := loadout[bucketKey]
-		if !ok {
+		if !ok || item.ItemHash == 0 {
 			continue
 		}
-		if resolveItemTierType(item, tierLookup) == exoticTierType {
+		if resolveInlineItemTierType(item) == 0 && tierLookup(item.ItemHash) == exoticTierType {
 			return bucketKey, item, true
 		}
 	}

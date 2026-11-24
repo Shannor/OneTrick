@@ -209,12 +209,20 @@ func (s Server) MergeSnapshots(ctx context.Context, request api.MergeSnapshotsRe
 }
 
 func (s Server) GetSimilarSnapshots(ctx context.Context, request api.GetSimilarSnapshotsRequestObject) (api.GetSimilarSnapshotsResponseObject, error) {
-	clog.WithGroupField(ctx, "request", "snapshotId", request.SnapshotID)
-	if request.SnapshotID == "" {
+	params := httpadapter.ToSimilarSnapshotsParams(request)
+	clog.WithGroupFields(ctx, "request", clog.Fields{
+		"snapshotId":   params.SnapshotID,
+		"includeStats": params.IncludeStats,
+		"tier":         string(params.Tier),
+	})
+	if params.GameMode != "" {
+		clog.WithGroupField(ctx, "request", "gameMode", params.GameMode)
+	}
+	if params.SnapshotID == "" {
 		return api.GetSimilarSnapshots404JSONResponse{Message: "snapshot not found"}, nil
 	}
 
-	target, items, stats, counts, err := s.StatsService.GetSimilarSnapshots(ctx, request.SnapshotID)
+	target, items, stats, counts, err := s.StatsService.GetSimilarSnapshots(ctx, params)
 	if err != nil {
 		if errors.Is(err, snapshot.NotFound) {
 			return api.GetSimilarSnapshots404JSONResponse{Message: "snapshot not found"}, nil
@@ -224,16 +232,8 @@ func (s Server) GetSimilarSnapshots(ctx context.Context, request api.GetSimilarS
 	if target == nil {
 		return api.GetSimilarSnapshots404JSONResponse{Message: "snapshot not found"}, nil
 	}
-	if items == nil {
-		items = []api.SimilarSnapshotItem{}
-	}
 
-	return api.GetSimilarSnapshots200JSONResponse{
-		Target: *target,
-		Items:  items,
-		Stats:  stats,
-		Count:  counts,
-	}, nil
+	return httpadapter.ToAPISimilarSnapshotsResponse(*target, items, stats, counts), nil
 }
 
 func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessionRequestObject) (api.StartUserSessionResponseObject, error) {

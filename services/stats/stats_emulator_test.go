@@ -20,11 +20,15 @@ import (
 
 type emulatorMockManifestService struct {
 	destiny.ManifestService
-	items     map[int64]*destiny.ItemDefinition
-	callCount map[int64]int
+	items              map[int64]*destiny.ItemDefinition
+	callCount          map[int64]int
+	getItemCalls       int
+	getItemsByIDsCalls int
+	requestedBatches   [][]int64
 }
 
 func (m *emulatorMockManifestService) GetItem(_ context.Context, hash int64) (*destiny.ItemDefinition, error) {
+	m.getItemCalls++
 	if m.callCount != nil {
 		m.callCount[hash]++
 	}
@@ -34,6 +38,22 @@ func (m *emulatorMockManifestService) GetItem(_ context.Context, hash int64) (*d
 		}
 	}
 	return nil, fmt.Errorf("item %d not found", hash)
+}
+
+func (m *emulatorMockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map[string]destiny.ItemDefinition, error) {
+	m.getItemsByIDsCalls++
+	copied := make([]int64, len(ids))
+	copy(copied, ids)
+	m.requestedBatches = append(m.requestedBatches, copied)
+	out := make(map[string]destiny.ItemDefinition, len(ids))
+	for _, id := range ids {
+		if m.items != nil {
+			if def, ok := m.items[id]; ok && def != nil {
+				out[strconv.FormatInt(id, 10)] = *def
+			}
+		}
+	}
+	return out, nil
 }
 
 func makeEmulatorBaseLoadout(kinID string, enID string, subclassHash int64, powerID string, powerHash int64) api.Loadout {
@@ -256,10 +276,14 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 
 	// 4. GetSimilarSnapshots(snapA):
 	//    - Never hides 1-game/2-game candidates
-	//    - Ranks B (high, 1 game) ahead of C (base, 2 games) via memoized ManifestService fallback for tierType==0!
+	//    - Ranks B (high, 1 game) ahead of C (base, 2 games) via batched GetItemsByIDs fallback for tierType==0!
 	//    - Excludes archived Z
 	//    - Returns all-mode global match counts (A=20 across Quickplay+Trials, B=1, C=2)
-	target, simItems, simStats, simAllCounts, err := statsSvc.GetSimilarSnapshots(ctx, snapA)
+	target, simItems, simStats, simAllCounts, err := statsSvc.GetSimilarSnapshots(ctx, stats.SimilarSnapshotsParams{
+		SnapshotID:   snapA,
+		IncludeStats: true,
+		Tier:         stats.SimilarTierAll,
+	})
 	if err != nil {
 		t.Fatalf("GetSimilarSnapshots(snapA) failed: %v", err)
 	}
@@ -272,14 +296,46 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 	if simItems[1].Snapshot.ID != snapC || simItems[1].Tier != api.SimilarityTierBase {
 		t.Fatalf("expected second candidate to be snapC (base tier), got %+v", simItems[1])
 	}
-	if (*simAllCounts)[snapA] != 20 || (*simAllCounts)[snapB] != 1 || (*simAllCounts)[snapC] != 2 {
+	if simAllCounts[snapA] != 20 || simAllCounts[snapB] != 1 || simAllCounts[snapC] != 2 {
 		t.Fatalf("expected global counts {A:20, B:1, C:2}, got %+v", simAllCounts)
 	}
-	if simStats == nil || *(*simStats)[snapA].Kd.Value != 2.0 {
+	if simStats == nil || *simStats[snapA].Kd.Value != 2.0 {
 		t.Fatalf("expected target KD 2.0 in GetSimilarSnapshots stats, got %+v", simStats)
 	}
-	if manifestMock.callCount[888001] != 1 {
-		t.Fatalf("expected memoized manifest lookup to query hash 888001 exactly once, got %d", manifestMock.callCount[888001])
+	if manifestMock.getItemCalls != 0 {
+		t.Fatalf("expected 0 per-item GetItem calls, got %d", manifestMock.getItemCalls)
+	}
+	if manifestMock.getItemsByIDsCalls != 1 || !slices.Equal(manifestMock.requestedBatches[0], []int64{888001, 888002}) {
+		t.Fatalf("expected 1 batched GetItemsByIDs call for [888001, 888002], got calls=%d batches=%v", manifestMock.getItemsByIDsCalls, manifestMock.requestedBatches)
+	}
+
+	// 4b. GetSimilarSnapshots with tier=high and includeStats=false omits stats/counts and returns only snapB.
+	_, highOnlyItems, nilStats, nilCounts, err := statsSvc.GetSimilarSnapshots(ctx, stats.SimilarSnapshotsParams{
+		SnapshotID:   snapA,
+		IncludeStats: false,
+		Tier:         stats.SimilarTierHigh,
+	})
+	if err != nil {
+		t.Fatalf("GetSimilarSnapshots(tier=high, includeStats=false) failed: %v", err)
+	}
+	if nilStats != nil || nilCounts != nil {
+		t.Fatalf("expected nil stats/counts when includeStats=false, got stats=%v counts=%v", nilStats, nilCounts)
+	}
+	if len(highOnlyItems) != 1 || highOnlyItems[0].Snapshot.ID != snapB {
+		t.Fatalf("expected only [snapB] for tier=high, got %+v", highOnlyItems)
+	}
+
+	// 4c. GetSimilarSnapshots with gameMode=trials filters stats/counts to Trials matches only (A=5, B=0, C=2).
+	_, _, trialsStats, trialsCounts, err := statsSvc.GetSimilarSnapshots(ctx, stats.SimilarSnapshotsParams{
+		SnapshotID:   snapA,
+		IncludeStats: true,
+		GameMode:     string(api.GameModeTrials),
+	})
+	if err != nil {
+		t.Fatalf("GetSimilarSnapshots(gameMode=trials) failed: %v", err)
+	}
+	if trialsStats == nil || trialsCounts == nil || trialsCounts[snapA] != 5 || trialsCounts[snapB] != 0 || trialsCounts[snapC] != 2 {
+		t.Fatalf("expected Trials counts {A:5, B:0, C:2}, got %+v", trialsCounts)
 	}
 
 	// 5. GetFeaturedLoadouts excludes soft-archived snapshot Z even though Z has 10 games and newest createdAt!
