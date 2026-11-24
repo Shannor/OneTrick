@@ -20,15 +20,19 @@ This server powers the One Trick Destiny 2 Application
     - Domain models are plain, value-semantic Go structs (`[]T` over `[]*T`, useful zero values, no `json:`/`firestore:` tags, no nullable OpenAPI pointer soup) with pure helper functions/methods only for cohesive domain invariants (e.g., loadout hashing, base identity keys, KD/stat math, merge compatibility, orphan detection) — avoid Java DDD "rich entity" ceremony.
     - Core packages define **domain sentinel errors** (`ErrNotFound`, `ErrUnauthorized`, etc.) rather than returning HTTP status codes or gRPC/Firestore status codes.
     - Core packages declare **narrow, consumer-defined driven ports** (store/repository interfaces and external gateway interfaces) speaking domain types rather than depending on `*firestore.Client`, `map[string]any` mutation callbacks, or 12-method sibling `Service` interfaces.
-  - **Driving Adapters (`impl.go` / HTTP handlers, `scripts/*`, cron ticks)**:
-    - HTTP handlers stay thin: enrich `clog` `"actor"`/`"request"` fields, validate transport inputs, convert `api.*` request DTOs -> domain inputs, call **one** Application Service method, map domain sentinel errors -> OpenAPI response structs (`200`/`204`, `400`, `401`, `404`, `500`), and convert domain results -> `api.*` response DTOs.
+  - **Driving Adapters (`adapters/driving/http`, `impl.go`, `scripts/*`, cron ticks)** — *drive the core*:
+    - The API/HTTP layer drives the core via inbound Application Service methods.
+    - HTTP handlers stay thin: enrich `clog` `"actor"`/`"request"` fields, validate transport inputs, convert `api.*` request DTOs -> core domain inputs, call **one** Application Service method, map domain sentinel errors -> OpenAPI response structs (`200`/`204`, `400`, `401`, `404`, `500`), and convert core domain results -> `api.*` response DTOs.
+    - Keep explicit converters between `core/*` domain models and OpenAPI `api.*` DTOs in `adapters/driving/http` so transport structs stay cleanly separated from core domain types.
     - Never put multi-step business loops or raw persistence map mutations inside HTTP handlers.
-  - **Driven Adapters (`/adapters/<domain>`, legacy `services/*/store.go`, `clients/bungie` gateway, caches)**:
-    - Implement `core/<domain>` driven ports, own Firestore document serialization/queries and `codes.NotFound -> ErrNotFound` translation, and confine generated `bungie.*` vendor structs and legacy `services/*` bridging strictly inside the adapter boundary.
+  - **Driven Adapters (`adapters/driven/{firestore,bungie,cache}`, legacy `services/*/store.go`)** — *driven by the core*:
+    - External dependencies driven by the core (Firestore persistence, Bungie API gateways, caches) implement `core/<domain>` outbound ports, organized by infrastructure.
+    - Own Firestore document serialization/queries and `codes.NotFound -> ErrNotFound` translation, and confine generated `bungie.*` vendor structs strictly inside the Bungie adapter boundary.
+    - Temporary anti-corruption bridges to unmigrated legacy `services/*` (e.g., `adapters/driven/fireteam`) must carry a clear warning header explaining what legacy package is being bridged and when to delete the bridge.
   - **Composition Root (`main.go`)**:
     - Instantiates `*firestore.Client`, HTTP/Bungie clients, and caches once, constructs driven adapters, injects them into Application Services, and wires Application Services into `Server`. Keep `main.go` free of adapter structs and translation logic.
   - **Incremental / Boy-Scout Migration Rule**:
-    - **New endpoints, services, and domains** belong in `core/<domain>` + `adapters/<domain>` following strict Hexagonal boundaries (pure domain structs, consumer-defined driven ports injected from `main.go`, explicit DTO converters).
+    - **New endpoints, services, and domains** belong in `core/<domain>` with driven adapters under `adapters/driven/*` and driving API converters/handlers under `adapters/driving/http` (injected from `main.go`).
     - **Touched slices in legacy `services/*` packages** must avoid introducing new `api.*` / `bungie.*` / `map[string]any` leaks or raw `s.DB.Collection(...)` calls in services—extract/extend the package's driven `store` port for the touched path without forcing unrelated big-bang rewrites.
 - This project has two OpenAPI Schemas:
   - **One Trick API**: Split source specs live in `openapi/` (`openapi/openapi.yaml`, `openapi/paths/*`, `openapi/components/*`), which `make generate` bundles into `./openapi.yaml` and generates into `api/api.gen.go`. Never hand-edit `openapi.yaml` or `api/api.gen.go`.

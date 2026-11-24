@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	fireteamadapters "oneTrick/adapters/fireteam"
+	fireteamdriven "oneTrick/adapters/driven/fireteam"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
@@ -69,9 +69,9 @@ func main() {
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
 	sessionService := session.NewService(sessionStore, aggregateService, userService, destinyService, snapshotService, manifestService)
 	fireteamService := fireteam.NewService(
-		fireteamadapters.NewUserReader(userService),
-		fireteamadapters.NewPartyReader(destinyService),
-		fireteamadapters.NewActiveSessionReader(sessionService),
+		fireteamdriven.NewUserReader(userService),
+		fireteamdriven.NewPartyReader(destinyService),
+		fireteamdriven.NewActiveSessionReader(sessionService),
 	)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	server := NewServer(

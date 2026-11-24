@@ -1,3 +1,26 @@
+// Package fireteam provides DRIVEN adapters (called by core/fireteam via its outbound ports).
+//
+// WARNING — TEMPORARY ANTI-CORRUPTION BRIDGE (INTENTIONAL TRANSITIONAL ANTI-PATTERN):
+//
+// In standard Hexagonal Architecture, driven adapters are organized by infrastructure
+// (adapters/driven/firestore, adapters/driven/bungie, adapters/driven/cache) and talk
+// directly to external systems rather than wrapping sibling application services.
+//
+// This package intentionally wraps legacy services/user, services/destiny, and
+// services/session (including a temporary api.Character -> core/fireteam.Character
+// double-conversion) ONLY so core/fireteam can stay strictly isolated from api.*,
+// clients/bungie.*, firestore, and legacy services/* while the rest of the codebase
+// migrates incrementally.
+//
+// Migration & Removal Checklist (delete each adapter as its backing domain migrates):
+//   1. NewPartyReader: move into adapters/driven/bungie once Bungie gateway calls are
+//      extracted out of services/destiny.
+//   2. NewUserReader (+ toCorePlayer / toCoreCharacter): remove once services/user moves
+//      into core/user + adapters/driven/firestore returning pure domain models instead of
+//      api.Character.
+//   3. NewActiveSessionReader: remove once services/session moves into core/session +
+//      adapters/driven/firestore.
+//   4. Delete this entire package once all three backing domains have migrated.
 package fireteam
 
 import (
