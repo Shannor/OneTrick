@@ -5,8 +5,10 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	httpadapter "oneTrick/adapters/driving/http"
 	"oneTrick/api"
 	"oneTrick/converters"
+	"oneTrick/core/fireteam"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
@@ -35,6 +37,7 @@ type Server struct {
 	SnapshotService   snapshot.Service
 	AggregateService  aggregate.Service
 	SessionService    session.Service
+	FireteamService   fireteam.Service
 	StatsService      stats.Service
 	TelemetryService  telemetry.Service
 	InternalAPIKey    string
@@ -47,6 +50,7 @@ func NewServer(
 	snapshotService snapshot.Service,
 	aggregateService aggregate.Service,
 	sessionService session.Service,
+	fireteamService fireteam.Service,
 	manifestService destiny.ManifestService,
 	statsService stats.Service,
 	telemetrySvc telemetry.Service,
@@ -59,6 +63,7 @@ func NewServer(
 		SnapshotService:   snapshotService,
 		AggregateService:  aggregateService,
 		SessionService:    sessionService,
+		FireteamService:   fireteamService,
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
 		TelemetryService:  telemetrySvc,
@@ -409,11 +414,20 @@ func (s Server) GetFeaturedLoadouts(ctx context.Context, request api.GetFeatured
 
 func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestObject) (api.GetFireteamResponseObject, error) {
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
-	members, err := s.UserService.GetFireteam(ctx, request.Params.XUserID)
+	members, err := s.FireteamService.GetFireteam(ctx, request.Params.XUserID)
 	if err != nil {
+		if errors.Is(err, fireteam.ErrUserNotFound) {
+			return api.GetFireteam404JSONResponse{Message: "user not found"}, nil
+		}
+		if errors.Is(err, fireteam.ErrDestinyUnavailable) {
+			return api.GetFireteam503JSONResponse{
+				Message: "Destiny 2 servers are currently unavailable",
+				Status:  api.ErrDestinyServerDown,
+			}, nil
+		}
 		return nil, err
 	}
-	return api.GetFireteam200JSONResponse(members), nil
+	return api.GetFireteam200JSONResponse(httpadapter.ToAPIFireteamMembers(members)), nil
 }
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {

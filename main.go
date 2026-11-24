@@ -4,9 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	fireteamdriven "oneTrick/adapters/driven/fireteam"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
+	"oneTrick/core/fireteam"
 	"oneTrick/envvars"
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
@@ -59,13 +61,19 @@ func main() {
 		destiny.NewManifestService(firestore, string(env.Environment)),
 	)
 
+	sessionStore := session.NewFirestoreStore(firestore)
 	rClient := resty.New()
 	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
 	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
 	userService := user.NewUserService(firestore, destinyService)
 	aggregateService := aggregate.NewService(firestore)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
-	sessionService := session.NewService(firestore, aggregateService, userService, destinyService, snapshotService, manifestService)
+	sessionService := session.NewService(sessionStore, aggregateService, userService, destinyService, snapshotService, manifestService)
+	fireteamService := fireteam.NewService(
+		fireteamdriven.NewUserReader(userService),
+		fireteamdriven.NewPartyReader(destinyService),
+		fireteamdriven.NewActiveSessionReader(sessionService),
+	)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	telemetryService := telemetry.NewService(
 		telemetry.NewUserReaderAdapter(userService),
@@ -79,6 +87,7 @@ func main() {
 		snapshotService,
 		aggregateService,
 		sessionService,
+		fireteamService,
 		manifestService,
 		statsService,
 		telemetryService,

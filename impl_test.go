@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/core/fireteam"
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
@@ -91,6 +92,21 @@ func (m *mockUserService) Search(ctx context.Context, query string, page int) ([
 		return nil, false, m.searchErr
 	}
 	return m.searchResults, m.searchHasMore, nil
+}
+
+type mockFireteamService struct {
+	fireteam.Service
+	members        []fireteam.Member
+	err            error
+	capturedUserID string
+}
+
+func (m *mockFireteamService) GetFireteam(_ context.Context, userID string) ([]fireteam.Member, error) {
+	m.capturedUserID = userID
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.members, nil
 }
 
 type mockD2Service struct {
@@ -1771,3 +1787,163 @@ func TestHTTPRouterCharacterTelemetryEndpoint(t *testing.T) {
 	})
 }
 
+func TestGetFireteamEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	newRouter := func(ftMock *mockFireteamService) *gin.Engine {
+		server := Server{FireteamService: ftMock}
+		r := gin.New()
+		r.ContextWithFallback = true
+		r.Use(logger.CanonicalLogger())
+		r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+			ErrorHandler: logger.GinValidationErrorHandler,
+			Options: openapi3filter.Options{
+				AuthenticationFunc: validator.Authenticate,
+			},
+		}))
+		h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+			logger.GinStrictMiddleware[api.StrictHandlerFunc],
+		})
+		api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+			ErrorHandler: logger.GinParamErrorHandler,
+		})
+		return r
+	}
+
+	t.Run("200 returns members converted to OpenAPI DTOs with activeSessions", func(t *testing.T) {
+		startedAt := time.Date(2026, 5, 1, 20, 0, 0, 0, time.UTC)
+		ftMock := &mockFireteamService{
+			members: []fireteam.Member{
+				{
+					ID:           "u-1",
+					MembershipID: "4611686018467484863",
+					DisplayName:  "GuardianOne",
+					Characters: []fireteam.Character{
+						{
+							ID:          "char-1",
+							Class:       "Hunter",
+							Light:       2010,
+							EmblemColor: fireteam.Color{Red: 10, Green: 20, Blue: 30, Alpha: 255},
+							Stats: map[string]fireteam.ClassStat{
+								"mobility": {Name: "Mobility", Value: 100, HasIcon: true},
+							},
+						},
+					},
+					ActiveSessions: []fireteam.ActiveSession{
+						{
+							SessionID:   "ses-1",
+							UserID:      "u-1",
+							CharacterID: "char-1",
+							StartedAt:   startedAt,
+							TrackComp:   true,
+						},
+					},
+				},
+				{
+					ID:             "u-2",
+					MembershipID:   "4611686018467484002",
+					DisplayName:    "GuardianTwo",
+					Characters:     nil,
+					ActiveSessions: []fireteam.ActiveSession{},
+				},
+			},
+		}
+
+		r := newRouter(ftMock)
+		req := httptest.NewRequest(http.MethodGet, "/fireteam", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-User-ID", "u-1")
+		req.Header.Set("X-Membership-ID", "4611686018467484863")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+		if ftMock.capturedUserID != "u-1" {
+			t.Fatalf("expected actor userId=u-1, got %q", ftMock.capturedUserID)
+		}
+
+		var got []api.FireteamMember
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("failed to decode response JSON: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 members, got %d", len(got))
+		}
+		if len(got[0].Characters) != 1 || got[0].Characters[0].Id != "char-1" || got[0].Characters[0].EmblemColor.Red != 10 {
+			t.Fatalf("unexpected converted character on first member: %+v", got[0].Characters)
+		}
+		if got[0].Characters[0].Stats == nil || (*got[0].Characters[0].Stats)["mobility"].Value != 100 {
+			t.Fatalf("unexpected converted stats on first member: %+v", got[0].Characters[0].Stats)
+		}
+		if got[0].ActiveSessions == nil || len(*got[0].ActiveSessions) != 1 {
+			t.Fatalf("expected 1 active session on first member, got %+v", got[0])
+		}
+		s0 := (*got[0].ActiveSessions)[0]
+		if s0.SessionID != "ses-1" || s0.CharacterID != "char-1" || !s0.StartedAt.Equal(startedAt) || s0.TrackComp == nil || !*s0.TrackComp {
+			t.Fatalf("unexpected active session decoded: %+v", s0)
+		}
+		if got[1].Characters == nil || got[1].ActiveSessions == nil || len(*got[1].ActiveSessions) != 0 {
+			t.Fatalf("expected empty non-nil characters and activeSessions on second member, got %+v", got[1])
+		}
+	})
+
+	t.Run("404 returns user not found when caller does not exist", func(t *testing.T) {
+		ftMock := &mockFireteamService{
+			err: fmt.Errorf("failed to fetch user: %w", fireteam.ErrUserNotFound),
+		}
+
+		r := newRouter(ftMock)
+		req := httptest.NewRequest(http.MethodGet, "/fireteam", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-User-ID", "missing-user")
+		req.Header.Set("X-Membership-ID", "4611686018467484863")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 Not Found, got %d: %s", w.Code, w.Body.String())
+		}
+		var body api.GetFireteam404JSONResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("failed to decode 404 JSON: %v", err)
+		}
+		if body.Message != "user not found" {
+			t.Fatalf("expected message %q, got %q", "user not found", body.Message)
+		}
+	})
+
+	t.Run("503 returns ErrDestinyServerDown when Destiny servers are unavailable", func(t *testing.T) {
+		ftMock := &mockFireteamService{
+			err: fmt.Errorf("%w: %w", fireteam.ErrDestinyUnavailable, destiny.ErrDestinyServerDown),
+		}
+
+		r := newRouter(ftMock)
+		req := httptest.NewRequest(http.MethodGet, "/fireteam", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-User-ID", "u-1")
+		req.Header.Set("X-Membership-ID", "4611686018467484863")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 Service Unavailable, got %d: %s", w.Code, w.Body.String())
+		}
+		var body api.GetFireteam503JSONResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("failed to decode 503 JSON: %v", err)
+		}
+		if body.Status != api.ErrDestinyServerDown {
+			t.Fatalf("expected status %q, got %q", api.ErrDestinyServerDown, body.Status)
+		}
+		if body.Message == "" {
+			t.Fatal("expected non-empty error message on 503 response")
+		}
+	})
+}
