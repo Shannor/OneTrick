@@ -1,9 +1,12 @@
-package telemetry
+// Package firestore provides infrastructure-organized DRIVEN persistence adapters
+// implementing outbound store ports for core domain packages.
+package firestore
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	coretelemetry "oneTrick/core/telemetry"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -55,17 +58,17 @@ type projectedLinkDoc struct {
 	ConfidenceLevel string `firestore:"confidenceLevel"`
 }
 
-type FirestoreMatchStore struct {
+type TelemetryMatchStore struct {
 	db *firestore.Client
 }
 
-var _ MatchStore = (*FirestoreMatchStore)(nil)
+var _ coretelemetry.MatchStore = (*TelemetryMatchStore)(nil)
 
-func NewFirestoreMatchStore(db *firestore.Client) *FirestoreMatchStore {
-	return &FirestoreMatchStore{db: db}
+func NewTelemetryMatchStore(db *firestore.Client) *TelemetryMatchStore {
+	return &TelemetryMatchStore{db: db}
 }
 
-func (f *FirestoreMatchStore) buildBaseQuery(characterID, snapshotID string, from, to time.Time) firestore.Query {
+func (f *TelemetryMatchStore) buildBaseQuery(characterID, snapshotID string, from, to time.Time) firestore.Query {
 	var q firestore.Query
 	if snapshotID != "" {
 		q = f.db.Collection(aggregatesCollection).Where("snapshotIds", "array-contains", snapshotID)
@@ -90,18 +93,18 @@ func applyTelemetryProjection(q firestore.Query, characterID string) firestore.Q
 	)
 }
 
-func (f *FirestoreMatchStore) ListRecentUnfiltered(
+func (f *TelemetryMatchStore) ListRecentUnfiltered(
 	ctx context.Context,
 	characterID string,
 	from, to time.Time,
 	limit int,
-) ([]RawMatch, int, bool, error) {
+) ([]coretelemetry.RawMatch, int, bool, error) {
 	baseQuery := f.buildBaseQuery(characterID, "", from, to)
 	projectedQuery := applyTelemetryProjection(baseQuery, characterID)
 	iter := projectedQuery.Limit(limit + 1).Documents(ctx)
 	defer iter.Stop()
 
-	matches := make([]RawMatch, 0, min(limit, 64))
+	matches := make([]coretelemetry.RawMatch, 0, min(limit, 64))
 	rawDocs := 0
 	validDocs := 0
 	skippedCorrupt := 0
@@ -176,11 +179,11 @@ func (f *FirestoreMatchStore) ListRecentUnfiltered(
 	return matches, validDocs, validDocs > len(matches), nil
 }
 
-func (f *FirestoreMatchStore) StreamMatches(
+func (f *TelemetryMatchStore) StreamMatches(
 	ctx context.Context,
 	characterID, snapshotID string,
 	from, to time.Time,
-	fn func(RawMatch) error,
+	fn func(coretelemetry.RawMatch) error,
 ) error {
 	baseQuery := f.buildBaseQuery(characterID, snapshotID, from, to)
 	iter := applyTelemetryProjection(baseQuery, characterID).Documents(ctx)
@@ -208,7 +211,7 @@ func (f *FirestoreMatchStore) StreamMatches(
 	return nil
 }
 
-func (f *FirestoreMatchStore) countQuery(ctx context.Context, q firestore.Query) (int, error) {
+func (f *TelemetryMatchStore) countQuery(ctx context.Context, q firestore.Query) (int, error) {
 	results, err := q.NewAggregationQuery().WithCount("total").Get(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("count character aggregates: %w", err)
@@ -229,15 +232,15 @@ func (f *FirestoreMatchStore) countQuery(ctx context.Context, q firestore.Query)
 	}
 }
 
-func decodeProjectedMatch(doc *firestore.DocumentSnapshot, characterID string) (RawMatch, bool, error) {
+func decodeProjectedMatch(doc *firestore.DocumentSnapshot, characterID string) (coretelemetry.RawMatch, bool, error) {
 	var p projectedAggregateDoc
 	if err := doc.DataTo(&p); err != nil {
-		return RawMatch{}, false, fmt.Errorf("decode aggregate %s: %w", doc.Ref.ID, err)
+		return coretelemetry.RawMatch{}, false, fmt.Errorf("decode aggregate %s: %w", doc.Ref.ID, err)
 	}
 
 	perf, ok := p.Performance[characterID]
 	if !ok || perf.PlayerStats == nil {
-		return RawMatch{}, false, nil
+		return coretelemetry.RawMatch{}, false, nil
 	}
 
 	stats := perf.PlayerStats
@@ -258,13 +261,13 @@ func decodeProjectedMatch(doc *firestore.DocumentSnapshot, characterID string) (
 		activityID = p.ActivityHistory.InstanceID
 	}
 
-	raw := RawMatch{
+	raw := coretelemetry.RawMatch{
 		ActivityID:              activityID,
 		Period:                  p.ActivityHistory.Period,
 		Location:                p.ActivityHistory.Location,
 		Activity:                p.ActivityHistory.Activity,
 		Mode:                    p.ActivityHistory.Mode,
-		StoredEstimatedGameMode: GameMode(p.ActivityHistory.EstimatedGameMode),
+		StoredEstimatedGameMode: coretelemetry.GameMode(p.ActivityHistory.EstimatedGameMode),
 		Kills:                   kills,
 		Deaths:                  deaths,
 		Assists:                 assists,
@@ -276,7 +279,7 @@ func decodeProjectedMatch(doc *firestore.DocumentSnapshot, characterID string) (
 	if link, hasLink := p.SnapshotLinks[characterID]; hasLink {
 		raw.SessionID = link.SessionID
 		raw.RawSnapshotID = link.SnapshotID
-		raw.SnapshotConfidence = ConfidenceLevel(link.ConfidenceLevel)
+		raw.SnapshotConfidence = coretelemetry.ConfidenceLevel(link.ConfidenceLevel)
 	}
 
 	return raw, true, nil

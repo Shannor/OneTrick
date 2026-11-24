@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -177,4 +178,18 @@ type Result struct {
 	Snapshots  map[string]SnapshotSummary
 	TotalCount int
 	Truncated  bool
+}
+
+type UserReader interface {
+	GetUser(ctx context.Context, lookupID string) (User, error)
+}
+
+type SnapshotReader interface {
+	GetSnapshot(ctx context.Context, snapshotID string) (Snapshot, error)
+	GetSnapshotsByIDs(ctx context.Context, snapshotIDs []string) ([]Snapshot, error)
+}
+
+type MatchStore interface {
+	ListRecentUnfiltered(ctx context.Context, characterID string, from, to time.Time, limit int) (matches []RawMatch, totalCount int, truncated bool, err error)
+	StreamMatches(ctx context.Context, characterID, snapshotID string, from, to time.Time, fn func(RawMatch) error) error
 }

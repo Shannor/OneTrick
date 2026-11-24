@@ -7,14 +7,13 @@ import (
 	"fmt"
 	httpadapter "oneTrick/adapters/driving/http"
 	"oneTrick/api"
-	"oneTrick/converters"
 	"oneTrick/core/fireteam"
+	"oneTrick/core/telemetry"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
-	"oneTrick/services/telemetry"
 	"oneTrick/services/user"
 	"slices"
 	"strconv"
@@ -1241,7 +1240,7 @@ func (s Server) GetCharacterTelemetry(ctx context.Context, request api.GetCharac
 		}, nil
 	}
 
-	result, err := s.TelemetryService.GetCharacterTelemetry(ctx, converters.ToTelemetryQuery(request))
+	result, err := s.TelemetryService.GetCharacterTelemetry(ctx, httpadapter.ToTelemetryQuery(request))
 	if err != nil {
 		if errors.Is(err, telemetry.ErrInvalidQuery) {
 			return api.GetCharacterTelemetry400JSONResponse{
@@ -1261,6 +1260,6 @@ func (s Server) GetCharacterTelemetry(ctx context.Context, request api.GetCharac
 		}, nil
 	}
 
-	return converters.ToTelemetryResponse(result), nil
+	return httpadapter.ToAPITelemetryResponse(result), nil
 }
 

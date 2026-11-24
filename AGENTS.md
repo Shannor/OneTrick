@@ -45,14 +45,14 @@ This server powers the One Trick Destiny 2 Application
 
 - When creating a new endpoint in `openapi/paths/*.yaml` (and referencing it in `openapi/openapi.yaml`), include all standard response types (`200`/`201`/`204`, `400`, `401`, `404`, `500`, etc.) and run `make generate`.
 - Any fields in schemas ending with `id`, `url`, etc., must specify `x-go-name` (`ID`, `URL`, `UserID`, `SnapshotID`, etc.) for idiomatic Go struct field names.
-- Keep `api.*` generated types confined to the HTTP adapter (`impl.go`) and `converters/` package for new/refactored features rather than passing pointer-heavy OpenAPI DTOs deep into service math or directly into `ref.Set(...)`. Place HTTP request/response DTO mapping functions in `converters/` rather than growing `impl.go`.
+- Keep `api.*` generated types confined to the HTTP adapter (`impl.go`) and `adapters/driving/http` converters for new/refactored features rather than passing pointer-heavy OpenAPI DTOs deep into core logic or directly into `ref.Set(...)`. Place HTTP request/response DTO mapping functions in `adapters/driving/http` rather than growing `impl.go`.
 
-### Shared Internal Packages (`set/`, `utils/`, `converters/`)
+### Shared Internal Packages (`set/`, `utils/`, `adapters/driving/http`)
 
 - Always prefer the repo's shared packages over hand-rolling boilerplate for common patterns:
   - **`oneTrick/set`**: Use `set.New[T]()` / `set.FromSlice` for membership sets and `set.NewOrdered[T]()` / `set.OrderedFromSlice` when deduplicating while preserving insertion order (instead of manual `map[T]struct{}` + slice loops).
-  - **`oneTrick/utils`**: Reuse collection and utility helpers (`utils.UniqueNonZero`, `utils.UnionNonZero`, `utils.Chunk`, hashing, etc.) before writing ad-hoc slice deduplication or chunking logic.
-  - **`oneTrick/converters`**: Place `api.*` <-> domain DTO conversion helpers here to keep `impl.go` handlers thin.
+  - **`oneTrick/utils`**: Reuse collection and utility helpers (`utils.UniqueNonZero`, `utils.UnionNonZero`, `utils.UniqueTrimmedStrings`, `utils.Chunk`, hashing, etc.) before writing ad-hoc slice deduplication or chunking logic.
+  - **`oneTrick/adapters/driving/http`**: Place `api.*` <-> `core/*` DTO conversion helpers here to keep `impl.go` handlers thin.
 
 ## DB & Driven Adapter Information
 

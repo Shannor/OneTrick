@@ -1,8 +1,8 @@
-package converters
+package httpadapter
 
 import (
 	"oneTrick/api"
-	"oneTrick/services/telemetry"
+	"oneTrick/core/telemetry"
 	"testing"
 	"time"
 )
@@ -36,10 +36,10 @@ func TestToTelemetryQuery(t *testing.T) {
 	}
 }
 
-func TestToTelemetryResponse(t *testing.T) {
+func TestToAPITelemetryResponse(t *testing.T) {
 	period := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 
-	resp := ToTelemetryResponse(telemetry.Result{
+	resp := ToAPITelemetryResponse(telemetry.Result{
 		Matches: []telemetry.Match{
 			{
 				ActivityID:           "act-1",

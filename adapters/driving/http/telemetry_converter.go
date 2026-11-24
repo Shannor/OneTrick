@@ -1,8 +1,8 @@
-package converters
+package httpadapter
 
 import (
 	"oneTrick/api"
-	"oneTrick/services/telemetry"
+	"oneTrick/core/telemetry"
 )
 
 func ToTelemetryQuery(request api.GetCharacterTelemetryRequestObject) telemetry.Query {
@@ -28,7 +28,7 @@ func ToTelemetryQuery(request api.GetCharacterTelemetryRequestObject) telemetry.
 	return q
 }
 
-func ToTelemetryResponse(res telemetry.Result) api.GetCharacterTelemetry200JSONResponse {
+func ToAPITelemetryResponse(res telemetry.Result) api.GetCharacterTelemetry200JSONResponse {
 	matches := make([]api.TelemetryMatch, 0, len(res.Matches))
 	for _, m := range res.Matches {
 		item := api.TelemetryMatch{

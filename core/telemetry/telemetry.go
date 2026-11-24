@@ -5,27 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"oneTrick/services/destiny"
+	"oneTrick/core/gamemode"
 	"oneTrick/set"
 	"slices"
 	"time"
 
 	clog "github.com/Shannor/canonical-logger"
 )
-
-type UserReader interface {
-	GetUser(ctx context.Context, lookupID string) (User, error)
-}
-
-type SnapshotReader interface {
-	GetSnapshot(ctx context.Context, snapshotID string) (Snapshot, error)
-	GetSnapshotsByIDs(ctx context.Context, snapshotIDs []string) ([]Snapshot, error)
-}
-
-type MatchStore interface {
-	ListRecentUnfiltered(ctx context.Context, characterID string, from, to time.Time, limit int) (matches []RawMatch, totalCount int, truncated bool, err error)
-	StreamMatches(ctx context.Context, characterID, snapshotID string, from, to time.Time, fn func(RawMatch) error) error
-}
 
 type Service interface {
 	GetCharacterTelemetry(ctx context.Context, query Query) (Result, error)
@@ -36,6 +22,8 @@ type service struct {
 	snapshots SnapshotReader
 	matches   MatchStore
 }
+
+var _ Service = (*service)(nil)
 
 func NewService(users UserReader, snapshots SnapshotReader, matches MatchStore) Service {
 	return &service{
@@ -274,7 +262,7 @@ func resolveEstimatedGameMode(raw RawMatch) GameMode {
 	if raw.StoredEstimatedGameMode != "" && raw.StoredEstimatedGameMode != GameModeAll && raw.StoredEstimatedGameMode.IsValid() {
 		return raw.StoredEstimatedGameMode
 	}
-	return GameMode(destiny.EstimateGameModeName(raw.Mode, raw.Activity))
+	return GameMode(gamemode.EstimateName(raw.Mode, raw.Activity))
 }
 
 func toDomainMatch(raw RawMatch, estMode GameMode) Match {

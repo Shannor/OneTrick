@@ -1,9 +1,11 @@
-package telemetry
+package firestore
 
 import (
 	"context"
 	"fmt"
+	telemetrydriven "oneTrick/adapters/driven/telemetry"
 	"oneTrick/api"
+	coretelemetry "oneTrick/core/telemetry"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
@@ -47,7 +49,6 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		}
 	})
 
-	// Seed user document.
 	_, err = db.Collection("users").Doc(userID).Set(ctx, user.User{
 		ID:                  userID,
 		MemberID:            "member-" + runID,
@@ -60,7 +61,6 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		t.Fatalf("failed seeding user: %v", err)
 	}
 
-	// Seed active, archived, and merge-target snapshots.
 	seedSnap := func(s api.CharacterSnapshot) {
 		if _, err := db.Collection("snapshots").Doc(s.ID).Set(ctx, s); err != nil {
 			t.Fatalf("failed seeding snapshot %s: %v", s.ID, err)
@@ -106,7 +106,6 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		aggIDs = append(aggIDs, agg.ID)
 	}
 
-	// 1. Modern Trials match with heavy weapons/extra and another lobby character (verifies SelectPaths).
 	seedAgg(api.Aggregate{
 		ID:           runID + "-agg-1",
 		ActivityID:   "act-1",
@@ -165,7 +164,6 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		},
 	})
 
-	// 2. Legacy Trials match lacking stored EstimatedGameMode, nil TimePlayed, referencing archived snapshot.
 	seedAgg(api.Aggregate{
 		ID:           runID + "-agg-2",
 		ActivityID:   "act-2",
@@ -200,7 +198,6 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		},
 	})
 
-	// 3. Quickplay match with noMatch link (nil SnapshotID & SessionID in Firestore).
 	seedAgg(api.Aggregate{
 		ID:           runID + "-agg-3",
 		ActivityID:   "act-3",
@@ -234,7 +231,6 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		},
 	})
 
-	// 4. Corrupt/partial aggregate missing performance[charID] — must be skipped cleanly.
 	seedAgg(api.Aggregate{
 		ID:           runID + "-agg-corrupt",
 		ActivityID:   "act-corrupt",
@@ -258,11 +254,11 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 	userSvc := user.NewUserService(db, nil)
 	aggSvc := aggregate.NewService(db)
 	snapSvc := snapshot.NewService(db, userSvc, nil, aggSvc)
-	store := NewFirestoreMatchStore(db)
-	svc := NewService(NewUserReaderAdapter(userSvc), NewSnapshotReaderAdapter(snapSvc), store)
+	store := NewTelemetryMatchStore(db)
+	svc := coretelemetry.NewService(telemetrydriven.NewUserReader(userSvc), telemetrydriven.NewSnapshotReader(snapSvc), store)
 
 	t.Run("character-wide fast path non-truncated skips corrupt doc and normalizes archived snapshot", func(t *testing.T) {
-		res, err := svc.GetCharacterTelemetry(ctx, Query{
+		res, err := svc.GetCharacterTelemetry(ctx, coretelemetry.Query{
 			UserID:      "primary-" + runID,
 			CharacterID: charID,
 			Limit:       10,
@@ -276,19 +272,15 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		if len(res.Matches) != 3 {
 			t.Fatalf("expected 3 matches, got %d", len(res.Matches))
 		}
-		// Ascending chronological order: act-3 -> act-2 -> act-1
 		if res.Matches[0].ActivityID != "act-3" || res.Matches[1].ActivityID != "act-2" || res.Matches[2].ActivityID != "act-1" {
 			t.Fatalf("unexpected ordering: %+v", res.Matches)
 		}
-		// act-3: noMatch link
-		if res.Matches[0].SnapshotID != "" || res.Matches[0].SnapshotConfidence != ConfidenceNoMatch || !res.Matches[0].Won {
+		if res.Matches[0].SnapshotID != "" || res.Matches[0].SnapshotConfidence != coretelemetry.ConfidenceNoMatch || !res.Matches[0].Won {
 			t.Fatalf("unexpected act-3: %+v", res.Matches[0])
 		}
-		// act-2: legacy Trials + archived snapshot normalized to target
-		if res.Matches[1].EstimatedGameMode != GameModeTrials || res.Matches[1].SnapshotID != snapTargetID || res.Matches[1].HasTimePlayedSeconds || res.Matches[1].Won {
+		if res.Matches[1].EstimatedGameMode != coretelemetry.GameModeTrials || res.Matches[1].SnapshotID != snapTargetID || res.Matches[1].HasTimePlayedSeconds || res.Matches[1].Won {
 			t.Fatalf("unexpected act-2: %+v", res.Matches[1])
 		}
-		// act-1: active snapshot + timePlayedSeconds
 		if res.Matches[2].SnapshotID != snapActiveID || res.Matches[2].TimePlayedSeconds != 512 || !res.Matches[2].HasTimePlayedSeconds || res.Matches[2].SessionID != "sess-1" || !res.Matches[2].Won {
 			t.Fatalf("unexpected act-1: %+v", res.Matches[2])
 		}
@@ -298,7 +290,7 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 	})
 
 	t.Run("character-wide fast path truncated triggers Firestore WithCount aggregation", func(t *testing.T) {
-		res, err := svc.GetCharacterTelemetry(ctx, Query{
+		res, err := svc.GetCharacterTelemetry(ctx, coretelemetry.Query{
 			UserID:      userID,
 			CharacterID: charID,
 			Limit:       2,
@@ -309,7 +301,6 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		if !res.Truncated || len(res.Matches) != 2 {
 			t.Fatalf("expected truncated=true len=2, got truncated=%v len=%d", res.Truncated, len(res.Matches))
 		}
-		// 4 docs exist in Firestore for charID (corrupt doc is at offset 3 so not seen in Limit(3)), count >= 3.
 		if res.TotalCount < 3 {
 			t.Fatalf("expected totalCount >= 3, got %d", res.TotalCount)
 		}
@@ -319,10 +310,10 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 	})
 
 	t.Run("gameMode filter includes legacy aggregates and respects from/to inclusive bounds", func(t *testing.T) {
-		res, err := svc.GetCharacterTelemetry(ctx, Query{
+		res, err := svc.GetCharacterTelemetry(ctx, coretelemetry.Query{
 			UserID:      userID,
 			CharacterID: charID,
-			GameMode:    GameModeTrials,
+			GameMode:    coretelemetry.GameModeTrials,
 			From:        base.Add(30 * time.Minute),
 			To:          base.Add(40 * time.Minute),
 		})
@@ -338,7 +329,7 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 	})
 
 	t.Run("single-loadout snapshotId query uses snapshotIds branch", func(t *testing.T) {
-		res, err := svc.GetCharacterTelemetry(ctx, Query{
+		res, err := svc.GetCharacterTelemetry(ctx, coretelemetry.Query{
 			UserID:      userID,
 			CharacterID: charID,
 			SnapshotID:  snapActiveID,
@@ -369,7 +360,7 @@ func TestFirestoreEmulatorListRecentUnfilteredCorruptDocsAndNullStats(t *testing
 
 	runID := fmt.Sprintf("tel-corrupt-%d", time.Now().UnixNano())
 	base := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
-	store := NewFirestoreMatchStore(db)
+	store := NewTelemetryMatchStore(db)
 
 	var aggIDs []string
 	t.Cleanup(func() {
@@ -439,7 +430,6 @@ func TestFirestoreEmulatorListRecentUnfilteredCorruptDocsAndNullStats(t *testing
 
 	t.Run("leading corrupt docs still fill up to limit valid matches with exact count", func(t *testing.T) {
 		charID := runID + "-leading"
-		// Newest first: corrupt1 (40m), corrupt2 (30m), valid1 (20m), valid2 (10m)
 		seedCorrupt(charID+"-c1", charID, "corrupt-1", base.Add(40*time.Minute))
 		seedCorrupt(charID+"-c2", charID, "corrupt-2", base.Add(30*time.Minute))
 		seedValid(charID+"-v1", charID, "valid-1", base.Add(20*time.Minute))
@@ -459,7 +449,6 @@ func TestFirestoreEmulatorListRecentUnfilteredCorruptDocsAndNullStats(t *testing
 
 	t.Run("trailing corrupt doc at limit+1 does not falsely set truncated", func(t *testing.T) {
 		charID := runID + "-trailing"
-		// Newest first: valid1 (30m), valid2 (20m), corrupt1 (10m)
 		seedValid(charID+"-v1", charID, "valid-1", base.Add(30*time.Minute))
 		seedValid(charID+"-v2", charID, "valid-2", base.Add(20*time.Minute))
 		seedCorrupt(charID+"-c1", charID, "corrupt-1", base.Add(10*time.Minute))
@@ -478,7 +467,6 @@ func TestFirestoreEmulatorListRecentUnfilteredCorruptDocsAndNullStats(t *testing
 
 	t.Run("interleaved corrupt docs with extra valid docs beyond limit+1 return exact total and truncated=true", func(t *testing.T) {
 		charID := runID + "-interleaved"
-		// Newest first: corrupt1 (50m), valid1 (40m), valid2 (30m), corrupt2 (20m), valid3 (10m)
 		seedCorrupt(charID+"-c1", charID, "corrupt-1", base.Add(50*time.Minute))
 		seedValid(charID+"-v1", charID, "valid-1", base.Add(40*time.Minute))
 		seedValid(charID+"-v2", charID, "valid-2", base.Add(30*time.Minute))
@@ -540,4 +528,3 @@ func TestFirestoreEmulatorListRecentUnfilteredCorruptDocsAndNullStats(t *testing
 		}
 	})
 }
-
