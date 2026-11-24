@@ -75,10 +75,11 @@ type fakeSessionStore struct {
 	activeDocsCalls  int
 	capturedDocsIDs  []string
 
-	createErr    error
-	createCalls  int
-	createdDocs  []Session
-	nextID       int
+	createErr   error
+	createFn    func(ctx context.Context, sessions []Session) ([]CreateSessionResult, error)
+	createCalls int
+	createdDocs []Session
+	nextID      int
 }
 
 func (f *fakeSessionStore) GetActiveByUserIDs(_ context.Context, userIDs []string) ([]ActiveSession, error) {
@@ -109,19 +110,22 @@ func (f *fakeSessionStore) GetActiveSessionsByUserIDs(_ context.Context, userIDs
 	return out, nil
 }
 
-func (f *fakeSessionStore) CreateSessions(_ context.Context, sessions []Session) ([]Session, error) {
+func (f *fakeSessionStore) CreateSessionsIfInactive(ctx context.Context, sessions []Session) ([]CreateSessionResult, error) {
 	f.createCalls++
+	if f.createFn != nil {
+		return f.createFn(ctx, sessions)
+	}
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	created := make([]Session, len(sessions))
+	results := make([]CreateSessionResult, len(sessions))
 	for i, ses := range sessions {
 		f.nextID++
 		ses.ID = fmt.Sprintf("ses-new-%d", f.nextID)
-		created[i] = ses
+		results[i] = CreateSessionResult{Session: ses, Created: true}
+		f.createdDocs = append(f.createdDocs, ses)
 	}
-	f.createdDocs = append(f.createdDocs, created...)
-	return created, nil
+	return results, nil
 }
 
 type fakeCompRankReader struct {
@@ -914,13 +918,20 @@ func TestFireteamServiceStartSessions(t *testing.T) {
 		}
 	})
 
-	t.Run("validates empty members, blank fields, and missing caller", func(t *testing.T) {
+	t.Run("validates empty members, >12 members cap, blank fields, and missing caller", func(t *testing.T) {
 		users := &fakeUserReader{playersByID: map[string]Player{}}
 		store := &fakeSessionStore{}
 		svc := NewService(users, &fakePartyReader{}, store, nil)
 
 		if _, err := svc.StartSessions(clog.NewContext(context.Background()), "u-caller", nil, false); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("expected ErrInvalidRequest on empty targets, got %v", err)
+		}
+		tooMany := make([]StartSessionTarget, maxStartSessionTargets+1)
+		for i := range tooMany {
+			tooMany[i] = StartSessionTarget{UserID: "u-caller", CharacterID: fmt.Sprintf("char-%d", i)}
+		}
+		if _, err := svc.StartSessions(clog.NewContext(context.Background()), "u-caller", tooMany, false); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest when exceeding %d targets, got %v", maxStartSessionTargets, err)
 		}
 		if _, err := svc.StartSessions(clog.NewContext(context.Background()), "u-caller", []StartSessionTarget{{UserID: "u-caller", CharacterID: "  "}}, false); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("expected ErrInvalidRequest on blank characterId, got %v", err)
@@ -929,4 +940,195 @@ func TestFireteamServiceStartSessions(t *testing.T) {
 			t.Fatalf("expected ErrUserNotFound for missing caller, got %v", err)
 		}
 	})
+
+	t.Run("canonicalizes alias actorId to caller.ID across StartSession and StartSessions", func(t *testing.T) {
+		aliasID := caller.PrimaryMembershipID
+		existing := Session{
+			ID:          "ses-existing-canonical",
+			UserID:      caller.ID,
+			CharacterID: "char-active",
+			Status:      SessionStatusPending,
+			StartedAt:   fixedNow.Add(-time.Hour),
+		}
+		users := &fakeUserReader{
+			playersByID: map[string]Player{
+				aliasID:   caller,
+				caller.ID: caller,
+			},
+		}
+		party := &fakePartyReader{err: errors.New("should not call Bungie for self alias")}
+		store := &fakeSessionStore{activeDocs: []Session{existing}}
+		svc := &service{users: users, party: party, sessions: store, now: func() time.Time { return fixedNow }}
+
+		if _, err := svc.StartSession(
+			clog.NewContext(context.Background()),
+			aliasID,
+			StartSessionTarget{UserID: aliasID, CharacterID: "char-active"},
+			false,
+		); !errors.Is(err, ErrAlreadyActive) {
+			t.Fatalf("expected ErrAlreadyActive when existing session is stored under canonical caller.ID, got %v", err)
+		}
+
+		created, err := svc.StartSession(
+			clog.NewContext(context.Background()),
+			aliasID,
+			StartSessionTarget{UserID: aliasID, CharacterID: "char-new"},
+			false,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error creating session via alias actorID: %v", err)
+		}
+		if created.UserID != caller.ID {
+			t.Fatalf("expected created session UserID=%q, got %q", caller.ID, created.UserID)
+		}
+
+		results, err := svc.StartSessions(
+			clog.NewContext(context.Background()),
+			aliasID,
+			[]StartSessionTarget{
+				{UserID: aliasID, CharacterID: "char-active"},
+				{UserID: caller.ID, CharacterID: "char-active"},
+				{UserID: aliasID, CharacterID: "char-bulk"},
+				{UserID: caller.ID, CharacterID: "char-bulk"},
+			},
+			false,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error in StartSessions via alias actorID: %v", err)
+		}
+		if len(results) != 2 {
+			t.Fatalf("expected alias + canonical pairs deduplicated to 2 results, got %d: %+v", len(results), results)
+		}
+		if results[0].Outcome != StartSessionOutcomeSkippedActive || results[0].UserID != caller.ID || results[0].Session.ID != "ses-existing-canonical" {
+			t.Fatalf("unexpected first canonical result: %+v", results[0])
+		}
+		if results[1].Outcome != StartSessionOutcomeStarted || results[1].UserID != caller.ID || results[1].Session.UserID != caller.ID {
+			t.Fatalf("unexpected second canonical result: %+v", results[1])
+		}
+		if party.calls != 0 {
+			t.Fatalf("expected 0 Bungie party calls for self alias requests, got %d", party.calls)
+		}
+	})
+
+	t.Run("bounds starting comp rank fetch with timeout and degrades cleanly to Start: nil", func(t *testing.T) {
+		users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
+		store := &fakeSessionStore{}
+		hangingComp := &fakeCompRankReader{
+			fn: func(ctx context.Context, _ int64, _ int64, _ string) (CompRankSnapshot, bool, error) {
+				<-ctx.Done()
+				return CompRankSnapshot{}, false, ctx.Err()
+			},
+		}
+		svc := &service{
+			users:        users,
+			party:        &fakePartyReader{},
+			sessions:     store,
+			compRanks:    hangingComp,
+			partyTimeout: 20 * time.Millisecond,
+			now:          func() time.Time { return fixedNow },
+		}
+
+		ses, err := svc.StartSession(
+			clog.NewContext(context.Background()),
+			"u-caller",
+			StartSessionTarget{UserID: "u-caller", CharacterID: "char-1"},
+			true,
+		)
+		if err != nil {
+			t.Fatalf("expected StartSession to degrade gracefully on comp rank timeout, got %v", err)
+		}
+		if ses.CompTracking == nil || !ses.CompTracking.Enabled || ses.CompTracking.Start != nil {
+			t.Fatalf("expected CompTracking{Enabled: true, Start: nil}, got %+v", ses.CompTracking)
+		}
+
+		results, err := svc.StartSessions(
+			clog.NewContext(context.Background()),
+			"u-caller",
+			[]StartSessionTarget{{UserID: "u-caller", CharacterID: "char-2"}},
+			true,
+		)
+		if err != nil {
+			t.Fatalf("expected StartSessions to degrade gracefully on comp rank timeout, got %v", err)
+		}
+		if len(results) != 1 || results[0].Session.CompTracking == nil || !results[0].Session.CompTracking.Enabled || results[0].Session.CompTracking.Start != nil {
+			t.Fatalf("expected bulk CompTracking{Enabled: true, Start: nil}, got %+v", results)
+		}
+	})
+
+	t.Run("handles concurrent double-click race returned by CreateSessionsIfInactive", func(t *testing.T) {
+		winningSession := Session{
+			ID:          "ses-race-winner",
+			UserID:      "u-caller",
+			CharacterID: "char-1",
+			Status:      SessionStatusPending,
+			StartedAt:   fixedNow,
+		}
+		users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
+		store := &fakeSessionStore{
+			createFn: func(_ context.Context, _ []Session) ([]CreateSessionResult, error) {
+				return []CreateSessionResult{{Session: winningSession, Created: false}}, nil
+			},
+		}
+		svc := NewService(users, &fakePartyReader{}, store, nil)
+
+		if _, err := svc.StartSession(
+			clog.NewContext(context.Background()),
+			"u-caller",
+			StartSessionTarget{UserID: "u-caller", CharacterID: "char-1"},
+			false,
+		); !errors.Is(err, ErrAlreadyActive) {
+			t.Fatalf("expected ErrAlreadyActive on StartSession race, got %v", err)
+		}
+
+		results, err := svc.StartSessions(
+			clog.NewContext(context.Background()),
+			"u-caller",
+			[]StartSessionTarget{{UserID: "u-caller", CharacterID: "char-1"}},
+			false,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error on StartSessions race: %v", err)
+		}
+		if len(results) != 1 || results[0].Outcome != StartSessionOutcomeSkippedActive || results[0].Session.ID != "ses-race-winner" {
+			t.Fatalf("expected skipped_active with winning session on race, got %+v", results)
+		}
+	})
+}
+
+func TestGetFireteamSortsActiveSessionsNewestFirstWithIDTieBreaker(t *testing.T) {
+	t1 := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	caller := Player{
+		ID:                  "u-caller",
+		PrimaryMembershipID: "4611686018467484863",
+		DisplayName:         "Caller",
+		Memberships:         []Membership{{ID: "4611686018467484863", Type: 3}},
+	}
+	users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
+	party := &fakePartyReader{membershipIDs: []string{caller.PrimaryMembershipID}}
+	store := &fakeSessionStore{
+		activeSummaries: []ActiveSession{
+			{SessionID: "ses-older", UserID: "u-caller", CharacterID: "c1", StartedAt: t1},
+			{SessionID: "ses-tie-b", UserID: "u-caller", CharacterID: "c2", StartedAt: t2},
+			{SessionID: "ses-tie-a", UserID: "u-caller", CharacterID: "c3", StartedAt: t2},
+		},
+	}
+	svc := NewService(users, party, store, nil)
+
+	members, err := svc.GetFireteam(clog.NewContext(context.Background()), "u-caller")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(members) != 1 || len(members[0].ActiveSessions) != 3 {
+		t.Fatalf("unexpected members: %+v", members)
+	}
+	gotIDs := []string{
+		members[0].ActiveSessions[0].SessionID,
+		members[0].ActiveSessions[1].SessionID,
+		members[0].ActiveSessions[2].SessionID,
+	}
+	wantIDs := []string{"ses-tie-a", "ses-tie-b", "ses-older"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("expected active sessions sorted %v, got %v", wantIDs, gotIDs)
+	}
 }

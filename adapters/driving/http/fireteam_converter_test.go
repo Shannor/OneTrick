@@ -147,3 +147,33 @@ func TestFireteamSessionConverters(t *testing.T) {
 		t.Fatalf("unexpected second result: %+v", resp.Results[1])
 	}
 }
+
+func TestFireteamSessionErrorConverters(t *testing.T) {
+	if _, ok := ToAPIStartFireteamSessionsError(fireteam.ErrInvalidRequest).(api.StartFireteamSessions400JSONResponse); !ok {
+		t.Fatalf("expected 400 for ErrInvalidRequest")
+	}
+	if _, ok := ToAPIStartFireteamSessionsError(fireteam.ErrUnauthorized).(api.StartFireteamSessions401JSONResponse); !ok {
+		t.Fatalf("expected 401 for ErrUnauthorized")
+	}
+	if _, ok := ToAPIStartFireteamSessionsError(fireteam.ErrNotInFireteam).(api.StartFireteamSessions403JSONResponse); !ok {
+		t.Fatalf("expected 403 for ErrNotInFireteam")
+	}
+	if _, ok := ToAPIStartFireteamSessionsError(fireteam.ErrUserNotFound).(api.StartFireteamSessions404JSONResponse); !ok {
+		t.Fatalf("expected 404 for ErrUserNotFound")
+	}
+	if _, ok := ToAPIStartFireteamSessionsError(fireteam.ErrDestinyUnavailable).(api.StartFireteamSessions503JSONResponse); !ok {
+		t.Fatalf("expected 503 for ErrDestinyUnavailable")
+	}
+	if _, ok := ToAPIStartSessionError(fireteam.ErrAlreadyActive).(api.StartSession400JSONResponse); !ok {
+		t.Fatalf("expected 400 for StartSession ErrAlreadyActive")
+	}
+	if _, ok := ToAPIStartSessionError(fireteam.ErrNotInFireteam).(api.StartSession403JSONResponse); !ok {
+		t.Fatalf("expected 403 for StartSession ErrNotInFireteam")
+	}
+	if _, ok := ToAPIStartUserSessionError(fireteam.ErrAlreadyActive).(api.StartUserSession400JSONResponse); !ok {
+		t.Fatalf("expected 400 for StartUserSession ErrAlreadyActive")
+	}
+	if _, ok := ToAPIStartUserSessionError(fireteam.ErrDestinyUnavailable).(api.StartUserSession503JSONResponse); !ok {
+		t.Fatalf("expected 503 for StartUserSession ErrDestinyUnavailable")
+	}
+}

@@ -1,11 +1,13 @@
 package fireteam
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
 	"oneTrick/set"
 	"oneTrick/utils"
+	"slices"
 	"strings"
 	"time"
 
@@ -137,16 +139,12 @@ func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, err
 		if chars == nil {
 			chars = []Character{}
 		}
-		active := sessionsByUser[p.ID]
-		if active == nil {
-			active = []ActiveSession{}
-		}
 		members = append(members, Member{
 			ID:             p.ID,
 			MembershipID:   p.PrimaryMembershipID,
 			DisplayName:    p.DisplayName,
 			Characters:     chars,
-			ActiveSessions: active,
+			ActiveSessions: sortActiveSessions(sessionsByUser[p.ID]),
 		})
 	}
 
@@ -157,6 +155,23 @@ func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, err
 		"activeSessions":       totalActiveSessions,
 	})
 	return members, nil
+}
+
+func sortActiveSessions(sessions []ActiveSession) []ActiveSession {
+	if len(sessions) == 0 {
+		return []ActiveSession{}
+	}
+	sorted := slices.Clone(sessions)
+	slices.SortFunc(sorted, func(a, b ActiveSession) int {
+		if a.StartedAt.After(b.StartedAt) {
+			return -1
+		}
+		if a.StartedAt.Before(b.StartedAt) {
+			return 1
+		}
+		return cmp.Compare(a.SessionID, b.SessionID)
+	})
+	return sorted
 }
 
 func indexPlayersByMembership(base map[string]Player, players ...Player) map[string]Player {

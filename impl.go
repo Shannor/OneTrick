@@ -266,20 +266,7 @@ func (s Server) StartUserSession(ctx context.Context, request api.StartUserSessi
 		trackComp,
 	)
 	if err != nil {
-		switch {
-		case errors.Is(err, fireteam.ErrInvalidRequest), errors.Is(err, fireteam.ErrAlreadyActive):
-			return api.StartUserSession400JSONResponse{Message: err.Error()}, nil
-		case errors.Is(err, fireteam.ErrUnauthorized):
-			return api.StartUserSession401JSONResponse{Message: "unauthorized", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrNotInFireteam):
-			return api.StartUserSession403JSONResponse{Message: "target user is not in your current fireteam", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrUserNotFound):
-			return api.StartUserSession404JSONResponse{Message: "user not found", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrDestinyUnavailable):
-			return api.StartUserSession503JSONResponse{Message: "Destiny 2 servers are currently unavailable", Status: api.ErrDestinyServerDown}, nil
-		default:
-			return api.StartUserSession500JSONResponse{Message: err.Error(), Status: api.ErrInternalSystemDown}, nil
-		}
+		return httpadapter.ToAPIStartUserSessionError(err), nil
 	}
 	return api.StartUserSession201JSONResponse(httpadapter.ToAPISession(result)), nil
 }
@@ -471,20 +458,7 @@ func (s Server) StartFireteamSessions(ctx context.Context, request api.StartFire
 		trackComp,
 	)
 	if err != nil {
-		switch {
-		case errors.Is(err, fireteam.ErrInvalidRequest):
-			return api.StartFireteamSessions400JSONResponse{Message: err.Error(), Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrUnauthorized):
-			return api.StartFireteamSessions401JSONResponse{Message: "unauthorized", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrNotInFireteam):
-			return api.StartFireteamSessions403JSONResponse{Message: "target user is not in your current fireteam", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrUserNotFound):
-			return api.StartFireteamSessions404JSONResponse{Message: "user not found", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrDestinyUnavailable):
-			return api.StartFireteamSessions503JSONResponse{Message: "Destiny 2 servers are currently unavailable", Status: api.ErrDestinyServerDown}, nil
-		default:
-			return api.StartFireteamSessions500JSONResponse{Message: err.Error(), Status: api.ErrInternalSystemDown}, nil
-		}
+		return httpadapter.ToAPIStartFireteamSessionsError(err), nil
 	}
 
 	return httpadapter.ToAPIStartFireteamSessionsResponse(results), nil
@@ -577,20 +551,7 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 		trackComp,
 	)
 	if err != nil {
-		switch {
-		case errors.Is(err, fireteam.ErrInvalidRequest), errors.Is(err, fireteam.ErrAlreadyActive):
-			return api.StartSession400JSONResponse{Message: err.Error()}, nil
-		case errors.Is(err, fireteam.ErrUnauthorized):
-			return api.StartSession401JSONResponse{Message: "unauthorized", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrNotInFireteam):
-			return api.StartSession403JSONResponse{Message: "target user is not in your current fireteam", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrUserNotFound):
-			return api.StartSession404JSONResponse{Message: "user not found", Status: api.ErrUnknownError}, nil
-		case errors.Is(err, fireteam.ErrDestinyUnavailable):
-			return api.StartSession503JSONResponse{Message: "Destiny 2 servers are currently unavailable", Status: api.ErrDestinyServerDown}, nil
-		default:
-			return api.StartSession500JSONResponse{Message: err.Error(), Status: api.ErrInternalSystemDown}, nil
-		}
+		return httpadapter.ToAPIStartSessionError(err), nil
 	}
 	return api.StartSession201JSONResponse(httpadapter.ToAPISession(result)), nil
 }

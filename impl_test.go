@@ -2265,5 +2265,28 @@ func TestStartSessionAndStartUserSessionFireteamGuard(t *testing.T) {
 			t.Fatalf("expected FireteamService.StartSession not to be called on mismatch, got %q", ftMock.capturedTargetUserID)
 		}
 	})
+
+	t.Run("POST /fireteam/sessions rejects >12 members with 400", func(t *testing.T) {
+		ftMock := &mockFireteamService{}
+		r := newRouter(ftMock)
+		members := make([]map[string]string, 13)
+		for i := range members {
+			members[i] = map[string]string{
+				"userId":      "actor-1",
+				"characterId": fmt.Sprintf("char-%d", i),
+			}
+		}
+		payload, err := json.Marshal(map[string]any{"members": members})
+		if err != nil {
+			t.Fatalf("failed marshaling payload: %v", err)
+		}
+		w := postJSON(r, "/fireteam/sessions", "actor-1", string(payload))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 when >12 members are requested, got %d: %s", w.Code, w.Body.String())
+		}
+		if len(ftMock.capturedBulkTargets) != 0 {
+			t.Fatalf("expected FireteamService.StartSessions not to be called on >12 members, got %d targets", len(ftMock.capturedBulkTargets))
+		}
+	})
 }
 

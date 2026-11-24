@@ -13,7 +13,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const bulkCompRankConcurrency = 6
+const (
+	bulkCompRankConcurrency = 6
+	maxStartSessionTargets  = 12
+)
 
 type authorizedParty struct {
 	caller  Player
@@ -54,6 +57,7 @@ func (s *service) StartSession(
 	if err != nil {
 		return Session{}, err
 	}
+	target = canonicalizeTarget(target, party)
 
 	activeSessions, err := s.sessions.GetActiveSessionsByUserIDs(ctx, []string{target.UserID})
 	if err != nil {
@@ -78,16 +82,19 @@ func (s *service) StartSession(
 		ses = ses.WithCompTracking(startSnap)
 	}
 
-	created, err := s.sessions.CreateSessions(ctx, []Session{ses})
+	writeResults, err := s.sessions.CreateSessionsIfInactive(ctx, []Session{ses})
 	if err != nil {
 		return Session{}, fmt.Errorf("failed to create session: %w", err)
 	}
-	if len(created) == 0 {
+	if len(writeResults) == 0 {
 		return Session{}, errors.New("session store returned empty result")
 	}
+	if !writeResults[0].Created {
+		return Session{}, ErrAlreadyActive
+	}
 
-	clog.WithGroupField(ctx, "fireteamService.startSession", "sessionId", created[0].ID)
-	return created[0], nil
+	clog.WithGroupField(ctx, "fireteamService.startSession", "sessionId", writeResults[0].Session.ID)
+	return writeResults[0].Session, nil
 }
 
 func (s *service) StartSessions(
@@ -102,6 +109,9 @@ func (s *service) StartSessions(
 	}
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("%w: members must contain at least one target", ErrInvalidRequest)
+	}
+	if len(targets) > maxStartSessionTargets {
+		return nil, fmt.Errorf("%w: members cannot exceed %d targets", ErrInvalidRequest, maxStartSessionTargets)
 	}
 	if s.sessions == nil {
 		return nil, errors.New("session store not configured")
@@ -125,20 +135,22 @@ func (s *service) StartSessions(
 		return nil, err
 	}
 
-	activeDocs, err := s.sessions.GetActiveSessionsByUserIDs(ctx, uniqueUserIDs)
+	canonicalTargets, canonicalUserIDs := canonicalizeStartTargets(normalized, party)
+
+	activeDocs, err := s.sessions.GetActiveSessionsByUserIDs(ctx, canonicalUserIDs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch active sessions: %w", err)
 	}
 
 	activeByPair := indexLatestActiveSessions(activeDocs)
-	pendingTargets := filterPendingTargets(normalized, activeByPair)
-	skippedCount := len(normalized) - len(pendingTargets)
+	pendingTargets := filterPendingTargets(canonicalTargets, activeByPair)
 	if len(pendingTargets) == 0 {
+		results, startedCount, skippedCount := buildStartSessionResults(canonicalTargets, activeByPair, nil)
 		clog.WithGroupFields(ctx, "fireteamService.startSessions", clog.Fields{
-			"startedCount": 0,
+			"startedCount": startedCount,
 			"skippedCount": skippedCount,
 		})
-		return buildStartSessionResults(normalized, activeByPair, nil), nil
+		return results, nil
 	}
 
 	var compRanks []compRankLookup
@@ -155,18 +167,18 @@ func (s *service) StartSessions(
 		compRanks,
 	)
 
-	created, err := s.sessions.CreateSessions(ctx, newSessions)
+	writeResults, err := s.sessions.CreateSessionsIfInactive(ctx, newSessions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fireteam sessions: %w", err)
 	}
-	if len(created) != len(pendingTargets) {
-		return nil, fmt.Errorf("session store returned %d created sessions, expected %d", len(created), len(pendingTargets))
+	if len(writeResults) != len(pendingTargets) {
+		return nil, fmt.Errorf("session store returned %d session results, expected %d", len(writeResults), len(pendingTargets))
 	}
 
-	results := buildStartSessionResults(normalized, activeByPair, created)
+	results, startedCount, skippedCount := buildStartSessionResults(canonicalTargets, activeByPair, writeResults)
 
 	clog.WithGroupFields(ctx, "fireteamService.startSessions", clog.Fields{
-		"startedCount":        len(created),
+		"startedCount":        startedCount,
 		"skippedCount":        skippedCount,
 		"compRankFailedCount": compRankFailedCount,
 	})
@@ -196,6 +208,31 @@ func normalizeStartTargets(actorID string, targets []StartSessionTarget) ([]Star
 		}
 	}
 	return normalized, uniqueUserIDs.ToSlice(), nonSelfUserIDs.Size(), nil
+}
+
+func canonicalizeTarget(target StartSessionTarget, party authorizedParty) StartSessionTarget {
+	if member, ok := party.members[target.UserID]; ok && member.ID != "" {
+		target.UserID = member.ID
+	}
+	return target
+}
+
+func canonicalizeStartTargets(targets []StartSessionTarget, party authorizedParty) ([]StartSessionTarget, []string) {
+	seenPairs := set.New[SessionKey]()
+	canonical := make([]StartSessionTarget, 0, len(targets))
+	uniqueUserIDs := set.NewOrdered[string]()
+
+	for _, target := range targets {
+		resolved := canonicalizeTarget(target, party)
+		key := resolved.Key()
+		if seenPairs.Contains(key) {
+			continue
+		}
+		seenPairs.Add(key)
+		canonical = append(canonical, resolved)
+		uniqueUserIDs.Add(resolved.UserID)
+	}
+	return canonical, uniqueUserIDs.ToSlice()
 }
 
 func indexLatestActiveSessions(docs []Session) map[SessionKey]Session {
@@ -301,10 +338,12 @@ func buildPendingSessions(
 func buildStartSessionResults(
 	targets []StartSessionTarget,
 	activeByPair map[SessionKey]Session,
-	created []Session,
-) []StartSessionResult {
+	writeResults []CreateSessionResult,
+) ([]StartSessionResult, int, int) {
 	results := make([]StartSessionResult, 0, len(targets))
-	createdIdx := 0
+	writeIdx := 0
+	startedCount := 0
+	skippedCount := 0
 	for _, target := range targets {
 		if existing, active := activeByPair[target.Key()]; active {
 			results = append(results, StartSessionResult{
@@ -313,17 +352,26 @@ func buildStartSessionResults(
 				Outcome:     StartSessionOutcomeSkippedActive,
 				Session:     existing,
 			})
+			skippedCount++
 			continue
+		}
+		wr := writeResults[writeIdx]
+		writeIdx++
+		outcome := StartSessionOutcomeSkippedActive
+		if wr.Created {
+			outcome = StartSessionOutcomeStarted
+			startedCount++
+		} else {
+			skippedCount++
 		}
 		results = append(results, StartSessionResult{
 			UserID:      target.UserID,
 			CharacterID: target.CharacterID,
-			Outcome:     StartSessionOutcomeStarted,
-			Session:     created[createdIdx],
+			Outcome:     outcome,
+			Session:     wr.Session,
 		})
-		createdIdx++
 	}
-	return results
+	return results, startedCount, skippedCount
 }
 
 // authorizeMembers verifies that every non-self target user is present in the
@@ -448,7 +496,9 @@ func (s *service) fetchStartingCompRank(ctx context.Context, member Player, char
 	if err != nil {
 		return CompRankSnapshot{}, false, fmt.Errorf("failed to resolve primary membership: %w", err)
 	}
-	snap, ok, err := s.compRanks.GetCompetitiveRank(ctx, pmID, membershipType, characterID)
+	rankCtx, cancel := context.WithTimeout(ctx, s.bungiePartyTimeout())
+	defer cancel()
+	snap, ok, err := s.compRanks.GetCompetitiveRank(rankCtx, pmID, membershipType, characterID)
 	if err != nil {
 		return CompRankSnapshot{}, false, fmt.Errorf("failed to fetch starting competitive rank: %w", err)
 	}

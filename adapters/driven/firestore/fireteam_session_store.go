@@ -5,6 +5,7 @@ import (
 	"fmt"
 	corefireteam "oneTrick/core/fireteam"
 	"oneTrick/ptr"
+	"oneTrick/set"
 	"oneTrick/utils"
 	"time"
 
@@ -27,8 +28,9 @@ func NewFireteamSessionStore(db *firestore.Client) *FireteamSessionStore {
 }
 
 type activeSessionProjectionDoc struct {
-	UserID       string `firestore:"userId"`
-	CharacterID  string `firestore:"characterId"`
+	ID           string    `firestore:"id"`
+	UserID       string    `firestore:"userId"`
+	CharacterID  string    `firestore:"characterId"`
 	StartedAt    time.Time `firestore:"startedAt"`
 	CompTracking *struct {
 		Enabled bool `firestore:"enabled"`
@@ -103,7 +105,7 @@ func (s *FireteamSessionStore) GetActiveByUserIDs(ctx context.Context, userIDs [
 		docs, err := s.db.Collection(sessionsCollection).
 			Where("userId", "in", chunk).
 			Where("status", "==", string(corefireteam.SessionStatusPending)).
-			Select("userId", "characterId", "startedAt", "compTracking.enabled").
+			Select("id", "userId", "characterId", "startedAt", "compTracking.enabled").
 			Documents(ctx).
 			GetAll()
 		if err != nil {
@@ -114,8 +116,12 @@ func (s *FireteamSessionStore) GetActiveByUserIDs(ctx context.Context, userIDs [
 			if err := doc.DataTo(&projected); err != nil {
 				return nil, fmt.Errorf("failed to parse active session %s: %w", doc.Ref.ID, err)
 			}
+			sessionID := projected.ID
+			if sessionID == "" {
+				sessionID = doc.Ref.ID
+			}
 			results = append(results, corefireteam.ActiveSession{
-				SessionID:   doc.Ref.ID,
+				SessionID:   sessionID,
 				UserID:      projected.UserID,
 				CharacterID: projected.CharacterID,
 				StartedAt:   projected.StartedAt,
@@ -142,55 +148,101 @@ func (s *FireteamSessionStore) GetActiveSessionsByUserIDs(ctx context.Context, u
 			return nil, fmt.Errorf("failed to query active session docs for users: %w", err)
 		}
 		for _, doc := range docs {
-			var raw sessionDoc
-			if err := doc.DataTo(&raw); err != nil {
-				return nil, fmt.Errorf("failed to parse active session %s: %w", doc.Ref.ID, err)
+			ses, err := decodeSessionSnapshot(doc)
+			if err != nil {
+				return nil, err
 			}
-			if raw.ID == "" {
-				raw.ID = doc.Ref.ID
-			}
-			results = append(results, fromSessionDoc(raw))
+			results = append(results, ses)
 		}
 	}
 	return results, nil
 }
 
-func (s *FireteamSessionStore) CreateSessions(ctx context.Context, sessions []corefireteam.Session) ([]corefireteam.Session, error) {
+func (s *FireteamSessionStore) CreateSessionsIfInactive(
+	ctx context.Context,
+	sessions []corefireteam.Session,
+) ([]corefireteam.CreateSessionResult, error) {
 	if len(sessions) == 0 {
-		return []corefireteam.Session{}, nil
+		return []corefireteam.CreateSessionResult{}, nil
 	}
 	if s.db == nil {
 		return nil, fmt.Errorf("firestore client not configured")
 	}
 
-	if len(sessions) == 1 {
-		ref := s.db.Collection(sessionsCollection).NewDoc()
-		ses := sessions[0]
-		ses.ID = ref.ID
-		if ses.AggregateIDs == nil {
-			ses.AggregateIDs = make([]string, 0)
+	userIDSet := set.NewOrdered[string]()
+	for _, ses := range sessions {
+		if ses.UserID != "" {
+			userIDSet.Add(ses.UserID)
 		}
-		if _, err := ref.Set(ctx, toSessionDoc(ses)); err != nil {
-			return nil, err
-		}
-		return []corefireteam.Session{ses}, nil
 	}
+	userIDs := userIDSet.ToSlice()
 
-	batch := s.db.Batch()
-	created := make([]corefireteam.Session, len(sessions))
-	for i, ses := range sessions {
-		ref := s.db.Collection(sessionsCollection).NewDoc()
-		ses.ID = ref.ID
-		if ses.AggregateIDs == nil {
-			ses.AggregateIDs = make([]string, 0)
+	var results []corefireteam.CreateSessionResult
+	err := s.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		activeByPair := make(map[corefireteam.SessionKey]corefireteam.Session, len(sessions))
+		for _, chunk := range utils.Chunk(userIDs, firestoreInBatchLimit) {
+			q := s.db.Collection(sessionsCollection).
+				Where("userId", "in", chunk).
+				Where("status", "==", string(corefireteam.SessionStatusPending))
+			docs, err := tx.Documents(q).GetAll()
+			if err != nil {
+				return fmt.Errorf("failed to query active sessions in transaction: %w", err)
+			}
+			for _, doc := range docs {
+				ses, err := decodeSessionSnapshot(doc)
+				if err != nil {
+					return err
+				}
+				key := ses.Key()
+				if prev, exists := activeByPair[key]; exists && !ses.IsNewerThan(prev) {
+					continue
+				}
+				activeByPair[key] = ses
+			}
 		}
-		batch.Set(ref, toSessionDoc(ses))
-		created[i] = ses
-	}
-	if _, err := batch.Commit(ctx); err != nil {
+
+		txResults := make([]corefireteam.CreateSessionResult, len(sessions))
+		createdInTx := make(map[corefireteam.SessionKey]corefireteam.Session, len(sessions))
+		for i, ses := range sessions {
+			key := ses.Key()
+			if existing, active := activeByPair[key]; active {
+				txResults[i] = corefireteam.CreateSessionResult{Session: existing, Created: false}
+				continue
+			}
+			if existing, dup := createdInTx[key]; dup {
+				txResults[i] = corefireteam.CreateSessionResult{Session: existing, Created: false}
+				continue
+			}
+			ref := s.db.Collection(sessionsCollection).NewDoc()
+			ses.ID = ref.ID
+			if ses.AggregateIDs == nil {
+				ses.AggregateIDs = make([]string, 0)
+			}
+			if err := tx.Set(ref, toSessionDoc(ses)); err != nil {
+				return err
+			}
+			createdInTx[key] = ses
+			txResults[i] = corefireteam.CreateSessionResult{Session: ses, Created: true}
+		}
+
+		results = txResults
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	return created, nil
+	return results, nil
+}
+
+func decodeSessionSnapshot(doc *firestore.DocumentSnapshot) (corefireteam.Session, error) {
+	var raw sessionDoc
+	if err := doc.DataTo(&raw); err != nil {
+		return corefireteam.Session{}, fmt.Errorf("failed to parse active session %s: %w", doc.Ref.ID, err)
+	}
+	if raw.ID == "" {
+		raw.ID = doc.Ref.ID
+	}
+	return fromSessionDoc(raw), nil
 }
 
 func toSessionDoc(ses corefireteam.Session) sessionDoc {

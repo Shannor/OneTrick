@@ -125,8 +125,8 @@ type ActiveSession struct {
 type SessionStatus string
 
 const (
-	SessionStatusPending   SessionStatus = "pending"
-	SessionStatusCompleted SessionStatus = "completed"
+	SessionStatusPending  SessionStatus = "pending"
+	SessionStatusComplete SessionStatus = "complete"
 )
 
 type AuditField struct {
@@ -272,10 +272,15 @@ type PartyReader interface {
 	GetPartyMembershipIDs(ctx context.Context, primaryMembershipID int64, membershipType int64) ([]string, error)
 }
 
+type CreateSessionResult struct {
+	Session Session
+	Created bool
+}
+
 type SessionStore interface {
 	GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
 	GetActiveSessionsByUserIDs(ctx context.Context, userIDs []string) ([]Session, error)
-	CreateSessions(ctx context.Context, sessions []Session) ([]Session, error)
+	CreateSessionsIfInactive(ctx context.Context, sessions []Session) ([]CreateSessionResult, error)
 }
 
 type CompRankReader interface {
