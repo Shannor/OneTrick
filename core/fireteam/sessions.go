@@ -57,7 +57,7 @@ func (s *service) StartSession(
 	if err != nil {
 		return Session{}, err
 	}
-	target = canonicalizeTarget(target, party)
+	target = party.canonicalizeTarget(target)
 
 	activeSessions, err := s.sessions.GetActiveSessionsByUserIDs(ctx, []string{target.UserID})
 	if err != nil {
@@ -135,7 +135,7 @@ func (s *service) StartSessions(
 		return nil, err
 	}
 
-	canonicalTargets, canonicalUserIDs := canonicalizeStartTargets(normalized, party)
+	canonicalTargets, canonicalUserIDs := party.canonicalizeTargets(normalized)
 
 	activeDocs, err := s.sessions.GetActiveSessionsByUserIDs(ctx, canonicalUserIDs)
 	if err != nil {
@@ -210,20 +210,20 @@ func normalizeStartTargets(actorID string, targets []StartSessionTarget) ([]Star
 	return normalized, uniqueUserIDs.ToSlice(), nonSelfUserIDs.Size(), nil
 }
 
-func canonicalizeTarget(target StartSessionTarget, party authorizedParty) StartSessionTarget {
-	if member, ok := party.members[target.UserID]; ok && member.ID != "" {
+func (p authorizedParty) canonicalizeTarget(target StartSessionTarget) StartSessionTarget {
+	if member, ok := p.members[target.UserID]; ok && member.ID != "" {
 		target.UserID = member.ID
 	}
 	return target
 }
 
-func canonicalizeStartTargets(targets []StartSessionTarget, party authorizedParty) ([]StartSessionTarget, []string) {
+func (p authorizedParty) canonicalizeTargets(targets []StartSessionTarget) ([]StartSessionTarget, []string) {
 	seenPairs := set.New[SessionKey]()
 	canonical := make([]StartSessionTarget, 0, len(targets))
 	uniqueUserIDs := set.NewOrdered[string]()
 
 	for _, target := range targets {
-		resolved := canonicalizeTarget(target, party)
+		resolved := p.canonicalizeTarget(target)
 		key := resolved.Key()
 		if seenPairs.Contains(key) {
 			continue
