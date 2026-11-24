@@ -4,14 +4,15 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	fireteamadapters "oneTrick/adapters/fireteam"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
+	"oneTrick/core/fireteam"
 	"oneTrick/envvars"
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
-	"oneTrick/services/fireteam"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -67,7 +68,11 @@ func main() {
 	aggregateService := aggregate.NewService(firestore)
 	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
 	sessionService := session.NewService(sessionStore, aggregateService, userService, destinyService, snapshotService, manifestService)
-	fireteamService := fireteam.NewService(userService, destinyService, sessionService)
+	fireteamService := fireteam.NewService(
+		fireteamadapters.NewUserReader(userService),
+		fireteamadapters.NewPartyReader(destinyService),
+		fireteamadapters.NewActiveSessionReader(sessionService),
+	)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
 	server := NewServer(
 		destinyService,

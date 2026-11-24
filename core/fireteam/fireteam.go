@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"oneTrick/api"
-	"oneTrick/services/destiny"
-	"oneTrick/services/session"
-	"oneTrick/services/user"
+	"maps"
 	"oneTrick/set"
 	"oneTrick/utils"
 	"strings"
@@ -49,7 +46,7 @@ func (s *service) bungiePartyTimeout() time.Duration {
 func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, error) {
 	clog.WithGroupField(ctx, "fireteamService.getFireteam", "userId", userID)
 
-	caller, err := s.users.GetUser(ctx, userID)
+	caller, err := s.users.GetPlayer(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch user: %w", err)
 	}
@@ -60,16 +57,16 @@ func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, err
 	}
 
 	partyCtx, cancel := context.WithTimeout(ctx, s.bungiePartyTimeout())
-	partyMembers, err := s.party.GetPartyMembers(partyCtx, pmID, membershipType)
+	rawPartyIDs, err := s.party.GetPartyMembershipIDs(partyCtx, pmID, membershipType)
 	cancel()
 	if err != nil {
-		if errors.Is(err, destiny.ErrDestinyServerDown) || (ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)) {
+		if errors.Is(err, ErrDestinyUnavailable) || (ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded)) {
 			return nil, fmt.Errorf("%w: %w", ErrDestinyUnavailable, err)
 		}
 		return nil, fmt.Errorf("failed to fetch party members: %w", err)
 	}
 
-	if len(partyMembers) == 0 {
+	if len(rawPartyIDs) == 0 {
 		clog.WithGroupFields(ctx, "fireteamService.getFireteam", clog.Fields{
 			"partySize":      0,
 			"matchedMembers": 0,
@@ -78,50 +75,43 @@ func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, err
 		return []Member{}, nil
 	}
 
-	usersByMembership := make(map[string]user.User, len(partyMembers)*2+2)
-	indexUserByMemberships(usersByMembership, *caller)
+	playersByMembership := indexPlayersByMembership(nil, caller)
 
-	partyMembershipIDs := make([]string, 0, len(partyMembers))
-	lookupIDs := make([]string, 0, len(partyMembers))
+	partyMembershipIDs := make([]string, 0, len(rawPartyIDs))
+	lookupIDs := make([]string, 0, len(rawPartyIDs))
 	missingMembershipIDs := 0
-	for _, member := range partyMembers {
-		if member.MembershipId == nil {
-			missingMembershipIDs++
-			continue
-		}
-		mID := strings.TrimSpace(*member.MembershipId)
+	for _, rawID := range rawPartyIDs {
+		mID := strings.TrimSpace(rawID)
 		if mID == "" {
 			missingMembershipIDs++
 			continue
 		}
 		partyMembershipIDs = append(partyMembershipIDs, mID)
-		if _, ok := usersByMembership[mID]; !ok {
+		if _, ok := playersByMembership[mID]; !ok {
 			lookupIDs = append(lookupIDs, mID)
 		}
 	}
 
 	lookupIDs = utils.UniqueTrimmedStrings(lookupIDs)
 	if len(lookupIDs) > 0 {
-		matchedUsers, err := s.users.FindByPartyMembershipIDs(ctx, lookupIDs)
+		matchedPlayers, err := s.users.FindPlayersByPartyMembershipIDs(ctx, lookupIDs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch fireteam users: %w", err)
 		}
-		for _, u := range matchedUsers {
-			indexUserByMemberships(usersByMembership, u)
-		}
+		playersByMembership = indexPlayersByMembership(playersByMembership, matchedPlayers...)
 	}
 
 	matchedUserIDs := set.NewOrdered[string]()
-	matchedInOrder := make([]user.User, 0, len(partyMembershipIDs))
+	matchedInOrder := make([]Player, 0, len(partyMembershipIDs))
 	for _, mID := range partyMembershipIDs {
-		u, ok := usersByMembership[mID]
-		if !ok || !matchedUserIDs.Add(u.ID) {
+		p, ok := playersByMembership[mID]
+		if !ok || !matchedUserIDs.Add(p.ID) {
 			continue
 		}
-		matchedInOrder = append(matchedInOrder, u)
+		matchedInOrder = append(matchedInOrder, p)
 	}
 
-	sessionsByUser := make(map[string][]session.ActiveSession, matchedUserIDs.Size())
+	sessionsByUser := make(map[string][]ActiveSession, matchedUserIDs.Size())
 	totalActiveSessions := 0
 	if matchedUserIDs.Size() > 0 && s.sessions != nil {
 		activeSessions, err := s.sessions.GetActiveByUserIDs(ctx, matchedUserIDs.ToSlice())
@@ -135,26 +125,26 @@ func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, err
 	}
 
 	members := make([]Member, 0, len(matchedInOrder))
-	for _, u := range matchedInOrder {
-		chars := u.Characters
+	for _, p := range matchedInOrder {
+		chars := p.Characters
 		if chars == nil {
-			chars = []api.Character{}
+			chars = []Character{}
 		}
-		active := sessionsByUser[u.ID]
+		active := sessionsByUser[p.ID]
 		if active == nil {
-			active = []session.ActiveSession{}
+			active = []ActiveSession{}
 		}
 		members = append(members, Member{
-			ID:             u.ID,
-			MembershipID:   u.PrimaryMembershipID,
-			DisplayName:    u.DisplayName,
+			ID:             p.ID,
+			MembershipID:   p.PrimaryMembershipID,
+			DisplayName:    p.DisplayName,
 			Characters:     chars,
 			ActiveSessions: active,
 		})
 	}
 
 	clog.WithGroupFields(ctx, "fireteamService.getFireteam", clog.Fields{
-		"partySize":            len(partyMembers),
+		"partySize":            len(rawPartyIDs),
 		"missingMembershipIds": missingMembershipIDs,
 		"matchedMembers":       len(members),
 		"activeSessions":       totalActiveSessions,
@@ -162,16 +152,23 @@ func (s *service) GetFireteam(ctx context.Context, userID string) ([]Member, err
 	return members, nil
 }
 
-func indexUserByMemberships(dst map[string]user.User, u user.User) {
-	if id := strings.TrimSpace(u.PrimaryMembershipID); id != "" {
-		dst[id] = u
+func indexPlayersByMembership(base map[string]Player, players ...Player) map[string]Player {
+	indexed := maps.Clone(base)
+	if indexed == nil {
+		indexed = make(map[string]Player, len(players)*2)
 	}
-	if id := strings.TrimSpace(u.MemberID); id != "" {
-		dst[id] = u
-	}
-	for _, m := range u.Memberships {
-		if id := strings.TrimSpace(m.ID); id != "" {
-			dst[id] = u
+	for _, p := range players {
+		if id := strings.TrimSpace(p.PrimaryMembershipID); id != "" {
+			indexed[id] = p
+		}
+		if id := strings.TrimSpace(p.MemberID); id != "" {
+			indexed[id] = p
+		}
+		for _, m := range p.Memberships {
+			if id := strings.TrimSpace(m.ID); id != "" {
+				indexed[id] = p
+			}
 		}
 	}
+	return indexed
 }

@@ -3,11 +3,6 @@ package fireteam
 import (
 	"context"
 	"errors"
-	"oneTrick/api"
-	"oneTrick/clients/bungie"
-	"oneTrick/services/destiny"
-	"oneTrick/services/session"
-	"oneTrick/services/user"
 	"reflect"
 	"testing"
 	"time"
@@ -16,46 +11,45 @@ import (
 )
 
 type fakeUserReader struct {
-	usersByID        map[string]user.User
-	getUserErr       error
-	getUserCalls     int
-	partyUsers       []user.User
+	playersByID      map[string]Player
+	getPlayerErr     error
+	getPlayerCalls   int
+	partyPlayers     []Player
 	partyErr         error
 	partyLookupCalls int
 	capturedPartyIDs []string
 }
 
-func (f *fakeUserReader) GetUser(_ context.Context, id string) (*user.User, error) {
-	f.getUserCalls++
-	if f.getUserErr != nil {
-		return nil, f.getUserErr
+func (f *fakeUserReader) GetPlayer(_ context.Context, id string) (Player, error) {
+	f.getPlayerCalls++
+	if f.getPlayerErr != nil {
+		return Player{}, f.getPlayerErr
 	}
-	if u, ok := f.usersByID[id]; ok {
-		cp := u
-		return &cp, nil
+	if p, ok := f.playersByID[id]; ok {
+		return p, nil
 	}
-	return nil, user.NotFound
+	return Player{}, ErrUserNotFound
 }
 
-func (f *fakeUserReader) FindByPartyMembershipIDs(_ context.Context, membershipIDs []string) ([]user.User, error) {
+func (f *fakeUserReader) FindPlayersByPartyMembershipIDs(_ context.Context, membershipIDs []string) ([]Player, error) {
 	f.partyLookupCalls++
 	f.capturedPartyIDs = append([]string(nil), membershipIDs...)
 	if f.partyErr != nil {
 		return nil, f.partyErr
 	}
-	return f.partyUsers, nil
+	return f.partyPlayers, nil
 }
 
 type fakePartyReader struct {
-	members        []bungie.PartyMember
+	membershipIDs  []string
 	err            error
-	fn             func(ctx context.Context, primaryMembershipID int64, membershipType int64) ([]bungie.PartyMember, error)
+	fn             func(ctx context.Context, primaryMembershipID int64, membershipType int64) ([]string, error)
 	calls          int
 	capturedPMID   int64
 	capturedPMType int64
 }
 
-func (f *fakePartyReader) GetPartyMembers(ctx context.Context, primaryMembershipID int64, membershipType int64) ([]bungie.PartyMember, error) {
+func (f *fakePartyReader) GetPartyMembershipIDs(ctx context.Context, primaryMembershipID int64, membershipType int64) ([]string, error) {
 	f.calls++
 	f.capturedPMID = primaryMembershipID
 	f.capturedPMType = membershipType
@@ -65,17 +59,17 @@ func (f *fakePartyReader) GetPartyMembers(ctx context.Context, primaryMembership
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.members, nil
+	return f.membershipIDs, nil
 }
 
 type fakeActiveSessionReader struct {
-	sessions        []session.ActiveSession
+	sessions        []ActiveSession
 	err             error
 	calls           int
 	capturedUserIDs []string
 }
 
-func (f *fakeActiveSessionReader) GetActiveByUserIDs(_ context.Context, userIDs []string) ([]session.ActiveSession, error) {
+func (f *fakeActiveSessionReader) GetActiveByUserIDs(_ context.Context, userIDs []string) ([]ActiveSession, error) {
 	f.calls++
 	f.capturedUserIDs = append([]string(nil), userIDs...)
 	if f.err != nil {
@@ -84,28 +78,50 @@ func (f *fakeActiveSessionReader) GetActiveByUserIDs(_ context.Context, userIDs 
 	return f.sessions, nil
 }
 
+func TestIndexPlayersByMembershipDoesNotMutateInput(t *testing.T) {
+	p1 := Player{ID: "u-1", PrimaryMembershipID: "111", MemberID: "m-1"}
+	p2 := Player{
+		ID:                  "u-2",
+		PrimaryMembershipID: "222",
+		Memberships:         []Membership{{ID: "alt-222", Type: 2}},
+	}
+
+	base := indexPlayersByMembership(nil, p1)
+	merged := indexPlayersByMembership(base, p2)
+
+	if len(base) != 2 {
+		t.Fatalf("expected original map untouched with 2 keys, got %d: %+v", len(base), base)
+	}
+	if _, exists := base["222"]; exists {
+		t.Fatalf("expected original map not to be mutated with p2 key")
+	}
+	if len(merged) != 4 || merged["111"].ID != "u-1" || merged["222"].ID != "u-2" || merged["alt-222"].ID != "u-2" {
+		t.Fatalf("unexpected merged index: %+v", merged)
+	}
+}
+
 func TestFireteamServiceGetFireteam(t *testing.T) {
-	hunter := api.Character{Id: "char-1", Class: "Hunter", Light: 2010}
-	titan := api.Character{Id: "char-2", Class: "Titan", Light: 2010}
-	warlock := api.Character{Id: "char-3", Class: "Warlock", Light: 2005}
+	hunter := Character{ID: "char-1", Class: "Hunter", Light: 2010}
+	titan := Character{ID: "char-2", Class: "Titan", Light: 2010}
+	warlock := Character{ID: "char-3", Class: "Warlock", Light: 2005}
 	t1 := time.Date(2026, 5, 1, 18, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 1, 19, 0, 0, 0, time.UTC)
 
-	caller := user.User{
+	caller := Player{
 		ID:                  "u-caller",
 		MemberID:            "bnet-caller",
 		PrimaryMembershipID: "4611686018467484863",
 		DisplayName:         "Caller",
-		Memberships: []user.Membership{
+		Memberships: []Membership{
 			{ID: "4611686018467484863", Type: 3},
 			{ID: "4611686018467480000", Type: 1},
 		},
-		Characters: []api.Character{hunter},
+		Characters: []Character{hunter},
 	}
 
 	t.Run("0 party members returns empty slice without batch user or session queries", func(t *testing.T) {
-		users := &fakeUserReader{usersByID: map[string]user.User{"u-caller": caller}}
-		party := &fakePartyReader{members: nil}
+		users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
+		party := &fakePartyReader{membershipIDs: nil}
 		sessions := &fakeActiveSessionReader{}
 		svc := NewService(users, party, sessions)
 
@@ -116,8 +132,8 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 		if got == nil || len(got) != 0 {
 			t.Fatalf("expected non-nil empty slice, got %#v", got)
 		}
-		if users.getUserCalls != 1 {
-			t.Fatalf("expected 1 caller lookup, got %d", users.getUserCalls)
+		if users.getPlayerCalls != 1 {
+			t.Fatalf("expected 1 caller lookup, got %d", users.getPlayerCalls)
 		}
 		if users.partyLookupCalls != 0 {
 			t.Fatalf("expected 0 party batch lookups, got %d", users.partyLookupCalls)
@@ -128,14 +144,12 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 	})
 
 	t.Run("1 party member (caller solo) reuses caller without redundant user batch query and hydrates active sessions", func(t *testing.T) {
-		users := &fakeUserReader{usersByID: map[string]user.User{"u-caller": caller}}
+		users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
 		party := &fakePartyReader{
-			members: []bungie.PartyMember{
-				{MembershipId: new(caller.PrimaryMembershipID)},
-			},
+			membershipIDs: []string{caller.PrimaryMembershipID},
 		}
 		sessions := &fakeActiveSessionReader{
-			sessions: []session.ActiveSession{
+			sessions: []ActiveSession{
 				{
 					SessionID:   "ses-1",
 					UserID:      "u-caller",
@@ -152,10 +166,10 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if party.calls != 1 || party.capturedPMID != 4611686018467484863 || party.capturedPMType != 3 {
-			t.Fatalf("unexpected Bungie GetPartyMembers call: calls=%d pmID=%d type=%d", party.calls, party.capturedPMID, party.capturedPMType)
+			t.Fatalf("unexpected Bungie GetPartyMembershipIDs call: calls=%d pmID=%d type=%d", party.calls, party.capturedPMID, party.capturedPMType)
 		}
-		if users.getUserCalls != 1 {
-			t.Fatalf("expected 1 caller lookup, got %d", users.getUserCalls)
+		if users.getPlayerCalls != 1 {
+			t.Fatalf("expected 1 caller lookup, got %d", users.getPlayerCalls)
 		}
 		if users.partyLookupCalls != 0 {
 			t.Fatalf("expected 0 extra party user queries when only caller is in party, got %d", users.partyLookupCalls)
@@ -172,12 +186,10 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 		}
 	})
 
-	t.Run("non-Cross-Save caller matched via secondary linked membership in User.Memberships", func(t *testing.T) {
-		users := &fakeUserReader{usersByID: map[string]user.User{"u-caller": caller}}
+	t.Run("non-Cross-Save caller matched via secondary linked membership in Player.Memberships", func(t *testing.T) {
+		users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
 		party := &fakePartyReader{
-			members: []bungie.PartyMember{
-				{MembershipId: new(" 4611686018467480000 ")},
-			},
+			membershipIDs: []string{" 4611686018467480000 "},
 		}
 		sessions := &fakeActiveSessionReader{}
 		svc := NewService(users, party, sessions)
@@ -195,48 +207,48 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 	})
 
 	t.Run("multiple party members uses 1 batched user lookup, trims whitespace, deduplicates lookupIDs, and preserves order", func(t *testing.T) {
-		mate1 := user.User{
+		mate1 := Player{
 			ID:                  "u-mate1",
 			MemberID:            "bnet-mate1",
 			PrimaryMembershipID: "4611686018467484001",
 			DisplayName:         "MateOne",
-			Memberships:         []user.Membership{{ID: "4611686018467484001", Type: 3}, {ID: "alt-mate1", Type: 2}},
-			Characters:          []api.Character{titan},
+			Memberships:         []Membership{{ID: "4611686018467484001", Type: 3}, {ID: "alt-mate1", Type: 2}},
+			Characters:          []Character{titan},
 		}
-		mate2 := user.User{
+		mate2 := Player{
 			ID:                  "u-mate2",
 			MemberID:            "bnet-mate2",
 			PrimaryMembershipID: "4611686018467484002",
 			DisplayName:         "MateTwo",
 			Characters:          nil,
 		}
-		mate3ByMemberID := user.User{
+		mate3ByMemberID := Player{
 			ID:                  "u-mate3",
 			MemberID:            "999000333",
 			PrimaryMembershipID: "4611686018467484003",
 			DisplayName:         "MateThree",
-			Characters:          []api.Character{warlock},
+			Characters:          []Character{warlock},
 		}
 
 		users := &fakeUserReader{
-			usersByID:  map[string]user.User{"u-caller": caller},
-			partyUsers: []user.User{mate1, mate2, mate3ByMemberID},
+			playersByID:  map[string]Player{"u-caller": caller},
+			partyPlayers: []Player{mate1, mate2, mate3ByMemberID},
 		}
 		party := &fakePartyReader{
-			members: []bungie.PartyMember{
-				{MembershipId: new(" " + caller.PrimaryMembershipID + " ")},
-				{MembershipId: nil},
-				{MembershipId: new("   ")},
-				{MembershipId: new(" " + mate1.PrimaryMembershipID + " ")},
-				{MembershipId: new("4611686018499999999")},
-				{MembershipId: new(mate2.PrimaryMembershipID)},
-				{MembershipId: new(mate1.PrimaryMembershipID)},
-				{MembershipId: new("alt-mate1")},
-				{MembershipId: new("999000333")},
+			membershipIDs: []string{
+				" " + caller.PrimaryMembershipID + " ",
+				"",
+				"   ",
+				" " + mate1.PrimaryMembershipID + " ",
+				"4611686018499999999",
+				mate2.PrimaryMembershipID,
+				mate1.PrimaryMembershipID,
+				"alt-mate1",
+				"999000333",
 			},
 		}
 		sessions := &fakeActiveSessionReader{
-			sessions: []session.ActiveSession{
+			sessions: []ActiveSession{
 				{
 					SessionID:   "ses-mate1-a",
 					UserID:      "u-mate1",
@@ -267,8 +279,8 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if users.getUserCalls != 1 {
-			t.Fatalf("expected exactly 1 caller GetUser lookup (no N+1 loop), got %d", users.getUserCalls)
+		if users.getPlayerCalls != 1 {
+			t.Fatalf("expected exactly 1 caller lookup (no N+1 loop), got %d", users.getPlayerCalls)
 		}
 		if users.partyLookupCalls != 1 {
 			t.Fatalf("expected exactly 1 batched party user lookup, got %d", users.partyLookupCalls)
@@ -317,14 +329,11 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 
 	t.Run("unregistered-only party skips active session lookup and returns non-nil empty slice", func(t *testing.T) {
 		users := &fakeUserReader{
-			usersByID:  map[string]user.User{"u-caller": caller},
-			partyUsers: []user.User{},
+			playersByID:  map[string]Player{"u-caller": caller},
+			partyPlayers: []Player{},
 		}
 		party := &fakePartyReader{
-			members: []bungie.PartyMember{
-				{MembershipId: new("4611686018499999998")},
-				{MembershipId: new("4611686018499999999")},
-			},
+			membershipIDs: []string{"4611686018499999998", "4611686018499999999"},
 		}
 		sessions := &fakeActiveSessionReader{}
 		svc := NewService(users, party, sessions)
@@ -344,15 +353,15 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 		}
 	})
 
-	t.Run("propagates caller user.NotFound without calling Bungie or sessions", func(t *testing.T) {
-		users := &fakeUserReader{usersByID: map[string]user.User{}}
+	t.Run("propagates caller ErrUserNotFound without calling Bungie or sessions", func(t *testing.T) {
+		users := &fakeUserReader{playersByID: map[string]Player{}}
 		party := &fakePartyReader{}
 		sessions := &fakeActiveSessionReader{}
 		svc := NewService(users, party, sessions)
 
 		_, err := svc.GetFireteam(clog.NewContext(context.Background()), "missing-user")
-		if !errors.Is(err, user.NotFound) {
-			t.Fatalf("expected error wrapping user.NotFound, got %v", err)
+		if !errors.Is(err, ErrUserNotFound) {
+			t.Fatalf("expected error wrapping ErrUserNotFound, got %v", err)
 		}
 		if party.calls != 0 {
 			t.Fatalf("expected 0 Bungie calls when caller is not found, got %d", party.calls)
@@ -362,18 +371,18 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 		}
 	})
 
-	t.Run("maps Destiny server down and Bungie party timeout to ErrDestinyUnavailable while preserving caller cancellation", func(t *testing.T) {
-		users := &fakeUserReader{usersByID: map[string]user.User{"u-caller": caller}}
+	t.Run("maps Destiny unavailable and Bungie party timeout to ErrDestinyUnavailable while preserving caller cancellation", func(t *testing.T) {
+		users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
 
-		partyDown := &fakePartyReader{err: destiny.ErrDestinyServerDown}
+		partyDown := &fakePartyReader{err: ErrDestinyUnavailable}
 		svcDown := NewService(users, partyDown, &fakeActiveSessionReader{})
 		_, err := svcDown.GetFireteam(clog.NewContext(context.Background()), "u-caller")
-		if !errors.Is(err, ErrDestinyUnavailable) || !errors.Is(err, destiny.ErrDestinyServerDown) {
-			t.Fatalf("expected error matching ErrDestinyUnavailable and destiny.ErrDestinyServerDown, got %v", err)
+		if !errors.Is(err, ErrDestinyUnavailable) {
+			t.Fatalf("expected ErrDestinyUnavailable, got %v", err)
 		}
 
 		partyTimeout := &fakePartyReader{
-			fn: func(ctx context.Context, _ int64, _ int64) ([]bungie.PartyMember, error) {
+			fn: func(ctx context.Context, _ int64, _ int64) ([]string, error) {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			},
@@ -402,20 +411,20 @@ func TestFireteamServiceGetFireteam(t *testing.T) {
 
 	t.Run("propagates party batch lookup and active session reader errors", func(t *testing.T) {
 		usersPartyErr := &fakeUserReader{
-			usersByID: map[string]user.User{"u-caller": caller},
-			partyErr:  errors.New("firestore batch error"),
+			playersByID: map[string]Player{"u-caller": caller},
+			partyErr:    errors.New("firestore batch error"),
 		}
 		partyWithMate := &fakePartyReader{
-			members: []bungie.PartyMember{{MembershipId: new("4611686018467484001")}},
+			membershipIDs: []string{"4611686018467484001"},
 		}
 		svcPartyErr := NewService(usersPartyErr, partyWithMate, &fakeActiveSessionReader{})
 		if _, err := svcPartyErr.GetFireteam(clog.NewContext(context.Background()), "u-caller"); err == nil {
 			t.Fatal("expected error when party batch lookup fails")
 		}
 
-		users := &fakeUserReader{usersByID: map[string]user.User{"u-caller": caller}}
+		users := &fakeUserReader{playersByID: map[string]Player{"u-caller": caller}}
 		partySolo := &fakePartyReader{
-			members: []bungie.PartyMember{{MembershipId: new(caller.PrimaryMembershipID)}},
+			membershipIDs: []string{caller.PrimaryMembershipID},
 		}
 		sessionsErr := &fakeActiveSessionReader{err: errors.New("sessions query failed")}
 		svcSesErr := NewService(users, partySolo, sessionsErr)

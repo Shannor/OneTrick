@@ -8,10 +8,10 @@ import (
 	"net/http/httptest"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/core/fireteam"
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
-	"oneTrick/services/fireteam"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -1563,8 +1563,18 @@ func TestGetFireteamEndpoint(t *testing.T) {
 					ID:           "u-1",
 					MembershipID: "4611686018467484863",
 					DisplayName:  "GuardianOne",
-					Characters:   []api.Character{{Id: "char-1", Class: "Hunter", Light: 2010}},
-					ActiveSessions: []session.ActiveSession{
+					Characters: []fireteam.Character{
+						{
+							ID:          "char-1",
+							Class:       "Hunter",
+							Light:       2010,
+							EmblemColor: fireteam.Color{Red: 10, Green: 20, Blue: 30, Alpha: 255},
+							Stats: map[string]fireteam.ClassStat{
+								"mobility": {Name: "Mobility", Value: 100, HasIcon: true},
+							},
+						},
+					},
+					ActiveSessions: []fireteam.ActiveSession{
 						{
 							SessionID:   "ses-1",
 							UserID:      "u-1",
@@ -1579,7 +1589,7 @@ func TestGetFireteamEndpoint(t *testing.T) {
 					MembershipID:   "4611686018467484002",
 					DisplayName:    "GuardianTwo",
 					Characters:     nil,
-					ActiveSessions: []session.ActiveSession{},
+					ActiveSessions: []fireteam.ActiveSession{},
 				},
 			},
 		}
@@ -1606,6 +1616,12 @@ func TestGetFireteamEndpoint(t *testing.T) {
 		if len(got) != 2 {
 			t.Fatalf("expected 2 members, got %d", len(got))
 		}
+		if len(got[0].Characters) != 1 || got[0].Characters[0].Id != "char-1" || got[0].Characters[0].EmblemColor.Red != 10 {
+			t.Fatalf("unexpected converted character on first member: %+v", got[0].Characters)
+		}
+		if got[0].Characters[0].Stats == nil || (*got[0].Characters[0].Stats)["mobility"].Value != 100 {
+			t.Fatalf("unexpected converted stats on first member: %+v", got[0].Characters[0].Stats)
+		}
 		if got[0].ActiveSessions == nil || len(*got[0].ActiveSessions) != 1 {
 			t.Fatalf("expected 1 active session on first member, got %+v", got[0])
 		}
@@ -1620,7 +1636,7 @@ func TestGetFireteamEndpoint(t *testing.T) {
 
 	t.Run("404 returns user not found when caller does not exist", func(t *testing.T) {
 		ftMock := &mockFireteamService{
-			err: fmt.Errorf("failed to fetch user: %w", user.NotFound),
+			err: fmt.Errorf("failed to fetch user: %w", fireteam.ErrUserNotFound),
 		}
 
 		r := newRouter(ftMock)

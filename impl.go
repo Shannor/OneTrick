@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/core/fireteam"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
-	"oneTrick/services/fireteam"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -410,7 +410,7 @@ func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestO
 	clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
 	members, err := s.FireteamService.GetFireteam(ctx, request.Params.XUserID)
 	if err != nil {
-		if errors.Is(err, user.NotFound) {
+		if errors.Is(err, fireteam.ErrUserNotFound) {
 			return api.GetFireteam404JSONResponse{Message: "user not found"}, nil
 		}
 		if errors.Is(err, fireteam.ErrDestinyUnavailable) {
@@ -427,9 +427,9 @@ func (s Server) GetFireteam(ctx context.Context, request api.GetFireteamRequestO
 func toAPIFireteamMembers(members []fireteam.Member) []api.FireteamMember {
 	out := make([]api.FireteamMember, 0, len(members))
 	for _, m := range members {
-		chars := m.Characters
-		if chars == nil {
-			chars = []api.Character{}
+		chars := make([]api.Character, 0, len(m.Characters))
+		for _, c := range m.Characters {
+			chars = append(chars, toAPICharacter(c))
 		}
 		active := make([]api.FireteamActiveSession, 0, len(m.ActiveSessions))
 		for _, ses := range m.ActiveSessions {
@@ -449,6 +449,42 @@ func toAPIFireteamMembers(members []fireteam.Member) []api.FireteamMember {
 		})
 	}
 	return out
+}
+
+func toAPICharacter(c fireteam.Character) api.Character {
+	var statsPtr *map[string]api.ClassStat
+	if c.Stats != nil {
+		stats := make(map[string]api.ClassStat, len(c.Stats))
+		for k, st := range c.Stats {
+			stats[k] = api.ClassStat{
+				Name:            st.Name,
+				Description:     st.Description,
+				Icon:            st.Icon,
+				HasIcon:         st.HasIcon,
+				StatCategory:    st.StatCategory,
+				AggregationType: st.AggregationType,
+				Value:           st.Value,
+			}
+		}
+		statsPtr = &stats
+	}
+
+	return api.Character{
+		Id:                  c.ID,
+		Class:               c.Class,
+		Race:                c.Race,
+		CurrentTitle:        c.CurrentTitle,
+		Light:               c.Light,
+		EmblemURL:           c.EmblemURL,
+		EmblemBackgroundURL: c.EmblemBackgroundURL,
+		EmblemColor: api.Color{
+			Red:   c.EmblemColor.Red,
+			Green: c.EmblemColor.Green,
+			Blue:  c.EmblemColor.Blue,
+			Alpha: c.EmblemColor.Alpha,
+		},
+		Stats: statsPtr,
+	}
 }
 
 func (s Server) GetSession(ctx context.Context, request api.GetSessionRequestObject) (api.GetSessionResponseObject, error) {
