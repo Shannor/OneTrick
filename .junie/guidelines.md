@@ -105,6 +105,7 @@ Never call a tool before the `<UPDATE>` block. Never omit the tool call.
 - Database: Firestore (use emulator locally when possible)
 - Never edit generated files directly; update the spec and re-generate.
 - Keep environment setup steps documented near scripts (Makefile or scripts/).
+- Reuse internal utility packages for common patterns instead of hand-rolling boilerplate: `oneTrick/set` (`set.New`, `set.NewOrdered`), `oneTrick/utils` (`utils.UniqueNonZero`, `utils.UnionNonZero`, `utils.UniqueTrimmedStrings`, `utils.Chunk`), and `oneTrick/adapters/driving/http` for HTTP DTO conversions.
 
 ## Safety
 - Back up via minimal, reversible edits.

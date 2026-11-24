@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/core/gamemode"
 	"slices"
 	"strconv"
 	"strings"
@@ -621,66 +622,10 @@ func ActivityModeTypeToString(modeType *bungie.CurrentActivityModeType) string {
 	}
 }
 
-var quickplayModesAndActivities = []string{
-	"Control Quickplay",
-	"Control",
-	"Zone Control",
-	"Control: Matchmade",
-	"Zone Control: Matchmade",
-	"Cutting Edge: Zone Control: Matchmade",
-	"Clash",
-	"Clash Quickplay",
-	"Clash 3v3: Matchmade",
-}
-
-func isIronBannerActivity(mode, activity string) bool {
-	for _, s := range []string{mode, activity} {
-		lower := strings.ToLower(s)
-		if strings.Contains(lower, "iron banner") ||
-			strings.Contains(lower, "eruption") ||
-			strings.Contains(lower, "fortress") ||
-			strings.Contains(lower, "tribute") {
-			return true
-		}
-	}
-	return false
-}
-
-func isCompetitiveActivity(mode, activity string) bool {
-	if strings.Contains(strings.ToLower(activity), "competitive") ||
-		strings.Contains(strings.ToLower(mode), "competitive") {
-		return true
-	}
-	switch strings.ToLower(mode) {
-	case "survival", "control competitive", "clash competitive", "competitive", "competitive: matchmade":
-		return true
-	}
-	switch strings.ToLower(activity) {
-	case "survival", "control competitive", "clash competitive", "competitive", "competitive: matchmade":
-		return true
-	}
-	return false
-}
-
-func isTrialsActivity(mode, activity string) bool {
-	for _, s := range []string{mode, activity} {
-		lower := strings.ToLower(s)
-		if strings.Contains(lower, "trials of osiris") ||
-			strings.EqualFold(s, "Trials Survival") ||
-			strings.EqualFold(s, "Trials Countdown") {
-			return true
-		}
-	}
-	return false
-}
-
-func isQuickplayActivity(mode, activity string) bool {
-	for _, qp := range quickplayModesAndActivities {
-		if strings.EqualFold(mode, qp) || strings.EqualFold(activity, qp) {
-			return true
-		}
-	}
-	return false
+// EstimateGameModeName classifies an activity into a canonical game mode string using the priority order:
+// ironBanner -> trials -> competitive -> quickplay, returning "" if unclassifiable.
+func EstimateGameModeName(mode, activity string) string {
+	return gamemode.EstimateName(mode, activity)
 }
 
 // EstimateGameMode classifies an activity into a canonical api.GameMode using the priority order:
@@ -688,23 +633,14 @@ func isQuickplayActivity(mode, activity string) bool {
 func EstimateGameMode(mode *string, activity string) *api.GameMode {
 	m := ""
 	if mode != nil {
-		m = strings.TrimSpace(*mode)
+		m = *mode
 	}
-	act := strings.TrimSpace(activity)
-
-	if isIronBannerActivity(m, act) {
-		return new(api.GameModeIronBanner)
+	name := EstimateGameModeName(m, activity)
+	if name == "" {
+		return nil
 	}
-	if isTrialsActivity(m, act) {
-		return new(api.GameModeTrials)
-	}
-	if isCompetitiveActivity(m, act) {
-		return new(api.GameModeCompetitive)
-	}
-	if isQuickplayActivity(m, act) {
-		return new(api.GameModeQuickPlay)
-	}
-	return nil
+	gm := api.GameMode(name)
+	return &gm
 }
 
 // MatchesGameMode classifies whether an ActivityHistory record belongs to the specified GameMode.

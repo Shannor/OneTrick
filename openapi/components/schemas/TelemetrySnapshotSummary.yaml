@@ -1,0 +1,11 @@
+type: object
+description: Lightweight snapshot metadata referenced by telemetry matches
+required:
+  - id
+  - name
+properties:
+  id:
+    type: string
+    x-go-name: ID
+  name:
+    type: string

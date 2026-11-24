@@ -8,6 +8,7 @@ import (
 	httpadapter "oneTrick/adapters/driving/http"
 	"oneTrick/api"
 	"oneTrick/core/fireteam"
+	"oneTrick/core/telemetry"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
@@ -37,6 +38,7 @@ type Server struct {
 	SessionService    session.Service
 	FireteamService   fireteam.Service
 	StatsService      stats.Service
+	TelemetryService  telemetry.Service
 	InternalAPIKey    string
 }
 
@@ -50,6 +52,7 @@ func NewServer(
 	fireteamService fireteam.Service,
 	manifestService destiny.ManifestService,
 	statsService stats.Service,
+	telemetrySvc telemetry.Service,
 	internalAPIKey string,
 ) Server {
 	return Server{
@@ -62,6 +65,7 @@ func NewServer(
 		FireteamService:   fireteamService,
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
+		TelemetryService:  telemetrySvc,
 		InternalAPIKey:    internalAPIKey,
 	}
 }
@@ -1206,3 +1210,56 @@ func (s Server) BackfillAggregateData(ctx context.Context, request api.BackfillA
 		Failed:  0,
 	}, nil
 }
+
+func (s Server) GetCharacterTelemetry(ctx context.Context, request api.GetCharacterTelemetryRequestObject) (api.GetCharacterTelemetryResponseObject, error) {
+	reqFields := clog.Fields{
+		"userId":      request.UserID,
+		"characterId": request.CharacterID,
+	}
+	if request.Params.SnapshotID != nil && *request.Params.SnapshotID != "" {
+		reqFields["snapshotId"] = *request.Params.SnapshotID
+	}
+	if request.Params.GameMode != nil && *request.Params.GameMode != "" {
+		reqFields["gameMode"] = string(*request.Params.GameMode)
+	}
+	if request.Params.Limit != nil {
+		reqFields["limit"] = *request.Params.Limit
+	}
+	if request.Params.From != nil {
+		reqFields["from"] = request.Params.From.Format(time.RFC3339)
+	}
+	if request.Params.To != nil {
+		reqFields["to"] = request.Params.To.Format(time.RFC3339)
+	}
+	clog.WithGroupFields(ctx, "request", reqFields)
+
+	if request.Params.Limit != nil && (*request.Params.Limit < 1 || *request.Params.Limit > telemetry.MaxLimit) {
+		return api.GetCharacterTelemetry400JSONResponse{
+			Message: fmt.Sprintf("limit must be between 1 and %d", telemetry.MaxLimit),
+			Status:  api.ErrUnknownError,
+		}, nil
+	}
+
+	result, err := s.TelemetryService.GetCharacterTelemetry(ctx, httpadapter.ToTelemetryQuery(request))
+	if err != nil {
+		if errors.Is(err, telemetry.ErrInvalidQuery) {
+			return api.GetCharacterTelemetry400JSONResponse{
+				Message: err.Error(),
+				Status:  api.ErrUnknownError,
+			}, nil
+		}
+		if errors.Is(err, telemetry.ErrNotFound) {
+			return api.GetCharacterTelemetry404JSONResponse{
+				Message: err.Error(),
+				Status:  api.ErrUnknownError,
+			}, nil
+		}
+		return api.GetCharacterTelemetry500JSONResponse{
+			Message: err.Error(),
+			Status:  api.ErrInternalSystemDown,
+		}, nil
+	}
+
+	return httpadapter.ToAPITelemetryResponse(result), nil
+}
+

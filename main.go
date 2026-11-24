@@ -5,10 +5,13 @@ import (
 	"log/slog"
 	"net/http"
 	fireteamdriven "oneTrick/adapters/driven/fireteam"
+	firestoredriven "oneTrick/adapters/driven/firestore"
+	telemetrydriven "oneTrick/adapters/driven/telemetry"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
 	"oneTrick/core/fireteam"
+	"oneTrick/core/telemetry"
 	"oneTrick/envvars"
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
@@ -74,6 +77,11 @@ func main() {
 		fireteamdriven.NewActiveSessionReader(sessionService),
 	)
 	statsService := stats.NewService(firestore, snapshotService, userService, manifestService)
+	telemetryService := telemetry.NewService(
+		telemetrydriven.NewUserReader(userService),
+		telemetrydriven.NewSnapshotReader(snapshotService),
+		firestoredriven.NewTelemetryMatchStore(firestore),
+	)
 	server := NewServer(
 		destinyService,
 		d2AuthAService,
@@ -84,6 +92,7 @@ func main() {
 		fireteamService,
 		manifestService,
 		statsService,
+		telemetryService,
 		env.InternalAPIKey,
 	)
 

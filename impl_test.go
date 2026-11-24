@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/core/fireteam"
+	"oneTrick/core/telemetry"
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
@@ -545,6 +547,9 @@ func TestOpenAPISpecLoadsAndValidates(t *testing.T) {
 	}
 	if swagger.Paths.Find("/snapshots/{snapshotId}/similar") == nil {
 		t.Fatal("expected /snapshots/{snapshotId}/similar path in swagger spec")
+	}
+	if swagger.Paths.Find("/users/{userId}/characters/{characterId}/telemetry") == nil {
+		t.Fatal("expected /users/{userId}/characters/{characterId}/telemetry path in swagger spec")
 	}
 }
 
@@ -1525,6 +1530,261 @@ func TestBackfillSnapshotInfoPopulatesEquipableItemSetHash(t *testing.T) {
 	if gotHash == nil || *gotHash != setHash {
 		t.Fatalf("expected backfilled EquipableItemSetHash=%d, got %v", setHash, gotHash)
 	}
+}
+
+type mockTelemetryService struct {
+	result        telemetry.Result
+	err           error
+	capturedQuery telemetry.Query
+	calls         int
+}
+
+func (m *mockTelemetryService) GetCharacterTelemetry(_ context.Context, query telemetry.Query) (telemetry.Result, error) {
+	m.calls++
+	m.capturedQuery = query
+	if m.err != nil {
+		return telemetry.Result{}, m.err
+	}
+	return m.result, nil
+}
+
+func TestGetCharacterTelemetryHandler(t *testing.T) {
+	period := time.Date(2026, 11, 20, 4, 12, 33, 0, time.UTC)
+
+	t.Run("converts request params and returns 200 DTO with optional fields", func(t *testing.T) {
+		mockSvc := &mockTelemetryService{
+			result: telemetry.Result{
+				Matches: []telemetry.Match{
+					{
+						ActivityID:           "15482930123",
+						Period:               period,
+						Location:             "Javelin-4",
+						Activity:             "Trials of Osiris",
+						EstimatedGameMode:    telemetry.GameModeTrials,
+						Kills:                14,
+						Deaths:               5,
+						Assists:              6,
+						Won:                  true,
+						TimePlayedSeconds:    512,
+						HasTimePlayedSeconds: true,
+						SessionID:            "sess_987xyz",
+						SnapshotID:           "snap_abc123",
+						SnapshotConfidence:   telemetry.ConfidenceHigh,
+					},
+					{
+						ActivityID:         "15482930124",
+						Period:             period.Add(time.Minute),
+						Location:           "Burnout",
+						Activity:           "Control",
+						Kills:              10,
+						Deaths:             8,
+						Assists:            2,
+						Won:                false,
+						SnapshotConfidence: telemetry.ConfidenceNoMatch,
+					},
+				},
+				Snapshots: map[string]telemetry.SnapshotSummary{
+					"snap_abc123": {ID: "snap_abc123", Name: "Solar Hand Cannon"},
+				},
+				TotalCount: 248,
+				Truncated:  true,
+			},
+		}
+		srv := Server{TelemetryService: mockSvc}
+		from := period.Add(-time.Hour)
+		to := period.Add(time.Hour)
+		ctx := clog.NewContext(context.Background())
+
+		resp, err := srv.GetCharacterTelemetry(ctx, api.GetCharacterTelemetryRequestObject{
+			UserID:      "u1",
+			CharacterID: "c1",
+			Params: api.GetCharacterTelemetryParams{
+				From:       &from,
+				To:         &to,
+				GameMode:   new(api.GameModeTrials),
+				SnapshotID: new("snap_abc123"),
+				Limit:      new(250),
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		okResp, ok := resp.(api.GetCharacterTelemetry200JSONResponse)
+		if !ok {
+			t.Fatalf("expected 200 response, got %T", resp)
+		}
+		if mockSvc.capturedQuery.UserID != "u1" || mockSvc.capturedQuery.CharacterID != "c1" || mockSvc.capturedQuery.GameMode != telemetry.GameModeTrials || mockSvc.capturedQuery.SnapshotID != "snap_abc123" || mockSvc.capturedQuery.Limit != 250 {
+			t.Fatalf("unexpected query passed to service: %+v", mockSvc.capturedQuery)
+		}
+		if len(okResp.Matches) != 2 || okResp.TotalCount != 248 || !okResp.Truncated {
+			t.Fatalf("unexpected response summary: %+v", okResp)
+		}
+		m0 := okResp.Matches[0]
+		if m0.EstimatedGameMode == nil || *m0.EstimatedGameMode != api.GameModeTrials || m0.TimePlayedSeconds == nil || *m0.TimePlayedSeconds != 512 || m0.SessionID == nil || *m0.SessionID != "sess_987xyz" || m0.SnapshotID == nil || *m0.SnapshotID != "snap_abc123" || m0.SnapshotConfidence == nil || *m0.SnapshotConfidence != api.HighConfidenceLevel {
+			t.Fatalf("unexpected match[0] DTO: %+v", m0)
+		}
+		m1 := okResp.Matches[1]
+		if m1.EstimatedGameMode != nil || m1.TimePlayedSeconds != nil || m1.SessionID != nil || m1.SnapshotID != nil || m1.SnapshotConfidence == nil || *m1.SnapshotConfidence != api.NoMatchConfidenceLevel {
+			t.Fatalf("unexpected match[1] DTO: %+v", m1)
+		}
+		if okResp.Snapshots["snap_abc123"].Name != "Solar Hand Cannon" {
+			t.Fatalf("unexpected snapshots DTO: %+v", okResp.Snapshots)
+		}
+
+		reqAttrs := make(map[string]string)
+		for _, attr := range clog.BagFromContext(ctx).Attrs() {
+			if attr.Key == "request" {
+				for _, child := range attr.Value.Group() {
+					reqAttrs[child.Key] = child.Value.String()
+				}
+			}
+		}
+		if reqAttrs["from"] != from.Format(time.RFC3339) || reqAttrs["to"] != to.Format(time.RFC3339) {
+			t.Fatalf("expected request.from=%q and request.to=%q, got %+v", from.Format(time.RFC3339), to.Format(time.RFC3339), reqAttrs)
+		}
+	})
+
+	t.Run("rejects explicit limit < 1 or > 2000 with 400 before calling service", func(t *testing.T) {
+		for _, badLimit := range []int{0, -5, telemetry.MaxLimit + 1} {
+			mockSvc := &mockTelemetryService{}
+			srv := Server{TelemetryService: mockSvc}
+			resp, err := srv.GetCharacterTelemetry(context.Background(), api.GetCharacterTelemetryRequestObject{
+				UserID:      "u1",
+				CharacterID: "c1",
+				Params:      api.GetCharacterTelemetryParams{Limit: new(badLimit)},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error for limit=%d: %v", badLimit, err)
+			}
+			if _, ok := resp.(api.GetCharacterTelemetry400JSONResponse); !ok {
+				t.Fatalf("expected 400 response for limit=%d, got %T", badLimit, resp)
+			}
+			if mockSvc.calls != 0 {
+				t.Fatalf("expected service not to be called for limit=%d", badLimit)
+			}
+		}
+	})
+
+	t.Run("maps ErrInvalidQuery->400, ErrNotFound->404, internal error->500", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			err   error
+			check func(api.GetCharacterTelemetryResponseObject) bool
+		}{
+			{
+				name: "400",
+				err:  fmt.Errorf("%w: from must not be after to", telemetry.ErrInvalidQuery),
+				check: func(r api.GetCharacterTelemetryResponseObject) bool {
+					_, ok := r.(api.GetCharacterTelemetry400JSONResponse)
+					return ok
+				},
+			},
+			{
+				name: "404",
+				err:  fmt.Errorf("user missing: %w", telemetry.ErrNotFound),
+				check: func(r api.GetCharacterTelemetryResponseObject) bool {
+					_, ok := r.(api.GetCharacterTelemetry404JSONResponse)
+					return ok
+				},
+			},
+			{
+				name: "500",
+				err:  errors.New("firestore unavailable"),
+				check: func(r api.GetCharacterTelemetryResponseObject) bool {
+					_, ok := r.(api.GetCharacterTelemetry500JSONResponse)
+					return ok
+				},
+			},
+		}
+		for _, tc := range cases {
+			srv := Server{TelemetryService: &mockTelemetryService{err: tc.err}}
+			resp, err := srv.GetCharacterTelemetry(context.Background(), api.GetCharacterTelemetryRequestObject{
+				UserID:      "u1",
+				CharacterID: "c1",
+			})
+			if err != nil {
+				t.Fatalf("unexpected error for %s: %v", tc.name, err)
+			}
+			if !tc.check(resp) {
+				t.Fatalf("expected %s response, got %T", tc.name, resp)
+			}
+		}
+	})
+}
+
+func TestHTTPRouterCharacterTelemetryEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	swagger, err := api.GetSwagger()
+	if err != nil {
+		t.Fatalf("GetSwagger failed: %v", err)
+	}
+	swagger.Servers = nil
+
+	mockSvc := &mockTelemetryService{}
+	server := Server{TelemetryService: mockSvc}
+
+	r := gin.New()
+	r.ContextWithFallback = true
+	r.Use(ginmiddleware.OapiRequestValidatorWithOptions(swagger, &ginmiddleware.Options{
+		ErrorHandler: logger.GinValidationErrorHandler,
+		Options: openapi3filter.Options{
+			AuthenticationFunc: validator.Authenticate,
+		},
+	}))
+	h := api.NewStrictHandler(server, []api.StrictMiddlewareFunc{
+		logger.GinStrictMiddleware[api.StrictHandlerFunc],
+	})
+	api.RegisterHandlersWithOptions(r, h, api.GinServerOptions{
+		ErrorHandler: logger.GinParamErrorHandler,
+	})
+
+	t.Run("public GET returns 200 with empty matches array and snapshots object", func(t *testing.T) {
+		mockSvc.err = nil
+		mockSvc.result = telemetry.Result{Matches: []telemetry.Match{}, Snapshots: map[string]telemetry.SnapshotSummary{}}
+		req := httptest.NewRequest(http.MethodGet, "/users/u1/characters/c1/telemetry", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("failed decoding JSON body: %v", err)
+		}
+		if matches, ok := body["matches"].([]any); !ok || len(matches) != 0 {
+			t.Fatalf("expected empty JSON array for matches, got %#v", body["matches"])
+		}
+		if snaps, ok := body["snapshots"].(map[string]any); !ok || len(snaps) != 0 {
+			t.Fatalf("expected empty JSON object for snapshots, got %#v", body["snapshots"])
+		}
+	})
+
+	t.Run("rejects malformed timestamp, invalid gameMode, and out-of-range limit with 400", func(t *testing.T) {
+		badURLs := []string{
+			"/users/u1/characters/c1/telemetry?from=not-a-timestamp",
+			"/users/u1/characters/c1/telemetry?gameMode=gambit",
+			"/users/u1/characters/c1/telemetry?limit=0",
+			"/users/u1/characters/c1/telemetry?limit=2001",
+		}
+		for _, url := range badURLs {
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 for %s, got %d: %s", url, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("returns 400 when from > to", func(t *testing.T) {
+		mockSvc.err = fmt.Errorf("%w: from must not be after to", telemetry.ErrInvalidQuery)
+		req := httptest.NewRequest(http.MethodGet, "/users/u1/characters/c1/telemetry?from=2026-11-21T00:00:00Z&to=2026-11-20T00:00:00Z", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for from > to, got %d: %s", w.Code, w.Body.String())
+		}
+	})
 }
 
 func TestGetFireteamEndpoint(t *testing.T) {

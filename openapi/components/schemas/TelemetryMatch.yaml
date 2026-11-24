@@ -1,0 +1,42 @@
+type: object
+description: Slim per-match telemetry record for a single character
+required:
+  - activityId
+  - period
+  - location
+  - activity
+  - kills
+  - deaths
+  - assists
+  - won
+properties:
+  activityId:
+    type: string
+    x-go-name: ActivityID
+  period:
+    type: string
+    format: date-time
+  location:
+    type: string
+  activity:
+    type: string
+  estimatedGameMode:
+    $ref: ./GameMode.yaml
+  kills:
+    type: integer
+  deaths:
+    type: integer
+  assists:
+    type: integer
+  won:
+    type: boolean
+  timePlayedSeconds:
+    type: integer
+  sessionId:
+    type: string
+    x-go-name: SessionID
+  snapshotId:
+    type: string
+    x-go-name: SnapshotID
+  snapshotConfidence:
+    $ref: ./ConfidenceLevel.yaml

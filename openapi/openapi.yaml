@@ -27,6 +27,8 @@ paths:
     $ref: paths/refresh.yaml
   /users/{userId}/sessions:
     $ref: paths/users_{userId}_sessions.yaml
+  /users/{userId}/characters/{characterId}/telemetry:
+    $ref: paths/users_{userId}_characters_{characterId}_telemetry.yaml
   /snapshots:
     $ref: paths/snapshots.yaml
   /snapshots/{snapshotId}:
