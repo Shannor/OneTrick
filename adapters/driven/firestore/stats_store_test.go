@@ -1,4 +1,4 @@
-package stats
+package firestore
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/snapshot"
+	"oneTrick/services/stats"
 	"os"
 	"testing"
 	"time"
@@ -283,7 +284,7 @@ func TestFirestoreEmulatorStatsStoreProjectionAndNilPlayerStats(t *testing.T) {
 	}
 	aggIDs = append(aggIDs, nullPlayerStatsDocID)
 
-	store := NewFirestoreStore(db)
+	store := NewStatsStore(db)
 
 	// Verify SelectPaths actually omits unprojected fields from the wire DocumentSnapshot.
 	projDocs, err := store.buildCharacterMatchStatsQuery(charID, string(api.GameModeTrials)).Documents(ctx).GetAll()
@@ -360,7 +361,7 @@ func TestFirestoreEmulatorStatsStoreProjectionAndNilPlayerStats(t *testing.T) {
 	// Verify end-to-end GetBestPerformingLoadouts handles nil PlayerStats without panicking and does NOT count nil Standing as a win.
 	aggSvc := aggregate.NewService(db)
 	snapSvc := snapshot.NewService(db, nil, nil, aggSvc)
-	statsSvc := NewService(db, store, snapSvc, nil, nil)
+	statsSvc := stats.NewService(db, store, snapSvc, nil, nil)
 
 	loadouts, perfStats, counts, err := statsSvc.GetBestPerformingLoadouts(ctx, charID, new(api.GameModeAll), 5, 1)
 	if err != nil {

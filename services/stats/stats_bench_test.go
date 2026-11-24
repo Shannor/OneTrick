@@ -1,19 +1,11 @@
 package stats
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"oneTrick/api"
-	"oneTrick/services/aggregate"
-	"oneTrick/services/snapshot"
-	"oneTrick/utils"
-	"os"
 	"strconv"
 	"testing"
 	"time"
-
-	"cloud.google.com/go/firestore"
 )
 
 func buildRealisticAggregate(aggID, targetCharID, snapID string, idx int, now time.Time) api.Aggregate {
@@ -61,58 +53,45 @@ func buildRealisticAggregate(aggID, targetCharID, snapID string, idx int, now ti
 		}
 
 		extra := make(map[string]api.UniqueStatValue, len(extraStatNames))
-		for eIdx, name := range extraStatNames {
+		for ei, name := range extraStatNames {
 			extra[name] = api.UniqueStatValue{
 				Name:  new(name),
-				Basic: *makePair(float64((idx + eIdx + p) % 25)),
+				Basic: *makePair(float64((idx + ei + p) % 25)),
 			}
 		}
 
-		standing := float64(idx % 2)
-		kills := float64(10 + (idx+p)%18)
-		deaths := float64(4 + (idx+p)%10)
-		assists := float64(2 + (idx+p)%8)
-
+		standingVal := 1.0
+		if (idx+p)%2 == 0 {
+			standingVal = 0.0
+		}
 		perf[cID] = api.InstancePerformance{
 			PlayerStats: api.PlayerStats{
-				Kills:      makePair(kills),
-				Deaths:     makePair(deaths),
-				Assists:    makePair(assists),
-				Kd:         makePair(kills / deaths),
-				Kda:        makePair((kills + assists) / deaths),
-				Standing:   makePair(standing),
-				Team:       makePair(float64(p % 2)),
-				FireTeamID: makePair(float64(100000 + p/3)),
-				TimePlayed: makePair(480),
+				Kills:    makePair(float64(8 + (idx+p)%18)),
+				Deaths:   makePair(float64(4 + (idx+p)%10)),
+				Assists:  makePair(float64(2 + (idx+p)%8)),
+				Kd:       makePair(1.75),
+				Kda:      makePair(2.15),
+				Standing: makePair(standingVal),
 			},
 			Weapons: weapons,
 			Extra:   &extra,
 		}
 	}
 
-	modes := []api.GameMode{api.GameModeQuickPlay, api.GameModeTrials, api.GameModeCompetitive}
-	mode := modes[idx%len(modes)]
-
 	return api.Aggregate{
 		ID:           aggID,
-		ActivityID:   aggID,
+		ActivityID:   "act-" + aggID,
 		CharacterIds: charIDs,
 		SnapshotIds:  []string{snapID},
 		SessionIds:   []string{fmt.Sprintf("sess-%d", idx/10)},
 		CreatedAt:    now.Add(-time.Duration(idx) * time.Minute),
 		ActivityDetails: api.ActivityHistory{
-			Activity:          "Control: Matchmade",
-			ActivityHash:      2259621230,
-			ActivityIcon:      "/common/destiny2_content/icons/crucible_icon.png",
-			Description:       "Capture and defend zones to increase points per defeat.",
-			EstimatedGameMode: new(mode),
-			ImageURL:          "/img/destiny_content/pgcr/crucible_javelin_4.jpg",
-			InstanceID:        aggID,
-			IsPrivate:         new(false),
-			Location:          "Javelin-4",
-			Mode:              new("Control"),
+			InstanceID:        "act-" + aggID,
 			Period:            now.Add(-time.Duration(idx) * time.Minute),
-			ReferenceID:       3345198229,
+			Location:          "Javelin-4",
+			Activity:          "Control",
+			Mode:              new("Control"),
+			EstimatedGameMode: new(api.GameModeQuickPlay),
 		},
 		SnapshotLinks: map[string]api.SnapshotLink{
 			targetCharID: {
@@ -166,16 +145,6 @@ func legacySummarizeAggregates(aggs []api.Aggregate, characterID string) (map[st
 	return stats, counts
 }
 
-func legacyGetAggregatesByCharacterID(ctx context.Context, db *firestore.Client, characterID string) ([]api.Aggregate, error) {
-	aggDocs, err := db.Collection(aggregatesCollection).
-		Where("characterIds", "array-contains", characterID).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
-	}
-	return utils.GetAllToStructs[api.Aggregate](aggDocs)
-}
-
 func BenchmarkSummarize600Matches(b *testing.B) {
 	const numMatches = 600
 	const numSnaps = 40
@@ -213,171 +182,6 @@ func BenchmarkSummarize600Matches(b *testing.B) {
 			st, cnt := summarizeCharacterMatchStats(matches)
 			if len(st) == 0 || len(cnt) == 0 {
 				b.Fatal("empty result")
-			}
-		}
-	})
-}
-
-func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		b.Skip("FIRESTORE_EMULATOR_HOST not set; skipping Firestore emulator benchmark")
-	}
-
-	ctx := context.Background()
-	db, err := firestore.NewClient(ctx, "gruntt-destiny-test")
-	if err != nil {
-		b.Fatalf("failed to create emulator firestore client: %v", err)
-	}
-	b.Cleanup(func() { _ = db.Close() })
-
-	runID := fmt.Sprintf("bench-%d", time.Now().UnixNano())
-	userID := "user-" + runID
-	charID := "char-" + runID
-	now := time.Now().UTC().Truncate(time.Millisecond)
-
-	const numSnaps = 200
-	const numAggs = 600
-
-	snapIDs := make([]string, numSnaps)
-	aggIDs := make([]string, numAggs)
-	b.Cleanup(func() {
-		bw := db.BulkWriter(context.Background())
-		for _, id := range snapIDs {
-			_, _ = bw.Delete(db.Collection("snapshots").Doc(id))
-		}
-		for _, id := range aggIDs {
-			_, _ = bw.Delete(db.Collection("aggregates").Doc(id))
-		}
-		bw.End()
-	})
-
-	bw := db.BulkWriter(ctx)
-	for i := 0; i < numSnaps; i++ {
-		id := fmt.Sprintf("%s-snap-%03d", runID, i)
-		snapIDs[i] = id
-		s := api.CharacterSnapshot{
-			ID:          id,
-			UserID:      userID,
-			CharacterID: charID,
-			Name:        fmt.Sprintf("Loadout %d", i),
-			Hash:        fmt.Sprintf("hash-%s-%d", runID, i),
-			CreatedAt:   now.Add(-time.Duration(i) * time.Hour),
-			UpdatedAt:   now.Add(-time.Duration(i) * time.Hour),
-			Loadout:     makeBaseTestLoadout(fmt.Sprintf("kin-%d", i%50), fmt.Sprintf("en-%d", i%50), int64(3000+i%5), fmt.Sprintf("pow-%d", i), int64(4000+i)),
-		}
-		if _, err := bw.Set(db.Collection("snapshots").Doc(id), s); err != nil {
-			b.Fatalf("bulk seed snapshot %s: %v", id, err)
-		}
-	}
-	for i := 0; i < numAggs; i++ {
-		id := fmt.Sprintf("%s-agg-%04d", runID, i)
-		aggIDs[i] = id
-		snapID := snapIDs[i%50]
-		agg := buildRealisticAggregate(id, charID, snapID, i, now)
-		if _, err := bw.Set(db.Collection("aggregates").Doc(id), agg); err != nil {
-			b.Fatalf("bulk seed aggregate %s: %v", id, err)
-		}
-	}
-	bw.End()
-
-	aggSvc := aggregate.NewService(db)
-	snapSvc := snapshot.NewService(db, nil, nil, aggSvc)
-	store := NewFirestoreStore(db)
-	statsSvc := NewService(db, store, snapSvc, nil, nil)
-
-	fullSampleDocs, err := db.Collection(aggregatesCollection).Where("characterIds", "array-contains", charID).Limit(1).Documents(ctx).GetAll()
-	if err != nil || len(fullSampleDocs) == 0 {
-		b.Fatalf("failed reading sample full doc: %v", err)
-	}
-	fullJSON, _ := json.Marshal(fullSampleDocs[0].Data())
-
-	projSampleDocs, err := store.buildCharacterMatchStatsQuery(charID, "").Limit(1).Documents(ctx).GetAll()
-	if err != nil || len(projSampleDocs) == 0 {
-		b.Fatalf("failed reading sample projected doc: %v", err)
-	}
-	projJSON, _ := json.Marshal(projSampleDocs[0].Data())
-	b.Logf("Single aggregate doc JSON payload: full=%d bytes, projected=%d bytes (%.1fx reduction)",
-		len(fullJSON), len(projJSON), float64(len(fullJSON))/float64(len(projJSON)))
-
-	b.Run("query_600_before_unprojected", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			aggs, err := legacyGetAggregatesByCharacterID(ctx, db, charID)
-			if err != nil || len(aggs) != numAggs {
-				b.Fatalf("expected %d aggs, got %d err=%v", numAggs, len(aggs), err)
-			}
-			_, _ = legacySummarizeAggregates(aggs, charID)
-		}
-		b.ReportMetric(float64(len(fullJSON)), "payloadBytes/doc")
-	})
-
-	b.Run("query_600_after_projected", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			ms, err := store.ListCharacterMatchStats(ctx, charID, "")
-			if err != nil || len(ms) != numAggs {
-				b.Fatalf("expected %d matchStats, got %d err=%v", numAggs, len(ms), err)
-			}
-			_, _ = summarizeCharacterMatchStats(ms)
-		}
-		b.ReportMetric(float64(len(projJSON)), "payloadBytes/doc")
-	})
-
-	b.Run("GetSnapshotsWithMetrics_before_sequential_unprojected", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			allSnaps, err := snapSvc.GetAllByCharacter(ctx, userID, charID, 0, 0)
-			if err != nil {
-				b.Fatal(err)
-			}
-			_, _ = ComputeSimilarCounts(allSnaps)
-			aggs, err := legacyGetAggregatesByCharacterID(ctx, db, charID)
-			if err != nil {
-				b.Fatal(err)
-			}
-			_, _ = legacySummarizeAggregates(aggs, charID)
-		}
-	})
-
-	b.Run("GetSnapshotsWithMetrics_after_concurrent_projected", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			items, _, _, _, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 5, "kd_ratio", true, false, 10, 0)
-			if err != nil || len(items) == 0 {
-				b.Fatalf("expected non-empty items, got %d err=%v", len(items), err)
-			}
-		}
-	})
-
-	b.Run("GetBestPerformingLoadouts_before_unprojected", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			aggs, err := legacyGetAggregatesByCharacterID(ctx, db, charID)
-			if err != nil {
-				b.Fatal(err)
-			}
-			st, cnt := legacySummarizeAggregates(aggs, charID)
-			if len(st) == 0 || len(cnt) == 0 {
-				b.Fatal("empty summary")
-			}
-			if _, err := snapSvc.GetByIDs(ctx, snapIDs[:3]); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("GetBestPerformingLoadouts_after_projected", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			items, _, _, err := statsSvc.GetBestPerformingLoadouts(ctx, charID, nil, 3, 10)
-			if err != nil || len(items) != 3 {
-				b.Fatalf("expected 3 best loadouts, got %d err=%v", len(items), err)
 			}
 		}
 	})
