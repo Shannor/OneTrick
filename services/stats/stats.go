@@ -15,6 +15,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
+	"golang.org/x/sync/errgroup"
 )
 
 // Service defines operations for retrieving stats-related data.
@@ -25,7 +26,7 @@ type Service interface {
 	GetAggregatesByCharacterID(ctx context.Context, characterID string, gameMode *api.GameMode) ([]api.Aggregate, error)
 
 	GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string) ([]api.CharacterSnapshot, map[string]int, error)
-	GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
+	GetBestPerformingLoadouts(ctx context.Context, characterID string, gameMode *api.GameMode, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
 	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameMode *api.GameMode, minimumGames int, sortBy string, includeStats bool, hasSimilar bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error)
 	GetSimilarSnapshots(ctx context.Context, snapshotID string) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, *map[string]api.PlayerStats, *map[string]int, error)
 
@@ -34,6 +35,7 @@ type Service interface {
 
 type service struct {
 	DB              *firestore.Client
+	store           statsStore
 	snapshotService snapshot.Service
 	userService     user.Service
 	manifestService destiny.ManifestService
@@ -41,8 +43,13 @@ type service struct {
 
 // NewService creates a new Stats service instance.
 func NewService(db *firestore.Client, snapshotService snapshot.Service, userService user.Service, manifestService destiny.ManifestService) Service {
+	var store statsStore
+	if db != nil {
+		store = newFirestoreStatsStore(db)
+	}
 	return &service{
 		DB:              db,
+		store:           store,
 		snapshotService: snapshotService,
 		userService:     userService,
 		manifestService: manifestService,
@@ -61,33 +68,22 @@ type aggStatSummary struct {
 	Wins    int
 }
 
-func summarizeAggregatesForCharacter(aggs []api.Aggregate, characterID string) (map[string]aggStatSummary, map[string]int) {
+func summarizeCharacterMatchStats(matches []characterMatchStat) (map[string]aggStatSummary, map[string]int) {
 	stats := make(map[string]aggStatSummary)
 	counts := make(map[string]int)
-	for _, agg := range aggs {
-		link, ok := agg.SnapshotLinks[characterID]
-		if !ok || link.SnapshotID == nil || *link.SnapshotID == "" {
+	for _, match := range matches {
+		if match.snapshotID == "" {
 			continue
 		}
-		performance, ok := agg.Performance[characterID]
-		if !ok {
-			continue
-		}
-		st := stats[*link.SnapshotID]
-		if performance.PlayerStats.Kills != nil && performance.PlayerStats.Kills.Value != nil {
-			st.Kills += int(*performance.PlayerStats.Kills.Value)
-		}
-		if performance.PlayerStats.Deaths != nil && performance.PlayerStats.Deaths.Value != nil {
-			st.Deaths += int(*performance.PlayerStats.Deaths.Value)
-		}
-		if performance.PlayerStats.Assists != nil && performance.PlayerStats.Assists.Value != nil {
-			st.Assists += int(*performance.PlayerStats.Assists.Value)
-		}
-		if performance.PlayerStats.Standing != nil && performance.PlayerStats.Standing.Value != nil && *performance.PlayerStats.Standing.Value == 0 {
+		st := stats[match.snapshotID]
+		st.Kills += match.kills
+		st.Deaths += match.deaths
+		st.Assists += match.assists
+		if match.won {
 			st.Wins++
 		}
-		stats[*link.SnapshotID] = st
-		counts[*link.SnapshotID]++
+		stats[match.snapshotID] = st
+		counts[match.snapshotID]++
 	}
 	return stats, counts
 }
@@ -289,13 +285,12 @@ func (s *service) GetSnapshotsWithMetrics(
 
 	// Always load all active character snapshots upfront so similarCounts is computed across
 	// the full active character pool BEFORE applying minimumGames or gameMode filters.
-	allSnapshots, err := s.snapshotService.GetAllByCharacter(ctx, userID, characterID, 0, 0)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	allSimilarCounts, peerGroups := ComputeSimilarCounts(allSnapshots)
-
 	if !needsAggs && sortBy == "created_at" {
+		allSnapshots, err := s.snapshotService.GetAllByCharacter(ctx, userID, characterID, 0, 0)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		allSimilarCounts, peerGroups := ComputeSimilarCounts(allSnapshots)
 		filtered := allSnapshots
 		if hasSimilar {
 			filtered = filterSnapshotsForList(allSnapshots, nil, allSimilarCounts, peerGroups, nil, 0, true)
@@ -305,12 +300,41 @@ func (s *service) GetSnapshotsWithMetrics(
 		return paged, nil, nil, buildPageSimilarCounts(paged, allSimilarCounts), nil
 	}
 
-	aggs, err := s.GetAggregatesByCharacterID(ctx, characterID, gameMode)
-	if err != nil {
-		return nil, nil, nil, nil, err
+	if s.store == nil {
+		return nil, nil, nil, nil, fmt.Errorf("stats store is not configured")
 	}
 
-	stats, counts := summarizeAggregatesForCharacter(aggs, characterID)
+	var (
+		allSnapshots     []api.CharacterSnapshot
+		allSimilarCounts map[string]int
+		peerGroups       map[string][]string
+		matchStats       []characterMatchStat
+		stats            map[string]aggStatSummary
+		counts           map[string]int
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		snaps, err := s.snapshotService.GetAllByCharacter(gctx, userID, characterID, 0, 0)
+		if err != nil {
+			return err
+		}
+		allSnapshots = snaps
+		allSimilarCounts, peerGroups = ComputeSimilarCounts(snaps)
+		return nil
+	})
+	g.Go(func() error {
+		ms, err := s.store.listCharacterMatchStats(gctx, characterID, gameMode)
+		if err != nil {
+			return err
+		}
+		matchStats = ms
+		stats, counts = summarizeCharacterMatchStats(ms)
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	filteredSnapshots := filterSnapshotsForList(allSnapshots, counts, allSimilarCounts, peerGroups, gameMode, minimumGames, hasSimilar)
 	passedFilterCount := len(filteredSnapshots)
@@ -356,7 +380,7 @@ func (s *service) GetSnapshotsWithMetrics(
 	filteredSnapshots = paginateSnapshots(filteredSnapshots, count, offset)
 
 	clog.WithGroupFields(ctx, "statsService.getSnapshotsWithMetrics", clog.Fields{
-		"numAggregates":                 len(aggs),
+		"numAggregates":                 len(matchStats),
 		"totalSnapshotsInDb":            len(allSnapshots),
 		"uniqueSnapshotsWithAggMatches": len(counts),
 		"passedFilterCount":             passedFilterCount,
@@ -394,6 +418,9 @@ func (s *service) GetSimilarSnapshots(
 	if snapshotID == "" {
 		return nil, nil, nil, nil, snapshot.NotFound
 	}
+	if s.store == nil {
+		return nil, nil, nil, nil, fmt.Errorf("stats store is not configured")
+	}
 	clog.WithGroupField(ctx, "statsService.getSimilarSnapshots", "snapshotId", snapshotID)
 
 	target, err := s.snapshotService.Get(ctx, snapshotID)
@@ -404,20 +431,41 @@ func (s *service) GetSimilarSnapshots(
 		return nil, nil, nil, nil, snapshot.NotFound
 	}
 
-	aggs, err := s.GetAggregatesByCharacterID(ctx, target.CharacterID, nil)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	aggStats, aggCounts := summarizeAggregatesForCharacter(aggs, target.CharacterID)
-
 	if snapshot.IsArchived(target) {
+		matchStats, err := s.store.listCharacterMatchStats(ctx, target.CharacterID, nil)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		aggStats, aggCounts := summarizeCharacterMatchStats(matchStats)
 		cMap := map[string]int{target.ID: aggCounts[target.ID]}
 		psMap := map[string]api.PlayerStats{target.ID: buildPlayerStats(aggStats[target.ID], aggCounts[target.ID])}
 		return target, []api.SimilarSnapshotItem{}, &psMap, &cMap, nil
 	}
 
-	allSnapshots, err := s.snapshotService.GetAllByCharacter(ctx, target.UserID, target.CharacterID, 0, 0)
-	if err != nil {
+	var (
+		aggStats     map[string]aggStatSummary
+		aggCounts    map[string]int
+		allSnapshots []api.CharacterSnapshot
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		matchStats, err := s.store.listCharacterMatchStats(gctx, target.CharacterID, nil)
+		if err != nil {
+			return err
+		}
+		aggStats, aggCounts = summarizeCharacterMatchStats(matchStats)
+		return nil
+	})
+	g.Go(func() error {
+		snaps, err := s.snapshotService.GetAllByCharacter(gctx, target.UserID, target.CharacterID, 0, 0)
+		if err != nil {
+			return err
+		}
+		allSnapshots = snaps
+		return nil
+	})
+	if err := g.Wait(); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
@@ -559,46 +607,24 @@ func (s *service) GetMostUsedLoadouts(ctx context.Context, aggs []api.Aggregate,
 	return loadouts, finalCount, nil
 }
 
-func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggregate, characterID string, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error) {
+func (s *service) GetBestPerformingLoadouts(ctx context.Context, characterID string, gameMode *api.GameMode, limit int8, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error) {
 	if characterID == "" {
 		return nil, nil, nil, fmt.Errorf("characterID is required")
 	}
-
-	type stat struct {
-		Kills   int
-		Deaths  int
-		Assists int
-		Wins    int
-	}
-	stats := make(map[string]stat)
-	counts := make(map[string]int)
-	missingPerf := 0
-	for _, agg := range aggs {
-		link, ok := agg.SnapshotLinks[characterID]
-		if !ok || link.SnapshotID == nil || *link.SnapshotID == "" {
-			continue
-		}
-		performance, ok := agg.Performance[characterID]
-		if !ok {
-			missingPerf++
-			continue
-		}
-		s := stats[*link.SnapshotID]
-		s.Kills += int(*performance.PlayerStats.Kills.Value)
-		s.Deaths += int(*performance.PlayerStats.Deaths.Value)
-		s.Assists += int(*performance.PlayerStats.Assists.Value)
-		// Zero is a win in D2
-		if *performance.PlayerStats.Standing.Value == 0 {
-			s.Wins++
-		}
-		stats[*link.SnapshotID] = s
-		counts[*link.SnapshotID]++
+	if s.store == nil {
+		return nil, nil, nil, fmt.Errorf("stats store is not configured")
 	}
 
-	// 3) Sort snapshot IDs by K/D and KD/A
+	matchStats, err := s.store.listCharacterMatchStats(ctx, characterID, gameMode)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	stats, counts := summarizeCharacterMatchStats(matchStats)
+
 	type pair struct {
 		id     string
-		stats  stat
+		stats  aggStatSummary
 		counts int
 	}
 	pairs := make([]pair, 0, len(stats))
@@ -611,66 +637,49 @@ func (s *service) GetBestPerformingLoadouts(ctx context.Context, aggs []api.Aggr
 		pairs = append(pairs, pair{id: id, stats: obj, counts: counts[id]})
 	}
 	clog.WithGroupFields(ctx, "statsService.getBestPerformingLoadouts", clog.Fields{
-		"characterId":        characterID,
-		"minimumGames":       minimumGames,
-		"skippedCount":       skipped,
-		"missingPerformance": missingPerf,
+		"characterId":    characterID,
+		"minimumGames":   minimumGames,
+		"skippedCount":   skipped,
+		"matchStatCount": len(matchStats),
 	})
+	if gameMode != nil {
+		clog.WithGroupField(ctx, "statsService.getBestPerformingLoadouts", "gameMode", string(*gameMode))
+	}
 
 	slices.SortFunc(pairs, func(a, b pair) int {
 		kda := getKD(a.stats.Kills, a.stats.Deaths)
 		kdb := getKD(b.stats.Kills, b.stats.Deaths)
-		if kda == kdb {
-			return 0
+		if kda != kdb {
+			if kda < kdb {
+				return 1
+			}
+			return -1
 		}
-		if kda < kdb {
-			return 1
+		if a.counts != b.counts {
+			return b.counts - a.counts
 		}
-		return -1
+		return strings.Compare(a.id, b.id)
 	})
 
 	l := int(limit)
+	if l < 0 {
+		l = 0
+	}
 	if len(pairs) < l {
 		l = len(pairs)
 	}
 
 	ids := make([]string, 0, l)
-	finalPlayerStats := make(map[string]api.PlayerStats)
-	finalCount := make(map[string]int)
-	order := make(map[string]int, len(pairs))
+	finalPlayerStats := make(map[string]api.PlayerStats, l)
+	finalCount := make(map[string]int, l)
+	order := make(map[string]int, l)
 
 	for idx := 0; idx < l; idx++ {
-		ids = append(ids, pairs[idx].id)
-		count := pairs[idx].counts
-		finalCount[pairs[idx].id] = pairs[idx].counts
-		order[pairs[idx].id] = int(idx + 1)
-		s := pairs[idx].stats
-		finalPlayerStats[pairs[idx].id] = api.PlayerStats{
-			Assists: new(api.StatsValuePair{
-				DisplayValue: new(fmt.Sprintf("%d", s.Assists)),
-				Value:        new(float64(s.Assists)),
-			}),
-			Deaths: new(api.StatsValuePair{
-				DisplayValue: new(fmt.Sprintf("%d", s.Deaths)),
-				Value:        new(float64(s.Deaths)),
-			}),
-			Kills: new(api.StatsValuePair{
-				DisplayValue: new(fmt.Sprintf("%d", s.Kills)),
-				Value:        new(float64(s.Kills)),
-			}),
-			Kd: new(api.StatsValuePair{
-				DisplayValue: new(fmt.Sprintf("%.2f", getKD(s.Kills, s.Deaths))),
-				Value:        new(getKD(s.Kills, s.Deaths)),
-			}),
-			Kda: new(api.StatsValuePair{
-				DisplayValue: new(fmt.Sprintf("%.2f", getKDA(s.Kills, s.Deaths, s.Assists))),
-				Value:        new(getKDA(s.Kills, s.Deaths, s.Assists)),
-			}),
-			Standing: new(api.StatsValuePair{
-				DisplayValue: new(fmt.Sprintf("%.2f", getKD(s.Wins, count))),
-				Value:        new(getKD(s.Wins, count)),
-			}),
-		}
+		p := pairs[idx]
+		ids = append(ids, p.id)
+		finalCount[p.id] = p.counts
+		order[p.id] = idx + 1
+		finalPlayerStats[p.id] = buildPlayerStats(p.stats, p.counts)
 	}
 
 	if len(ids) == 0 {

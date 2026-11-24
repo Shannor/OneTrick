@@ -1,11 +1,26 @@
 steps:
-  - name: 'gcr.io/cloud-builders/docker'
+  # Deploy Firestore composite indexes from firestore.indexes.json in parallel with image build
+  - id: 'deploy-firestore-indexes'
+    name: 'us-docker.pkg.dev/firebase-cli/us/firebase'
+    waitFor: ['-']
+    args:
+      - 'deploy'
+      - '--only=firestore:indexes'
+      - '--project=$PROJECT_ID'
+      - '--non-interactive'
+  - id: 'build-image'
+    name: 'gcr.io/cloud-builders/docker'
+    waitFor: ['-']
     args: ['build', '-t', 'gcr.io/gruntt-destiny/onetrick:$COMMIT_SHA', '.']
   # Push the container image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - id: 'push-image'
+    name: 'gcr.io/cloud-builders/docker'
+    waitFor: ['build-image']
     args: ['push', 'gcr.io/gruntt-destiny/onetrick:$COMMIT_SHA']
   # Deploy container image to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - id: 'deploy-cloud-run'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    waitFor: ['push-image', 'deploy-firestore-indexes']
     entrypoint: gcloud
     args: ['run', 'deploy', 'onetrick', '--image', 'gcr.io/gruntt-destiny/onetrick:$COMMIT_SHA', '--region', 'us-central1']
 images: ['gcr.io/gruntt-destiny/onetrick:$COMMIT_SHA']

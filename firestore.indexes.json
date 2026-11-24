@@ -19,6 +19,20 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
+          "fieldPath": "characterIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "activityHistory.estimatedGameMode",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "aggregates",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
           "fieldPath": "snapshotIds",
           "arrayConfig": "CONTAINS"
         },
