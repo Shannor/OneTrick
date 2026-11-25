@@ -385,11 +385,17 @@ func (m *memorySessionStore) AddAggregateIDs(_ context.Context, sessionID string
 
 type fakeSessionUserService struct {
 	user.Service
-	u     *user.User
-	users map[string]*user.User
+	u                       *user.User
+	users                   map[string]*user.User
+	getPrimaryMembershipErr error
+	membershipCalls         atomic.Int32
 }
 
 func (f *fakeSessionUserService) GetPrimaryMembership(_ context.Context, userID string) (int64, int64, error) {
+	f.membershipCalls.Add(1)
+	if f.getPrimaryMembershipErr != nil {
+		return 0, 0, f.getPrimaryMembershipErr
+	}
 	if f.users != nil {
 		if u, ok := f.users[userID]; ok && u != nil {
 			return u.PrimaryMembership()
@@ -407,14 +413,18 @@ type fakeSessionD2Service struct {
 	snapshots       []*api.CompRankSnapshot
 	calls           atomic.Int32
 	perfCalls       atomic.Int32
+	getCompRankFn   func(ctx context.Context, pmID, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
 	activitiesByChr map[string][]api.ActivityHistory
 	activityErrByCh map[string]error
 	perfsByAct      map[string]map[string]api.InstancePerformance
 	perfErrByAct    map[string]error
 }
 
-func (f *fakeSessionD2Service) GetCompetitiveRank(_ context.Context, _ int64, _ int64, _ string) (*api.CompRankSnapshot, error) {
+func (f *fakeSessionD2Service) GetCompetitiveRank(ctx context.Context, pmID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error) {
 	idx := int(f.calls.Add(1)) - 1
+	if f.getCompRankFn != nil {
+		return f.getCompRankFn(ctx, pmID, membershipType, characterID)
+	}
 	if idx < len(f.snapshots) {
 		return f.snapshots[idx], nil
 	}
@@ -709,6 +719,42 @@ func findIntAttr(attrs []slog.Attr, key string) (int64, bool) {
 	return walk(attrs)
 }
 
+func findStringAttr(attrs []slog.Attr, key string) (string, bool) {
+	var walk func([]slog.Attr) (string, bool)
+	walk = func(list []slog.Attr) (string, bool) {
+		for _, a := range list {
+			if a.Key == key && a.Value.Kind() == slog.KindString {
+				return a.Value.String(), true
+			}
+			if a.Value.Kind() == slog.KindGroup {
+				if v, ok := walk(a.Value.Group()); ok {
+					return v, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(attrs)
+}
+
+func findBoolAttr(attrs []slog.Attr, key string) (bool, bool) {
+	var walk func([]slog.Attr) (bool, bool)
+	walk = func(list []slog.Attr) (bool, bool) {
+		for _, a := range list {
+			if a.Key == key && a.Value.Kind() == slog.KindBool {
+				return a.Value.Bool(), true
+			}
+			if a.Value.Kind() == slog.KindGroup {
+				if v, ok := walk(a.Value.Group()); ok {
+					return v, true
+				}
+			}
+		}
+		return false, false
+	}
+	return walk(attrs)
+}
+
 func TestSessionSorting(t *testing.T) {
 	now := time.Now()
 	sessions := []api.Session{
@@ -819,13 +865,17 @@ func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testin
 		},
 	}
 
+	finalizeDone := make(chan context.Context, 1)
 	svc := &service{
 		store:       store,
 		userService: uSvc,
 		d2Service:   d2Svc,
+		onFinalizeDone: func(bgCtx context.Context, _ error) {
+			finalizeDone <- bgCtx
+		},
 	}
 
-	ctx := context.Background()
+	ctx := clog.NewContext(context.Background())
 	audit := api.AuditField{ID: "user-1", Username: "Zone 6 Weegee"}
 
 	started, err := svc.Start(ctx, "user-1", "char-1", audit, true)
@@ -847,12 +897,26 @@ func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testin
 	}
 
 	store.getDocCalls.Store(0)
-	if err := svc.Complete(ctx, started.ID); err != nil {
+	returned, err := svc.Complete(ctx, started.ID)
+	if err != nil {
 		t.Fatalf("Complete failed: %v", err)
+	}
+	if returned == nil || returned.CompletedAt == nil || returned.Status == nil || *returned.Status != api.SessionComplete {
+		t.Fatalf("expected Complete to return completed session immediately, got %+v", returned)
 	}
 	if store.getDocCalls.Load() != 1 {
 		t.Fatalf("expected Complete to read session doc once, got %d getDoc calls", store.getDocCalls.Load())
 	}
+
+	select {
+	case bgCtx := <-finalizeDone:
+		if status, ok := findStringAttr(clog.BagFromContext(bgCtx).Attrs(), "compFinalizeStatus"); !ok || status != "succeeded" {
+			t.Fatalf("expected compFinalizeStatus=succeeded on background log, got %q (found=%v)", status, ok)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for background comp finalization")
+	}
+
 	completed, err := svc.Get(ctx, started.ID)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -2941,10 +3005,21 @@ func TestRunTick_DryRunIncompletePGCRParity(t *testing.T) {
 	}
 }
 
+func waitFinalizeDone(t *testing.T, ch <-chan context.Context) context.Context {
+	t.Helper()
+	select {
+	case bgCtx := <-ch:
+		return bgCtx
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for complete-session-finalize-bg")
+		return nil
+	}
+}
+
 func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 	t0 := time.Date(2026, 11, 23, 7, 0, 0, 0, time.UTC)
 
-	t.Run("records final check-in before completing and skips on idempotent second Complete", func(t *testing.T) {
+	t.Run("completes immediately, runs check-in and comp concurrently with one membership read, and skips check-in on idempotent retry", func(t *testing.T) {
 		store := newMemorySessionStore()
 		store.docs["ses-1"] = &api.Session{
 			ID:          "ses-1",
@@ -2952,6 +3027,10 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			CharacterID: "char-1",
 			StartedAt:   t0.Add(-10 * time.Minute),
 			Status:      new(api.SessionPending),
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 5000},
+			},
 		}
 		store.lastSnapshots["ses-1"] = lastSnapshotRecord{
 			snapshotID: "snap-old",
@@ -2959,18 +3038,51 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			recordedAt: t0.Add(-6 * time.Minute),
 		}
 
-		var gotOpts snapshot.SessionCheckInOptions
-		var sawCompletedDuringCheckIn bool
+		releaseBungie := make(chan struct{})
+		checkInEntered := make(chan struct{}, 1)
+		compEntered := make(chan struct{}, 1)
+		finalizeDone := make(chan context.Context, 2)
+
+		var (
+			mu         sync.Mutex
+			gotOpts    snapshot.SessionCheckInOptions
+			sawCompSet bool
+		)
 		snapSvc := &fakeSessionSnapshotService{
-			checkInFn: func(_, _, _ string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+			checkInCtxFn: func(ctx context.Context, _, _, _ string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+				mu.Lock()
 				gotOpts = opts
-				sawCompletedDuringCheckIn = store.docs["ses-1"].CompletedAt != nil
+				mu.Unlock()
+				store.mu.Lock()
+				sawComp := store.docs["ses-1"].CompletedAt != nil
+				store.mu.Unlock()
+				mu.Lock()
+				sawCompSet = sawComp
+				mu.Unlock()
+
+				checkInEntered <- struct{}{}
+				select {
+				case <-releaseBungie:
+				case <-ctx.Done():
+					return snapshot.SessionCheckInResult{}, ctx.Err()
+				}
 				return snapshot.SessionCheckInResult{
 					SnapshotID:      "snap-final",
 					SnapshotHash:    "hash-final",
 					HistoryRecorded: true,
 					RecordedAt:      t0,
 				}, nil
+			},
+		}
+		d2Svc := &fakeSessionD2Service{
+			getCompRankFn: func(ctx context.Context, _, _ int64, _ string) (*api.CompRankSnapshot, error) {
+				compEntered <- struct{}{}
+				select {
+				case <-releaseBungie:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return &api.CompRankSnapshot{Points: 5150}, nil
 			},
 		}
 		uSvc := &fakeSessionUserService{
@@ -2985,41 +3097,110 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			store:           store,
 			userService:     uSvc,
 			snapshotService: snapSvc,
+			d2Service:       d2Svc,
 			nowFn:           func() time.Time { return t0 },
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
 		}
 
-		if err := svc.Complete(clog.NewContext(context.Background()), "ses-1"); err != nil {
+		parentCtx, cancelParent := context.WithCancel(clog.NewContext(context.Background()))
+		completed, err := svc.Complete(parentCtx, "ses-1")
+		if err != nil {
 			t.Fatalf("Complete failed: %v", err)
+		}
+		// Cancel parent HTTP request context immediately to verify detached clog.Go keeps running.
+		cancelParent()
+
+		if completed == nil || completed.CompletedAt == nil || !completed.CompletedAt.Equal(t0) {
+			t.Fatalf("expected Complete to return completedAt=%v immediately, got %+v", t0, completed)
+		}
+		if completed.Status == nil || *completed.Status != api.SessionComplete {
+			t.Fatalf("expected status=complete immediately, got %+v", completed.Status)
+		}
+		if completed.AggregateIDs == nil {
+			t.Fatal("expected non-nil AggregateIDs slice on returned session")
 		}
 		if store.getDocCalls.Load() != 1 {
 			t.Fatalf("expected 1 session doc read in Complete, got %d", store.getDocCalls.Load())
 		}
+		if async, ok := findBoolAttr(clog.BagFromContext(parentCtx).Attrs(), "finalizationAsync"); !ok || !async {
+			t.Fatalf("expected finalizationAsync=true on request log, got %v (found=%v)", async, ok)
+		}
+
+		// Wait until BOTH Bungie calls are concurrently in flight before releasing.
+		for _, ch := range []chan struct{}{checkInEntered, compEntered} {
+			select {
+			case <-ch:
+			case <-time.After(2 * time.Second):
+				t.Fatal("expected check-in and comp finalization to execute concurrently")
+			}
+		}
+		close(releaseBungie)
+
+		bgCtx := waitFinalizeDone(t, finalizeDone)
+
+		if uSvc.membershipCalls.Load() != 1 {
+			t.Fatalf("expected 1 GetPrimaryMembership call shared across check-in and comp, got %d", uSvc.membershipCalls.Load())
+		}
 		if snapSvc.saveCalls.Load() != 1 {
 			t.Fatalf("expected 1 SaveSessionCheckIn call, got %d", snapSvc.saveCalls.Load())
 		}
-		if sawCompletedDuringCheckIn {
-			t.Fatal("expected final loadout check-in to finish before session is marked completed")
+		if d2Svc.calls.Load() != 1 {
+			t.Fatalf("expected 1 GetCompetitiveRank call, got %d", d2Svc.calls.Load())
 		}
-		if gotOpts.LastSnapshotID != "snap-old" || gotOpts.LastSnapshotHash != "hash-old" || gotOpts.HeartbeatInterval != snapshotHeartbeatPeriod {
-			t.Fatalf("unexpected check-in opts passed from Complete: %+v", gotOpts)
+		mu.Lock()
+		optsCopy := gotOpts
+		completedBeforeCheckIn := sawCompSet
+		mu.Unlock()
+		if !completedBeforeCheckIn {
+			t.Fatal("expected session to be marked completed before detached check-in runs")
 		}
-		if rec := store.lastSnapshots["ses-1"]; rec.snapshotID != "snap-final" || rec.hash != "hash-final" {
-			t.Fatalf("expected lastSnapshot metadata updated on session, got %+v", rec)
-		}
-		if store.docs["ses-1"].CompletedAt == nil || *store.docs["ses-1"].Status != api.SessionComplete {
-			t.Fatalf("expected session marked completed, got %+v", store.docs["ses-1"])
+		if optsCopy.LastSnapshotID != "snap-old" || optsCopy.LastSnapshotHash != "hash-old" || optsCopy.HeartbeatInterval != snapshotHeartbeatPeriod {
+			t.Fatalf("unexpected check-in opts passed from Complete: %+v", optsCopy)
 		}
 
-		// Idempotent second call must not re-run SaveSessionCheckIn.
-		if err := svc.Complete(clog.NewContext(context.Background()), "ses-1"); err != nil {
+		store.mu.Lock()
+		rec := store.lastSnapshots["ses-1"]
+		persisted := cloneSession(store.docs["ses-1"])
+		store.mu.Unlock()
+		if rec.snapshotID != "snap-final" || rec.hash != "hash-final" {
+			t.Fatalf("expected lastSnapshot metadata updated on session, got %+v", rec)
+		}
+		if persisted.CompTracking == nil || persisted.CompTracking.End == nil || persisted.CompTracking.End.Points != 5150 {
+			t.Fatalf("expected CompTracking.End=5150 persisted, got %+v", persisted.CompTracking)
+		}
+		if persisted.CompTracking.PointDelta == nil || *persisted.CompTracking.PointDelta != 150 {
+			t.Fatalf("expected PointDelta=150 persisted, got %+v", persisted.CompTracking)
+		}
+
+		bgAttrs := clog.BagFromContext(bgCtx).Attrs()
+		if status, ok := findStringAttr(bgAttrs, "finalLoadoutStatus"); !ok || status != "saved" {
+			t.Fatalf("expected finalLoadoutStatus=saved, got %q (found=%v)", status, ok)
+		}
+		if status, ok := findStringAttr(bgAttrs, "compFinalizeStatus"); !ok || status != "succeeded" {
+			t.Fatalf("expected compFinalizeStatus=succeeded, got %q (found=%v)", status, ok)
+		}
+
+		// Idempotent second call must not re-run SaveSessionCheckIn or GetCompetitiveRank.
+		secondCtx := clog.NewContext(context.Background())
+		secondSes, err := svc.Complete(secondCtx, "ses-1")
+		if err != nil {
 			t.Fatalf("second Complete failed: %v", err)
 		}
-		if snapSvc.saveCalls.Load() != 1 {
-			t.Fatalf("expected no additional check-in on already-completed session, got %d", snapSvc.saveCalls.Load())
+		if secondSes.Status == nil || *secondSes.Status != api.SessionComplete {
+			t.Fatalf("expected completed session on idempotent second Complete, got %+v", secondSes)
+		}
+		if async, ok := findBoolAttr(clog.BagFromContext(secondCtx).Attrs(), "finalizationAsync"); !ok || async {
+			t.Fatalf("expected finalizationAsync=false on already-finalized session, got %v (found=%v)", async, ok)
+		}
+		if snapSvc.saveCalls.Load() != 1 || d2Svc.calls.Load() != 1 || uSvc.membershipCalls.Load() != 1 {
+			t.Fatalf("expected no additional external calls on idempotent Complete, got save=%d comp=%d membership=%d",
+				snapSvc.saveCalls.Load(), d2Svc.calls.Load(), uSvc.membershipCalls.Load())
 		}
 	})
 
-	t.Run("throttled final check-in avoids unnecessary metadata write", func(t *testing.T) {
+	t.Run("throttled final check-in avoids unnecessary metadata write and logs throttled status", func(t *testing.T) {
 		store := newMemorySessionStore()
 		store.docs["ses-2"] = &api.Session{
 			ID:          "ses-2",
@@ -3044,22 +3225,35 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 				Memberships:         []user.Membership{{ID: "12345", Type: 3}},
 			},
 		}
+		finalizeDone := make(chan context.Context, 1)
 		svc := &service{
 			store:           store,
 			userService:     uSvc,
 			snapshotService: snapSvc,
 			nowFn:           func() time.Time { return t0 },
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
 		}
 
-		if err := svc.Complete(clog.NewContext(context.Background()), "ses-2"); err != nil {
+		if _, err := svc.Complete(clog.NewContext(context.Background()), "ses-2"); err != nil {
 			t.Fatalf("Complete failed: %v", err)
 		}
+		bgCtx := waitFinalizeDone(t, finalizeDone)
+
 		if store.writes.Load() != 1 {
 			t.Fatalf("expected only completeDoc write when check-in is throttled, got %d writes", store.writes.Load())
 		}
+		bgAttrs := clog.BagFromContext(bgCtx).Attrs()
+		if status, ok := findStringAttr(bgAttrs, "finalLoadoutStatus"); !ok || status != "throttled" {
+			t.Fatalf("expected finalLoadoutStatus=throttled, got %q (found=%v)", status, ok)
+		}
+		if throttled, ok := findBoolAttr(bgAttrs, "finalLoadoutThrottled"); !ok || !throttled {
+			t.Fatalf("expected finalLoadoutThrottled=true, got %v (found=%v)", throttled, ok)
+		}
 	})
 
-	t.Run("best-effort resilience when check-in errors", func(t *testing.T) {
+	t.Run("best-effort resilience when check-in and comp rank error", func(t *testing.T) {
 		store := newMemorySessionStore()
 		store.docs["ses-3"] = &api.Session{
 			ID:          "ses-3",
@@ -3067,9 +3261,18 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			CharacterID: "char-1",
 			StartedAt:   t0.Add(-10 * time.Minute),
 			Status:      new(api.SessionPending),
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 4000},
+			},
 		}
 		snapSvc := &fakeSessionSnapshotService{
 			saveErrByChar: map[string]error{"char-1": errors.New("bungie 503")},
+		}
+		d2Svc := &fakeSessionD2Service{
+			getCompRankFn: func(_ context.Context, _, _ int64, _ string) (*api.CompRankSnapshot, error) {
+				return nil, errors.New("bungie comp 503")
+			},
 		}
 		uSvc := &fakeSessionUserService{
 			u: &user.User{
@@ -3078,27 +3281,42 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 				Memberships:         []user.Membership{{ID: "12345", Type: 3}},
 			},
 		}
+		finalizeDone := make(chan context.Context, 1)
 		svc := &service{
 			store:           store,
 			userService:     uSvc,
 			snapshotService: snapSvc,
+			d2Service:       d2Svc,
 			nowFn:           func() time.Time { return t0 },
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
 		}
 
 		ctx := clog.NewContext(context.Background())
-		if err := svc.Complete(ctx, "ses-3"); err != nil {
-			t.Fatalf("Complete should still succeed on check-in failure, got: %v", err)
+		ses, err := svc.Complete(ctx, "ses-3")
+		if err != nil {
+			t.Fatalf("Complete should still succeed on Bungie failures, got: %v", err)
 		}
-		if store.docs["ses-3"].CompletedAt == nil || *store.docs["ses-3"].Status != api.SessionComplete {
-			t.Fatalf("expected session still marked complete, got %+v", store.docs["ses-3"])
+		if ses.CompletedAt == nil || *ses.Status != api.SessionComplete {
+			t.Fatalf("expected session marked complete, got %+v", ses)
 		}
-		if !clog.BagFromContext(ctx).HasWarning() {
-			t.Fatal("expected warning recorded when final check-in fails")
+
+		bgCtx := waitFinalizeDone(t, finalizeDone)
+		bgBag := clog.BagFromContext(bgCtx)
+		if !bgBag.HasWarning() {
+			t.Fatal("expected warning recorded on background log when check-in and comp finalize fail")
 		}
-		assertAllWarningsAreStrings(t, clog.BagFromContext(ctx).Attrs())
+		assertAllWarningsAreStrings(t, bgBag.Attrs())
+		if status, ok := findStringAttr(bgBag.Attrs(), "finalLoadoutStatus"); !ok || status != "failed" {
+			t.Fatalf("expected finalLoadoutStatus=failed, got %q (found=%v)", status, ok)
+		}
+		if status, ok := findStringAttr(bgBag.Attrs(), "compFinalizeStatus"); !ok || status != "fallback_run_tick" {
+			t.Fatalf("expected compFinalizeStatus=fallback_run_tick, got %q (found=%v)", status, ok)
+		}
 	})
 
-	t.Run("bounded check-in timeout preserves parent context for completeDoc", func(t *testing.T) {
+	t.Run("bounded check-in timeout does not block Complete or comp finalization", func(t *testing.T) {
 		store := newMemorySessionStore()
 		store.docs["ses-4"] = &api.Session{
 			ID:          "ses-4",
@@ -3106,16 +3324,129 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			CharacterID: "char-1",
 			StartedAt:   t0.Add(-10 * time.Minute),
 			Status:      new(api.SessionPending),
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 4500},
+			},
 		}
 
-		var hasDeadline bool
-		var checkInErr error
+		var (
+			mu          sync.Mutex
+			hasDeadline bool
+			checkInErr  error
+		)
 		snapSvc := &fakeSessionSnapshotService{
 			checkInCtxFn: func(ctx context.Context, _, _, _ string, _ snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
-				_, hasDeadline = ctx.Deadline()
+				_, dl := ctx.Deadline()
 				<-ctx.Done()
+				mu.Lock()
+				hasDeadline = dl
 				checkInErr = ctx.Err()
-				return snapshot.SessionCheckInResult{}, checkInErr
+				mu.Unlock()
+				return snapshot.SessionCheckInResult{}, ctx.Err()
+			},
+		}
+		d2Svc := &fakeSessionD2Service{
+			snapshots: []*api.CompRankSnapshot{{Points: 4625}},
+		}
+		uSvc := &fakeSessionUserService{
+			u: &user.User{
+				ID:                  "user-1",
+				PrimaryMembershipID: "12345",
+				Memberships:         []user.Membership{{ID: "12345", Type: 3}},
+			},
+		}
+		finalizeDone := make(chan context.Context, 1)
+		svc := &service{
+			store:               store,
+			userService:         uSvc,
+			snapshotService:     snapSvc,
+			d2Service:           d2Svc,
+			nowFn:               func() time.Time { return t0 },
+			finalCheckInTimeout: 25 * time.Millisecond,
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
+		}
+
+		parentCtx := clog.NewContext(context.Background())
+		if _, err := svc.Complete(parentCtx, "ses-4"); err != nil {
+			t.Fatalf("Complete should still succeed when final check-in times out, got: %v", err)
+		}
+		bgCtx := waitFinalizeDone(t, finalizeDone)
+
+		mu.Lock()
+		gotDeadline := hasDeadline
+		gotErr := checkInErr
+		mu.Unlock()
+		if !gotDeadline {
+			t.Fatal("expected final check-in to receive a bounded context deadline")
+		}
+		if !errors.Is(gotErr, context.DeadlineExceeded) {
+			t.Fatalf("expected check-in to terminate with DeadlineExceeded, got %v", gotErr)
+		}
+		if parentCtx.Err() != nil {
+			t.Fatalf("expected parent context to remain uncanceled, got %v", parentCtx.Err())
+		}
+
+		store.mu.Lock()
+		persisted := cloneSession(store.docs["ses-4"])
+		store.mu.Unlock()
+		if persisted.CompTracking == nil || persisted.CompTracking.End == nil || persisted.CompTracking.End.Points != 4625 {
+			t.Fatalf("expected comp finalization to still persist End=4625 despite check-in timeout, got %+v", persisted.CompTracking)
+		}
+		bgBag := clog.BagFromContext(bgCtx)
+		if !bgBag.HasWarning() {
+			t.Fatal("expected warning recorded when final check-in times out")
+		}
+		assertAllWarningsAreStrings(t, bgBag.Attrs())
+		if status, ok := findStringAttr(bgBag.Attrs(), "finalLoadoutStatus"); !ok || status != "failed" {
+			t.Fatalf("expected finalLoadoutStatus=failed, got %q (found=%v)", status, ok)
+		}
+		if status, ok := findStringAttr(bgBag.Attrs(), "compFinalizeStatus"); !ok || status != "succeeded" {
+			t.Fatalf("expected compFinalizeStatus=succeeded, got %q (found=%v)", status, ok)
+		}
+	})
+
+	t.Run("bounded comp timeout falls back to RunTick without blocking loadout check-in", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-5"] = &api.Session{
+			ID:           "ses-5",
+			UserID:       "user-1",
+			CharacterID:  "char-1",
+			StartedAt:    t0.Add(-10 * time.Minute),
+			AggregateIDs: []string{"agg-1"},
+			Status:       new(api.SessionPending),
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 4500},
+			},
+		}
+
+		var (
+			mu          sync.Mutex
+			hasDeadline bool
+			compErr     error
+		)
+		snapSvc := &fakeSessionSnapshotService{
+			checkInFn: func(_, _, _ string, _ snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+				return snapshot.SessionCheckInResult{
+					SnapshotID:      "snap-5",
+					SnapshotHash:    "hash-5",
+					HistoryRecorded: true,
+					RecordedAt:      t0,
+				}, nil
+			},
+		}
+		d2Svc := &fakeSessionD2Service{
+			getCompRankFn: func(ctx context.Context, _, _ int64, _ string) (*api.CompRankSnapshot, error) {
+				_, dl := ctx.Deadline()
+				<-ctx.Done()
+				mu.Lock()
+				hasDeadline = dl
+				compErr = ctx.Err()
+				mu.Unlock()
+				return nil, ctx.Err()
 			},
 		}
 		uSvc := &fakeSessionUserService{
@@ -3125,32 +3456,113 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 				Memberships:         []user.Membership{{ID: "12345", Type: 3}},
 			},
 		}
+		finalizeDone := make(chan context.Context, 1)
 		svc := &service{
-			store:               store,
-			userService:         uSvc,
-			snapshotService:     snapSvc,
-			nowFn:               func() time.Time { return t0 },
-			finalCheckInTimeout: 25 * time.Millisecond,
+			store:            store,
+			userService:      uSvc,
+			snapshotService:  snapSvc,
+			d2Service:        d2Svc,
+			nowFn:            func() time.Time { return t0 },
+			finalCompTimeout: 25 * time.Millisecond,
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
 		}
 
-		parentCtx := clog.NewContext(context.Background())
-		if err := svc.Complete(parentCtx, "ses-4"); err != nil {
-			t.Fatalf("Complete should still succeed when final check-in times out, got: %v", err)
+		if _, err := svc.Complete(clog.NewContext(context.Background()), "ses-5"); err != nil {
+			t.Fatalf("Complete failed: %v", err)
 		}
-		if !hasDeadline {
-			t.Fatal("expected final check-in to receive a bounded context deadline")
+		bgCtx := waitFinalizeDone(t, finalizeDone)
+
+		mu.Lock()
+		gotDeadline := hasDeadline
+		gotErr := compErr
+		mu.Unlock()
+		if !gotDeadline {
+			t.Fatal("expected comp finalization to receive a bounded context deadline")
 		}
-		if !errors.Is(checkInErr, context.DeadlineExceeded) {
-			t.Fatalf("expected check-in to terminate with DeadlineExceeded, got %v", checkInErr)
+		if !errors.Is(gotErr, context.DeadlineExceeded) {
+			t.Fatalf("expected comp finalization to terminate with DeadlineExceeded, got %v", gotErr)
 		}
-		if parentCtx.Err() != nil {
-			t.Fatalf("expected parent context to remain uncanceled, got %v", parentCtx.Err())
+
+		store.mu.Lock()
+		rec := store.lastSnapshots["ses-5"]
+		persisted := cloneSession(store.docs["ses-5"])
+		store.mu.Unlock()
+		if rec.snapshotID != "snap-5" {
+			t.Fatalf("expected final loadout check-in to persist despite comp timeout, got %+v", rec)
 		}
-		if store.docs["ses-4"].CompletedAt == nil || *store.docs["ses-4"].Status != api.SessionComplete {
-			t.Fatalf("expected session marked complete after check-in timeout, got %+v", store.docs["ses-4"])
+		if persisted.CompTracking.End != nil {
+			t.Fatalf("expected CompTracking.End to remain nil for RunTick retry, got %+v", persisted.CompTracking.End)
 		}
-		if !clog.BagFromContext(parentCtx).HasWarning() {
-			t.Fatal("expected warning recorded when final check-in times out")
+		if !ShouldFinalizeComp(persisted) {
+			t.Fatal("expected timed-out session to remain eligible for RunTick comp finalization")
+		}
+
+		bgBag := clog.BagFromContext(bgCtx)
+		if !bgBag.HasWarning() {
+			t.Fatal("expected warning recorded when comp finalization times out")
+		}
+		assertAllWarningsAreStrings(t, bgBag.Attrs())
+		if status, ok := findStringAttr(bgBag.Attrs(), "finalLoadoutStatus"); !ok || status != "saved" {
+			t.Fatalf("expected finalLoadoutStatus=saved, got %q (found=%v)", status, ok)
+		}
+		if status, ok := findStringAttr(bgBag.Attrs(), "compFinalizeStatus"); !ok || status != "fallback_run_tick" {
+			t.Fatalf("expected compFinalizeStatus=fallback_run_tick, got %q (found=%v)", status, ok)
+		}
+	})
+
+	t.Run("membership resolution failure skips Bungie calls and records fallback statuses", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-6"] = &api.Session{
+			ID:          "ses-6",
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			StartedAt:   t0.Add(-10 * time.Minute),
+			Status:      new(api.SessionPending),
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 4500},
+			},
+		}
+		snapSvc := &fakeSessionSnapshotService{}
+		d2Svc := &fakeSessionD2Service{}
+		uSvc := &fakeSessionUserService{
+			getPrimaryMembershipErr: errors.New("firestore users unavailable"),
+		}
+		finalizeDone := make(chan context.Context, 1)
+		svc := &service{
+			store:           store,
+			userService:     uSvc,
+			snapshotService: snapSvc,
+			d2Service:       d2Svc,
+			nowFn:           func() time.Time { return t0 },
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
+		}
+
+		if _, err := svc.Complete(clog.NewContext(context.Background()), "ses-6"); err != nil {
+			t.Fatalf("Complete failed: %v", err)
+		}
+		bgCtx := waitFinalizeDone(t, finalizeDone)
+
+		if uSvc.membershipCalls.Load() != 1 {
+			t.Fatalf("expected 1 GetPrimaryMembership call, got %d", uSvc.membershipCalls.Load())
+		}
+		if snapSvc.saveCalls.Load() != 0 || d2Svc.calls.Load() != 0 {
+			t.Fatalf("expected 0 Bungie calls on membership lookup failure, got save=%d comp=%d", snapSvc.saveCalls.Load(), d2Svc.calls.Load())
+		}
+		bgBag := clog.BagFromContext(bgCtx)
+		if !bgBag.HasWarning() {
+			t.Fatal("expected warning recorded on membership lookup failure")
+		}
+		assertAllWarningsAreStrings(t, bgBag.Attrs())
+		if status, ok := findStringAttr(bgBag.Attrs(), "finalLoadoutStatus"); !ok || status != "failed" {
+			t.Fatalf("expected finalLoadoutStatus=failed, got %q (found=%v)", status, ok)
+		}
+		if status, ok := findStringAttr(bgBag.Attrs(), "compFinalizeStatus"); !ok || status != "fallback_run_tick" {
+			t.Fatalf("expected compFinalizeStatus=fallback_run_tick, got %q (found=%v)", status, ok)
 		}
 	})
 }

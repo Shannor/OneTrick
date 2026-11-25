@@ -13,6 +13,8 @@ import (
 	"oneTrick/utils"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -27,7 +29,7 @@ type Service interface {
 	GetActive(ctx context.Context, userID string, characterID string) (*api.Session, error)
 	GetActiveByUserIDs(ctx context.Context, userIDs []string) ([]ActiveSession, error)
 	GetAll(ctx context.Context, userID *string, characterID *string, status *api.SessionStatus, count int, offset int) ([]api.Session, error)
-	Complete(ctx context.Context, ID string) error
+	Complete(ctx context.Context, ID string) (*api.Session, error)
 	FinalizeCompTracking(ctx context.Context, sessionID string) error
 	SetLastActivity(ctx context.Context, ID, activityID string) error
 	Delete(ctx context.Context, sessionID string, userID string) error
@@ -51,6 +53,8 @@ type service struct {
 	manifestService     destiny.ManifestService
 	nowFn               func() time.Time
 	finalCheckInTimeout time.Duration
+	finalCompTimeout    time.Duration
+	onFinalizeDone      func(ctx context.Context, err error)
 }
 
 var _ Service = (*service)(nil)
@@ -85,6 +89,7 @@ const (
 	// Active sessions retry incomplete PGCRs up to 30m; completed sessions are additionally bounded by completedGracePeriod (15m) to cap post-completion reads.
 	incompletePerformanceRetryWindow = 30 * time.Minute
 	finalLoadoutCheckInTimeout       = 5 * time.Second
+	finalCompRankTimeout             = 5 * time.Second
 )
 
 func (s service) now() time.Time {
@@ -99,6 +104,13 @@ func (s service) checkInTimeout() time.Duration {
 		return s.finalCheckInTimeout
 	}
 	return finalLoadoutCheckInTimeout
+}
+
+func (s service) compFinalizeTimeout() time.Duration {
+	if s.finalCompTimeout > 0 {
+		return s.finalCompTimeout
+	}
+	return finalCompRankTimeout
 }
 
 func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
@@ -295,83 +307,245 @@ func (s service) Update(ctx context.Context, sessionID string, name, description
 	return nil
 }
 
-func (s service) Complete(ctx context.Context, ID string) error {
+type completeFinalizeTask struct {
+	sessionID              string
+	userID                 string
+	characterID            string
+	lastSnapshotID         string
+	lastSnapshotHash       string
+	lastSnapshotRecordedAt time.Time
+	runLoadoutCheckIn      bool
+	runCompFinalize        bool
+	hasCompStart           bool
+	compStartPoints        int
+}
+
+type loadoutCheckInOutcome struct {
+	status     string
+	snapshotID string
+	err        error
+	metaErr    error
+}
+
+type compFinalizeOutcome struct {
+	status     string
+	endPoints  int
+	pointDelta *int
+	err        error
+}
+
+func buildCompleteFinalizeTask(sessionID string, cand TickCandidate, runLoadoutCheckIn, runCompFinalize bool) completeFinalizeTask {
+	resolvedID := cand.Session.ID
+	if resolvedID == "" {
+		resolvedID = sessionID
+	}
+	task := completeFinalizeTask{
+		sessionID:              resolvedID,
+		userID:                 cand.Session.UserID,
+		characterID:            cand.Session.CharacterID,
+		lastSnapshotID:         cand.LastSnapshotID,
+		lastSnapshotHash:       cand.LastSnapshotHash,
+		lastSnapshotRecordedAt: cand.LastSnapshotRecordedAt,
+		runLoadoutCheckIn:      runLoadoutCheckIn,
+		runCompFinalize:        runCompFinalize,
+	}
+	if cand.Session.CompTracking != nil && cand.Session.CompTracking.Start != nil {
+		task.hasCompStart = true
+		task.compStartPoints = cand.Session.CompTracking.Start.Points
+	}
+	return task
+}
+
+func (s service) Complete(ctx context.Context, ID string) (*api.Session, error) {
 	clog.WithGroupField(ctx, "sessionService.complete", "sessionId", ID)
 	cand, err := s.store.GetDocWithMeta(ctx, ID)
 	if err != nil {
-		return fmt.Errorf("failed to get session: %w", err)
+		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
 	session := &cand.Session
-	if session.CompletedAt == nil {
-		// Record the final loadout check-in before marking the session complete so
-		// any subsequent tick (which skips loadout capture on completed sessions)
-		// already sees the final loadout history when linking late-arriving games.
-		s.recordFinalLoadoutCheckIn(ctx, *cand)
+	if session.AggregateIDs == nil {
+		session.AggregateIDs = make([]string, 0)
+	}
 
+	justCompleted := session.CompletedAt == nil
+	if justCompleted {
 		completedAt := s.now()
 		if err := s.store.CompleteDoc(ctx, ID, completedAt); err != nil {
-			return fmt.Errorf("failed to complete session: %w", err)
+			return nil, fmt.Errorf("failed to complete session: %w", err)
 		}
 		session.CompletedAt = &completedAt
 		session.Status = new(api.SessionComplete)
 	} else {
-		clog.WithGroupField(ctx, "sessionService.complete", "warning", "session already completed")
+		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+			"alreadyCompleted": true,
+			"warning":          "session already completed",
+		})
 	}
 
-	if session.CompTracking != nil && session.CompTracking.Enabled && session.CompTracking.End == nil {
-		if err := s.finalizeCompTrackingForSession(ctx, session); err != nil {
-			clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
-				"warning":       "failed to finalize competitive rank",
-				"compRankError": err.Error(),
-			})
+	needsLoadout := justCompleted && s.snapshotService != nil && s.userService != nil
+	wantsCompFinalize := session.CompTracking != nil && session.CompTracking.Enabled && session.CompTracking.End == nil
+	needsCompFinalize := wantsCompFinalize && s.userService != nil && s.d2Service != nil
+	if wantsCompFinalize && !needsCompFinalize {
+		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+			"warning":            "competitive rank services not configured",
+			"compFinalizeStatus": "fallback_run_tick",
+		})
+	}
+
+	if needsLoadout || needsCompFinalize {
+		// Detach live Bungie workflows after marking the session complete so End Session returns
+		// immediately while UI real-time listeners and RunTick's 15m grace window handle updates/retries.
+		task := buildCompleteFinalizeTask(ID, *cand, needsLoadout, needsCompFinalize)
+		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+			"finalizationAsync":     true,
+			"finalLoadoutScheduled": needsLoadout,
+			"compFinalizeScheduled": needsCompFinalize,
+		})
+		clog.Go(ctx, "complete-session-finalize-bg", func(bgCtx context.Context) error {
+			err := s.runCompleteFinalization(bgCtx, task)
+			if s.onFinalizeDone != nil {
+				s.onFinalizeDone(bgCtx, err)
+			}
+			return err
+		})
+	} else {
+		clog.WithGroupField(ctx, "sessionService.complete", "finalizationAsync", false)
+	}
+
+	return session, nil
+}
+
+func (s service) runCompleteFinalization(ctx context.Context, task completeFinalizeTask) error {
+	fields := clog.Fields{
+		"sessionId":   task.sessionID,
+		"userId":      task.userID,
+		"characterId": task.characterID,
+	}
+
+	memberCtx, memberCancel := context.WithTimeout(ctx, s.checkInTimeout())
+	pmID, membershipType, err := s.userService.GetPrimaryMembership(memberCtx, task.userID)
+	memberCancel()
+	if err != nil {
+		fields["warning"] = "failed to resolve primary membership for session finalization"
+		if task.runLoadoutCheckIn {
+			fields["finalLoadoutStatus"] = "failed"
+			fields["loadoutError"] = err.Error()
+		}
+		if task.runCompFinalize {
+			fields["compFinalizeStatus"] = "fallback_run_tick"
+			fields["compRankError"] = err.Error()
+		}
+		clog.WithGroupFields(ctx, "sessionService.completeFinalize", fields)
+		return nil
+	}
+
+	var (
+		loadoutOutcome loadoutCheckInOutcome
+		compOutcome    compFinalizeOutcome
+	)
+	if task.runLoadoutCheckIn && task.runCompFinalize {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			loadoutOutcome = s.recordFinalLoadoutCheckIn(ctx, task, pmID)
+		}()
+		go func() {
+			defer wg.Done()
+			compOutcome = s.finalizeCompForTask(ctx, task, pmID, membershipType)
+		}()
+		wg.Wait()
+	} else if task.runLoadoutCheckIn {
+		loadoutOutcome = s.recordFinalLoadoutCheckIn(ctx, task, pmID)
+	} else if task.runCompFinalize {
+		compOutcome = s.finalizeCompForTask(ctx, task, pmID, membershipType)
+	}
+
+	var warnings []string
+	if task.runLoadoutCheckIn {
+		fields["finalLoadoutStatus"] = loadoutOutcome.status
+		switch loadoutOutcome.status {
+		case "saved":
+			fields["finalLoadoutSaved"] = true
+			fields["snapshotId"] = loadoutOutcome.snapshotID
+			if loadoutOutcome.metaErr != nil {
+				fields["lastSnapshotError"] = loadoutOutcome.metaErr.Error()
+				warnings = append(warnings, "failed to persist final snapshot metadata on session")
+			}
+		case "throttled":
+			fields["finalLoadoutThrottled"] = true
+		case "failed":
+			fields["loadoutError"] = loadoutOutcome.err.Error()
+			warnings = append(warnings, "failed to save final loadout check-in")
 		}
 	}
 
+	if task.runCompFinalize {
+		fields["compFinalizeStatus"] = compOutcome.status
+		switch compOutcome.status {
+		case "succeeded":
+			fields["compEndPoints"] = compOutcome.endPoints
+			if compOutcome.pointDelta != nil {
+				fields["compPointDelta"] = *compOutcome.pointDelta
+			}
+		case "fallback_run_tick":
+			fields["compRankError"] = compOutcome.err.Error()
+			warnings = append(warnings, "failed to finalize competitive rank; will fall back to runTick")
+		}
+	}
+
+	if len(warnings) > 0 {
+		fields["warning"] = strings.Join(warnings, "; ")
+	}
+	clog.WithGroupFields(ctx, "sessionService.completeFinalize", fields)
 	return nil
 }
 
-func (s service) recordFinalLoadoutCheckIn(ctx context.Context, cand TickCandidate) {
-	if s.snapshotService == nil || s.userService == nil {
-		return
-	}
+func (s service) recordFinalLoadoutCheckIn(ctx context.Context, task completeFinalizeTask, pmID int64) loadoutCheckInOutcome {
 	checkInCtx, cancel := context.WithTimeout(ctx, s.checkInTimeout())
 	defer cancel()
 
-	pmID, _, err := s.userService.GetPrimaryMembership(checkInCtx, cand.Session.UserID)
-	if err != nil {
-		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
-			"warning":      "failed to resolve primary membership for final loadout check-in",
-			"loadoutError": err.Error(),
-		})
-		return
-	}
-	res, err := s.snapshotService.SaveSessionCheckIn(checkInCtx, cand.Session.UserID, strconv.FormatInt(pmID, 10), cand.Session.CharacterID, snapshot.SessionCheckInOptions{
-		LastSnapshotID:         cand.LastSnapshotID,
-		LastSnapshotHash:       cand.LastSnapshotHash,
-		LastSnapshotRecordedAt: cand.LastSnapshotRecordedAt,
+	res, err := s.snapshotService.SaveSessionCheckIn(checkInCtx, task.userID, strconv.FormatInt(pmID, 10), task.characterID, snapshot.SessionCheckInOptions{
+		LastSnapshotID:         task.lastSnapshotID,
+		LastSnapshotHash:       task.lastSnapshotHash,
+		LastSnapshotRecordedAt: task.lastSnapshotRecordedAt,
 		HeartbeatInterval:      snapshotHeartbeatPeriod,
 	})
 	if err != nil {
-		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
-			"warning":      "failed to save final loadout check-in",
-			"loadoutError": err.Error(),
-		})
-		return
+		return loadoutCheckInOutcome{
+			status: "failed",
+			err:    err,
+		}
 	}
 	if !res.HistoryRecorded {
-		clog.WithGroupField(ctx, "sessionService.complete", "finalLoadoutThrottled", true)
-		return
+		return loadoutCheckInOutcome{
+			status: "throttled",
+		}
 	}
-	if err := s.store.SetLastSnapshot(ctx, cand.Session.ID, res.SnapshotID, res.SnapshotHash, res.RecordedAt); err != nil {
-		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
-			"warning":           "failed to persist final snapshot metadata on session",
-			"lastSnapshotError": err.Error(),
-		})
+	metaErr := s.store.SetLastSnapshot(ctx, task.sessionID, res.SnapshotID, res.SnapshotHash, res.RecordedAt)
+	return loadoutCheckInOutcome{
+		status:     "saved",
+		snapshotID: res.SnapshotID,
+		metaErr:    metaErr,
 	}
-	clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
-		"finalLoadoutSaved": true,
-		"snapshotId":        res.SnapshotID,
-	})
+}
+
+func (s service) finalizeCompForTask(ctx context.Context, task completeFinalizeTask, pmID, membershipType int64) compFinalizeOutcome {
+	compCtx, cancel := context.WithTimeout(ctx, s.compFinalizeTimeout())
+	defer cancel()
+
+	endSnap, pointDelta, err := s.fetchAndPersistCompEnd(compCtx, ctx, task.sessionID, task.characterID, pmID, membershipType, task.hasCompStart, task.compStartPoints)
+	if err != nil {
+		return compFinalizeOutcome{
+			status: "fallback_run_tick",
+			err:    err,
+		}
+	}
+	return compFinalizeOutcome{
+		status:     "succeeded",
+		endPoints:  endSnap.Points,
+		pointDelta: pointDelta,
+	}
 }
 
 func (s service) FinalizeCompTracking(ctx context.Context, sessionID string) error {
@@ -407,19 +581,15 @@ func (s service) finalizeCompTrackingForSession(ctx context.Context, ses *api.Se
 		return err
 	}
 
-	endSnap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, ses.CharacterID)
+	hasStart := ses.CompTracking.Start != nil
+	startPoints := 0
+	if hasStart {
+		startPoints = ses.CompTracking.Start.Points
+	}
+
+	endSnap, pointDelta, err := s.fetchAndPersistCompEnd(ctx, ctx, ses.ID, ses.CharacterID, pmID, membershipType, hasStart, startPoints)
 	if err != nil {
-		return fmt.Errorf("failed to fetch ending competitive rank: %w", err)
-	}
-
-	var pointDelta *int
-	if ses.CompTracking.Start != nil {
-		delta := endSnap.Points - ses.CompTracking.Start.Points
-		pointDelta = &delta
-	}
-
-	if err := s.store.UpdateCompTrackingEnd(ctx, ses.ID, endSnap, pointDelta); err != nil {
-		return fmt.Errorf("failed to persist competitive rank end: %w", err)
+		return err
 	}
 
 	fields := clog.Fields{
@@ -431,6 +601,37 @@ func (s service) finalizeCompTrackingForSession(ctx context.Context, ses *api.Se
 	}
 	clog.WithGroupFields(ctx, "sessionService.finalizeCompTracking", fields)
 	return nil
+}
+
+func (s service) fetchAndPersistCompEnd(
+	fetchCtx context.Context,
+	storeCtx context.Context,
+	sessionID string,
+	characterID string,
+	pmID int64,
+	membershipType int64,
+	hasStart bool,
+	startPoints int,
+) (*api.CompRankSnapshot, *int, error) {
+	endSnap, err := s.d2Service.GetCompetitiveRank(fetchCtx, pmID, membershipType, characterID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to fetch ending competitive rank: %w", err)
+	}
+	if endSnap == nil {
+		return nil, nil, fmt.Errorf("empty ending competitive rank snapshot")
+	}
+
+	var pointDelta *int
+	if hasStart {
+		delta := endSnap.Points - startPoints
+		pointDelta = &delta
+	}
+
+	if err := s.store.UpdateCompTrackingEnd(storeCtx, sessionID, endSnap, pointDelta); err != nil {
+		return nil, nil, fmt.Errorf("failed to persist competitive rank end: %w", err)
+	}
+
+	return endSnap, pointDelta, nil
 }
 
 func (s service) SetLastActivity(ctx context.Context, ID, activityID string) error {
