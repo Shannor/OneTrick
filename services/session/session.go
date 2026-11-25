@@ -45,16 +45,18 @@ var (
 )
 
 type service struct {
-	store               Store
-	aggregateService    aggregate.Service
-	userService         user.Service
-	d2Service           destiny.Service
-	snapshotService     snapshot.Service
-	manifestService     destiny.ManifestService
-	nowFn               func() time.Time
-	finalCheckInTimeout time.Duration
-	finalCompTimeout    time.Duration
-	onFinalizeDone      func(ctx context.Context, err error)
+	store                 Store
+	aggregateService      aggregate.Service
+	userService           user.Service
+	d2Service             destiny.Service
+	snapshotService       snapshot.Service
+	manifestService       destiny.ManifestService
+	inFlightFinalizations *sync.Map
+	nowFn                 func() time.Time
+	finalCheckInTimeout   time.Duration
+	finalCompTimeout      time.Duration
+	finalWriteTimeout     time.Duration
+	onFinalizeDone        func(ctx context.Context, err error)
 }
 
 var _ Service = (*service)(nil)
@@ -68,12 +70,13 @@ func NewService(
 	manifestService destiny.ManifestService,
 ) Service {
 	return &service{
-		store:            store,
-		aggregateService: aggregateService,
-		userService:      userService,
-		d2Service:        d2Service,
-		snapshotService:  snapshotService,
-		manifestService:  manifestService,
+		store:                 store,
+		aggregateService:      aggregateService,
+		userService:           userService,
+		d2Service:             d2Service,
+		snapshotService:       snapshotService,
+		manifestService:       manifestService,
+		inFlightFinalizations: &sync.Map{},
 	}
 }
 
@@ -90,6 +93,7 @@ const (
 	incompletePerformanceRetryWindow = 30 * time.Minute
 	finalLoadoutCheckInTimeout       = 5 * time.Second
 	finalCompRankTimeout             = 5 * time.Second
+	finalStoreWriteTimeout           = 5 * time.Second
 )
 
 func (s service) now() time.Time {
@@ -111,6 +115,34 @@ func (s service) compFinalizeTimeout() time.Duration {
 		return s.finalCompTimeout
 	}
 	return finalCompRankTimeout
+}
+
+func (s service) storeWriteTimeout() time.Duration {
+	if s.finalWriteTimeout > 0 {
+		return s.finalWriteTimeout
+	}
+	return finalStoreWriteTimeout
+}
+
+func (s service) membershipLookupTimeout(task completeFinalizeTask) time.Duration {
+	switch {
+	case task.runLoadoutCheckIn && task.runCompFinalize:
+		return max(s.checkInTimeout(), s.compFinalizeTimeout())
+	case task.runCompFinalize:
+		return s.compFinalizeTimeout()
+	default:
+		return s.checkInTimeout()
+	}
+}
+
+func (s service) tryAcquireFinalize(sessionID string) (release func(), acquired bool) {
+	if s.inFlightFinalizations == nil {
+		return func() {}, true
+	}
+	if _, loaded := s.inFlightFinalizations.LoadOrStore(sessionID, struct{}{}); loaded {
+		return nil, false
+	}
+	return func() { s.inFlightFinalizations.Delete(sessionID) }, true
 }
 
 func (s service) Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error) {
@@ -396,18 +428,29 @@ func (s service) Complete(ctx context.Context, ID string) (*api.Session, error) 
 		// Detach live Bungie workflows after marking the session complete so End Session returns
 		// immediately while UI real-time listeners and RunTick's 15m grace window handle updates/retries.
 		task := buildCompleteFinalizeTask(ID, *cand, needsLoadout, needsCompFinalize)
-		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
-			"finalizationAsync":     true,
-			"finalLoadoutScheduled": needsLoadout,
-			"compFinalizeScheduled": needsCompFinalize,
-		})
-		clog.Go(ctx, "complete-session-finalize-bg", func(bgCtx context.Context) error {
-			err := s.runCompleteFinalization(bgCtx, task)
-			if s.onFinalizeDone != nil {
-				s.onFinalizeDone(bgCtx, err)
-			}
-			return err
-		})
+		release, acquired := s.tryAcquireFinalize(task.sessionID)
+		if !acquired {
+			clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+				"finalizationAsync":        false,
+				"finalizationDeduplicated": true,
+			})
+		} else {
+			clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
+				"finalizationAsync":     true,
+				"finalLoadoutScheduled": needsLoadout,
+				"compFinalizeScheduled": needsCompFinalize,
+			})
+			clog.Go(ctx, "complete-session-finalize-bg", func(bgCtx context.Context) error {
+				err := func() error {
+					defer release()
+					return s.runCompleteFinalization(bgCtx, task)
+				}()
+				if s.onFinalizeDone != nil {
+					s.onFinalizeDone(bgCtx, err)
+				}
+				return err
+			})
+		}
 	} else {
 		clog.WithGroupField(ctx, "sessionService.complete", "finalizationAsync", false)
 	}
@@ -422,7 +465,7 @@ func (s service) runCompleteFinalization(ctx context.Context, task completeFinal
 		"characterId": task.characterID,
 	}
 
-	memberCtx, memberCancel := context.WithTimeout(ctx, s.checkInTimeout())
+	memberCtx, memberCancel := context.WithTimeout(ctx, s.membershipLookupTimeout(task))
 	pmID, membershipType, err := s.userService.GetPrimaryMembership(memberCtx, task.userID)
 	memberCancel()
 	if err != nil {
@@ -448,7 +491,7 @@ func (s service) runCompleteFinalization(ctx context.Context, task completeFinal
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			loadoutOutcome = s.recordFinalLoadoutCheckIn(ctx, task, pmID)
+			loadoutOutcome = s.recordFinalLoadoutCheckIn(ctx, task, pmID, membershipType)
 		}()
 		go func() {
 			defer wg.Done()
@@ -456,7 +499,7 @@ func (s service) runCompleteFinalization(ctx context.Context, task completeFinal
 		}()
 		wg.Wait()
 	} else if task.runLoadoutCheckIn {
-		loadoutOutcome = s.recordFinalLoadoutCheckIn(ctx, task, pmID)
+		loadoutOutcome = s.recordFinalLoadoutCheckIn(ctx, task, pmID, membershipType)
 	} else if task.runCompFinalize {
 		compOutcome = s.finalizeCompForTask(ctx, task, pmID, membershipType)
 	}
@@ -501,11 +544,12 @@ func (s service) runCompleteFinalization(ctx context.Context, task completeFinal
 	return nil
 }
 
-func (s service) recordFinalLoadoutCheckIn(ctx context.Context, task completeFinalizeTask, pmID int64) loadoutCheckInOutcome {
+func (s service) recordFinalLoadoutCheckIn(ctx context.Context, task completeFinalizeTask, pmID, membershipType int64) loadoutCheckInOutcome {
 	checkInCtx, cancel := context.WithTimeout(ctx, s.checkInTimeout())
 	defer cancel()
 
 	res, err := s.snapshotService.SaveSessionCheckIn(checkInCtx, task.userID, strconv.FormatInt(pmID, 10), task.characterID, snapshot.SessionCheckInOptions{
+		MembershipType:         membershipType,
 		LastSnapshotID:         task.lastSnapshotID,
 		LastSnapshotHash:       task.lastSnapshotHash,
 		LastSnapshotRecordedAt: task.lastSnapshotRecordedAt,
@@ -522,7 +566,9 @@ func (s service) recordFinalLoadoutCheckIn(ctx context.Context, task completeFin
 			status: "throttled",
 		}
 	}
-	metaErr := s.store.SetLastSnapshot(ctx, task.sessionID, res.SnapshotID, res.SnapshotHash, res.RecordedAt)
+	writeCtx, writeCancel := context.WithTimeout(ctx, s.storeWriteTimeout())
+	metaErr := s.store.SetLastSnapshot(writeCtx, task.sessionID, res.SnapshotID, res.SnapshotHash, res.RecordedAt)
+	writeCancel()
 	return loadoutCheckInOutcome{
 		status:     "saved",
 		snapshotID: res.SnapshotID,
@@ -534,7 +580,7 @@ func (s service) finalizeCompForTask(ctx context.Context, task completeFinalizeT
 	compCtx, cancel := context.WithTimeout(ctx, s.compFinalizeTimeout())
 	defer cancel()
 
-	endSnap, pointDelta, err := s.fetchAndPersistCompEnd(compCtx, ctx, task.sessionID, task.characterID, pmID, membershipType, task.hasCompStart, task.compStartPoints)
+	endSnap, pointDelta, err := s.fetchAndPersistCompEnd(compCtx, ctx, s.storeWriteTimeout(), task.sessionID, task.characterID, pmID, membershipType, task.hasCompStart, task.compStartPoints)
 	if err != nil {
 		return compFinalizeOutcome{
 			status: "fallback_run_tick",
@@ -587,7 +633,7 @@ func (s service) finalizeCompTrackingForSession(ctx context.Context, ses *api.Se
 		startPoints = ses.CompTracking.Start.Points
 	}
 
-	endSnap, pointDelta, err := s.fetchAndPersistCompEnd(ctx, ctx, ses.ID, ses.CharacterID, pmID, membershipType, hasStart, startPoints)
+	endSnap, pointDelta, err := s.fetchAndPersistCompEnd(ctx, ctx, 0, ses.ID, ses.CharacterID, pmID, membershipType, hasStart, startPoints)
 	if err != nil {
 		return err
 	}
@@ -606,6 +652,7 @@ func (s service) finalizeCompTrackingForSession(ctx context.Context, ses *api.Se
 func (s service) fetchAndPersistCompEnd(
 	fetchCtx context.Context,
 	storeCtx context.Context,
+	writeTimeout time.Duration,
 	sessionID string,
 	characterID string,
 	pmID int64,
@@ -625,6 +672,12 @@ func (s service) fetchAndPersistCompEnd(
 	if hasStart {
 		delta := endSnap.Points - startPoints
 		pointDelta = &delta
+	}
+
+	if writeTimeout > 0 {
+		var cancel context.CancelFunc
+		storeCtx, cancel = context.WithTimeout(storeCtx, writeTimeout)
+		defer cancel()
 	}
 
 	if err := s.store.UpdateCompTrackingEnd(storeCtx, sessionID, endSnap, pointDelta); err != nil {

@@ -939,21 +939,25 @@ func TestCanMergeServerTickVsBackendEffectiveInstanceID(t *testing.T) {
 type fakeSnapshotUserService struct {
 	user.Service
 	membershipType int64
+	calls          int
 }
 
 func (f *fakeSnapshotUserService) GetMembershipType(_ context.Context, _, _ string) (int64, error) {
+	f.calls++
 	return f.membershipType, nil
 }
 
 type fakeSnapshotD2Service struct {
 	destiny.Service
-	loadout api.Loadout
-	stats   map[string]api.ClassStat
-	bonuses []api.ArmorSetBonus
-	ts      *time.Time
+	loadout            api.Loadout
+	stats              map[string]api.ClassStat
+	bonuses            []api.ArmorSetBonus
+	ts                 *time.Time
+	lastMembershipType int64
 }
 
-func (f *fakeSnapshotD2Service) GetLoadout(_ context.Context, _ int64, _ int64, _ string) (api.Loadout, map[string]api.ClassStat, []api.ArmorSetBonus, *time.Time, error) {
+func (f *fakeSnapshotD2Service) GetLoadout(_ context.Context, _ int64, membershipType int64, _ string) (api.Loadout, map[string]api.ClassStat, []api.ArmorSetBonus, *time.Time, error) {
+	f.lastMembershipType = membershipType
 	return f.loadout, f.stats, f.bonuses, f.ts, nil
 }
 
@@ -1635,6 +1639,54 @@ func TestSaveSessionCheckIn_ThrottlingAndMultiHourFindBestFit(t *testing.T) {
 		}
 		if !res2.HistoryRecorded {
 			t.Fatal("expected heartbeat check-in at exactly +30m to record history")
+		}
+	})
+
+	t.Run("skips GetMembershipType when MembershipType is provided in options", func(t *testing.T) {
+		start := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+		loadoutA := makeLoadoutWithKinetic("kin-inst-1", 1001, 501)
+		store := newMemSnapshotStore()
+		userFake := &fakeSnapshotUserService{membershipType: 1}
+		d2Fake := &fakeSnapshotD2Service{
+			loadout: loadoutA,
+			stats:   map[string]api.ClassStat{},
+			ts:      &start,
+		}
+		svc := &service{
+			store:       store,
+			UserService: userFake,
+			D2Service:   d2Fake,
+			nowFn:       func() time.Time { return start },
+		}
+
+		res, err := svc.SaveSessionCheckIn(context.Background(), "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			MembershipType:    3,
+			HeartbeatInterval: 30 * time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("SaveSessionCheckIn with MembershipType failed: %v", err)
+		}
+		if !res.HistoryRecorded {
+			t.Fatal("expected initial check-in to record history")
+		}
+		if userFake.calls != 0 {
+			t.Fatalf("expected 0 GetMembershipType calls when MembershipType is provided, got %d", userFake.calls)
+		}
+		if d2Fake.lastMembershipType != 3 {
+			t.Fatalf("expected D2Service.GetLoadout to receive membershipType=3, got %d", d2Fake.lastMembershipType)
+		}
+
+		// Zero MembershipType still falls back to UserService.GetMembershipType.
+		if _, err := svc.SaveSessionCheckIn(context.Background(), "user-1", "4611686018467484863", "char-1", SessionCheckInOptions{
+			HeartbeatInterval: 30 * time.Minute,
+		}); err != nil {
+			t.Fatalf("SaveSessionCheckIn without MembershipType failed: %v", err)
+		}
+		if userFake.calls != 1 {
+			t.Fatalf("expected 1 GetMembershipType fallback call when MembershipType is 0, got %d", userFake.calls)
+		}
+		if d2Fake.lastMembershipType != 1 {
+			t.Fatalf("expected D2Service.GetLoadout to receive fallback membershipType=1, got %d", d2Fake.lastMembershipType)
 		}
 	})
 }

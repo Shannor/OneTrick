@@ -37,8 +37,10 @@ type memorySessionStore struct {
 	getDocCalls              atomic.Int32
 	getActiveByUserIDsCalls  atomic.Int32
 	getActiveByUserIDsErr    error
-	writes                   atomic.Int32
-	lastCompletedWindowCount atomic.Int32
+	writes                       atomic.Int32
+	lastCompletedWindowCount     atomic.Int32
+	lastSnapshotWriteHasDeadline atomic.Bool
+	compEndWriteHasDeadline      atomic.Bool
 }
 
 func newMemorySessionStore() *memorySessionStore {
@@ -294,7 +296,9 @@ func (m *memorySessionStore) UpdateSummary(_ context.Context, sessionID string, 
 	return nil
 }
 
-func (m *memorySessionStore) UpdateCompTrackingEnd(_ context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error {
+func (m *memorySessionStore) UpdateCompTrackingEnd(ctx context.Context, sessionID string, end *api.CompRankSnapshot, pointDelta *int) error {
+	_, hasDeadline := ctx.Deadline()
+	m.compEndWriteHasDeadline.Store(hasDeadline)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -337,7 +341,9 @@ func (m *memorySessionStore) TouchLastSeen(_ context.Context, sessionID string, 
 	return nil
 }
 
-func (m *memorySessionStore) SetLastSnapshot(_ context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
+func (m *memorySessionStore) SetLastSnapshot(ctx context.Context, sessionID, snapshotID, snapshotHash string, recordedAt time.Time) error {
+	_, hasDeadline := ctx.Deadline()
+	m.lastSnapshotWriteHasDeadline.Store(hasDeadline)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writes.Add(1)
@@ -388,11 +394,15 @@ type fakeSessionUserService struct {
 	u                       *user.User
 	users                   map[string]*user.User
 	getPrimaryMembershipErr error
+	getPrimaryMembershipFn  func(ctx context.Context, userID string) (int64, int64, error)
 	membershipCalls         atomic.Int32
 }
 
-func (f *fakeSessionUserService) GetPrimaryMembership(_ context.Context, userID string) (int64, int64, error) {
+func (f *fakeSessionUserService) GetPrimaryMembership(ctx context.Context, userID string) (int64, int64, error) {
 	f.membershipCalls.Add(1)
+	if f.getPrimaryMembershipFn != nil {
+		return f.getPrimaryMembershipFn(ctx, userID)
+	}
 	if f.getPrimaryMembershipErr != nil {
 		return 0, 0, f.getPrimaryMembershipErr
 	}
@@ -3156,8 +3166,14 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 		if !completedBeforeCheckIn {
 			t.Fatal("expected session to be marked completed before detached check-in runs")
 		}
-		if optsCopy.LastSnapshotID != "snap-old" || optsCopy.LastSnapshotHash != "hash-old" || optsCopy.HeartbeatInterval != snapshotHeartbeatPeriod {
+		if optsCopy.LastSnapshotID != "snap-old" || optsCopy.LastSnapshotHash != "hash-old" || optsCopy.HeartbeatInterval != snapshotHeartbeatPeriod || optsCopy.MembershipType != 3 {
 			t.Fatalf("unexpected check-in opts passed from Complete: %+v", optsCopy)
+		}
+		if !store.lastSnapshotWriteHasDeadline.Load() {
+			t.Fatal("expected SetLastSnapshot write context to have a bounded deadline")
+		}
+		if !store.compEndWriteHasDeadline.Load() {
+			t.Fatal("expected UpdateCompTrackingEnd write context to have a bounded deadline")
 		}
 
 		store.mu.Lock()
@@ -3563,6 +3579,179 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 		}
 		if status, ok := findStringAttr(bgBag.Attrs(), "compFinalizeStatus"); !ok || status != "fallback_run_tick" {
 			t.Fatalf("expected compFinalizeStatus=fallback_run_tick, got %q (found=%v)", status, ok)
+		}
+	})
+
+	t.Run("deduplicates overlapping background finalizations and allows retry after completion", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-7"] = &api.Session{
+			ID:          "ses-7",
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			StartedAt:   t0.Add(-10 * time.Minute),
+			Status:      new(api.SessionPending),
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 5000},
+			},
+		}
+
+		firstEntered := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		var attempt atomic.Int32
+		d2Svc := &fakeSessionD2Service{
+			getCompRankFn: func(_ context.Context, _, _ int64, _ string) (*api.CompRankSnapshot, error) {
+				if attempt.Add(1) == 1 {
+					close(firstEntered)
+					<-releaseFirst
+					return nil, errors.New("temporary bungie failure")
+				}
+				return &api.CompRankSnapshot{Points: 5200}, nil
+			},
+		}
+		snapSvc := &fakeSessionSnapshotService{
+			checkInFn: func(_, _, _ string, _ snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+				return snapshot.SessionCheckInResult{
+					SnapshotID:      "snap-7",
+					SnapshotHash:    "hash-7",
+					HistoryRecorded: true,
+					RecordedAt:      t0,
+				}, nil
+			},
+		}
+		uSvc := &fakeSessionUserService{
+			u: &user.User{
+				ID:                  "user-1",
+				PrimaryMembershipID: "12345",
+				Memberships:         []user.Membership{{ID: "12345", Type: 3}},
+			},
+		}
+		finalizeDone := make(chan context.Context, 2)
+		svc := &service{
+			store:                 store,
+			userService:           uSvc,
+			snapshotService:       snapSvc,
+			d2Service:             d2Svc,
+			nowFn:                 func() time.Time { return t0 },
+			inFlightFinalizations: &sync.Map{},
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
+		}
+
+		if _, err := svc.Complete(clog.NewContext(context.Background()), "ses-7"); err != nil {
+			t.Fatalf("first Complete failed: %v", err)
+		}
+		select {
+		case <-firstEntered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for first background finalization to start")
+		}
+
+		// Rapid second Complete while first finalization is still in flight must be deduplicated.
+		dupCtx := clog.NewContext(context.Background())
+		if _, err := svc.Complete(dupCtx, "ses-7"); err != nil {
+			t.Fatalf("second Complete failed: %v", err)
+		}
+		dupAttrs := clog.BagFromContext(dupCtx).Attrs()
+		if dedup, ok := findBoolAttr(dupAttrs, "finalizationDeduplicated"); !ok || !dedup {
+			t.Fatalf("expected finalizationDeduplicated=true on overlapping Complete, got %v (found=%v)", dedup, ok)
+		}
+		if async, ok := findBoolAttr(dupAttrs, "finalizationAsync"); !ok || async {
+			t.Fatalf("expected finalizationAsync=false on overlapping Complete, got %v (found=%v)", async, ok)
+		}
+		if d2Svc.calls.Load() != 1 {
+			t.Fatalf("expected overlapping Complete not to start a second comp rank call, got %d", d2Svc.calls.Load())
+		}
+
+		// Let the first attempt fail so CompTracking.End stays nil and lock is released.
+		close(releaseFirst)
+		waitFinalizeDone(t, finalizeDone)
+
+		// A subsequent Complete should now acquire the slot and finish comp finalization.
+		retryCtx := clog.NewContext(context.Background())
+		if _, err := svc.Complete(retryCtx, "ses-7"); err != nil {
+			t.Fatalf("retry Complete failed: %v", err)
+		}
+		if async, ok := findBoolAttr(clog.BagFromContext(retryCtx).Attrs(), "finalizationAsync"); !ok || !async {
+			t.Fatalf("expected finalizationAsync=true on retry after in-flight release, got %v (found=%v)", async, ok)
+		}
+		waitFinalizeDone(t, finalizeDone)
+
+		if d2Svc.calls.Load() != 2 {
+			t.Fatalf("expected 2 total comp rank calls across initial + retry, got %d", d2Svc.calls.Load())
+		}
+		store.mu.Lock()
+		persisted := cloneSession(store.docs["ses-7"])
+		store.mu.Unlock()
+		if persisted.CompTracking == nil || persisted.CompTracking.End == nil || persisted.CompTracking.End.Points != 5200 {
+			t.Fatalf("expected CompTracking.End=5200 after retry, got %+v", persisted.CompTracking)
+		}
+	})
+
+	t.Run("comp-only finalization uses comp timeout for membership lookup", func(t *testing.T) {
+		store := newMemorySessionStore()
+		completedAt := t0.Add(-1 * time.Minute)
+		store.docs["ses-8"] = &api.Session{
+			ID:          "ses-8",
+			UserID:      "user-1",
+			CharacterID: "char-1",
+			StartedAt:   t0.Add(-10 * time.Minute),
+			CompletedAt: &completedAt,
+			Status:      new(api.SessionComplete),
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 5000},
+			},
+		}
+
+		var (
+			mu          sync.Mutex
+			hasDeadline bool
+			remaining   time.Duration
+		)
+		uSvc := &fakeSessionUserService{
+			getPrimaryMembershipFn: func(ctx context.Context, _ string) (int64, int64, error) {
+				dl, ok := ctx.Deadline()
+				mu.Lock()
+				hasDeadline = ok
+				if ok {
+					remaining = time.Until(dl)
+				}
+				mu.Unlock()
+				return 12345, 3, nil
+			},
+		}
+		d2Svc := &fakeSessionD2Service{
+			snapshots: []*api.CompRankSnapshot{{Points: 5100}},
+		}
+		finalizeDone := make(chan context.Context, 1)
+		svc := &service{
+			store:               store,
+			userService:         uSvc,
+			d2Service:           d2Svc,
+			nowFn:               func() time.Time { return t0 },
+			finalCheckInTimeout: 10 * time.Millisecond,
+			finalCompTimeout:    250 * time.Millisecond,
+			onFinalizeDone: func(bgCtx context.Context, _ error) {
+				finalizeDone <- bgCtx
+			},
+		}
+
+		if _, err := svc.Complete(clog.NewContext(context.Background()), "ses-8"); err != nil {
+			t.Fatalf("Complete failed: %v", err)
+		}
+		waitFinalizeDone(t, finalizeDone)
+
+		mu.Lock()
+		gotDeadline := hasDeadline
+		gotRemaining := remaining
+		mu.Unlock()
+		if !gotDeadline {
+			t.Fatal("expected membership lookup context to have a deadline")
+		}
+		if gotRemaining <= 50*time.Millisecond {
+			t.Fatalf("expected comp-only membership lookup to use finalCompTimeout (~250ms), got remaining=%v", gotRemaining)
 		}
 	})
 }

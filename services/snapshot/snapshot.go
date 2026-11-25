@@ -608,16 +608,19 @@ func (s *service) EnrichInstancePerformance(snapshot *api.CharacterSnapshot, per
 	return result, nil
 }
 
-func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, characterID string) (*api.CharacterSnapshot, error) {
+func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, characterID string, membershipType int64) (*api.CharacterSnapshot, error) {
 	clog.WithGroupFields(ctx, "snapshotService.generateSnapshot", clog.Fields{
 		"userId":       userID,
 		"membershipId": membershipID,
 		"characterId":  characterID,
 	})
 
-	membershipType, err := s.UserService.GetMembershipType(ctx, userID, membershipID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch membership type: %w", err)
+	if membershipType == 0 {
+		var err error
+		membershipType, err = s.UserService.GetMembershipType(ctx, userID, membershipID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch membership type: %w", err)
+		}
 	}
 
 	memID, err := strconv.ParseInt(membershipID, 10, 64)
@@ -654,7 +657,7 @@ func (s *service) Save(ctx context.Context, userID, membershipID, characterID st
 		"membershipId": membershipID,
 		"characterId":  characterID,
 	})
-	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID)
+	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build data: %w", err)
 	}
@@ -693,7 +696,7 @@ func (s *service) SaveSessionCheckIn(ctx context.Context, userID, membershipID, 
 		"membershipId": membershipID,
 		"characterId":  characterID,
 	})
-	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID)
+	data, err := s.generateSnapshot(ctx, userID, membershipID, characterID, opts.MembershipType)
 	if err != nil {
 		return SessionCheckInResult{}, fmt.Errorf("failed to build data: %w", err)
 	}

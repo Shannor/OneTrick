@@ -2484,9 +2484,13 @@ func TestCompleteSessionHandler(t *testing.T) {
 			},
 		}
 		server := Server{SessionService: sesMock}
+		ctx := clog.NewContext(context.Background())
 
-		resp, err := server.CompleteSession(clog.NewContext(context.Background()), api.CompleteSessionRequestObject{
+		resp, err := server.CompleteSession(ctx, api.CompleteSessionRequestObject{
 			SessionId: "ses-73",
+			Params: api.CompleteSessionParams{
+				XUserID: "user-1",
+			},
 			Body: &api.CompleteSessionJSONRequestBody{
 				CharacterID: "char-1",
 				CompletedAt: new(completedAt.Format(time.RFC3339)),
@@ -2507,6 +2511,9 @@ func TestCompleteSessionHandler(t *testing.T) {
 		}
 		if okResp.ID != "ses-73" || okResp.Status == nil || *okResp.Status != api.SessionComplete || okResp.CompletedAt == nil {
 			t.Fatalf("unexpected CompleteSession response: %+v", okResp)
+		}
+		if !clog.BagFromContext(ctx).HasGroup("actor") {
+			t.Fatal("expected actor group enriched with userId on CompleteSession")
 		}
 	})
 
