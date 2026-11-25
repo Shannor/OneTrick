@@ -255,6 +255,7 @@ func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *TickCandidat
 		return fmt.Errorf("snapshot service not configured for session %s", cand.Session.ID)
 	}
 	res, err := r.svc.snapshotService.SaveSessionCheckIn(ctx, cand.Session.UserID, membership.id, cand.Session.CharacterID, snapshot.SessionCheckInOptions{
+		MembershipType:         membership.membershipType,
 		LastSnapshotID:         cand.LastSnapshotID,
 		LastSnapshotHash:       cand.LastSnapshotHash,
 		LastSnapshotRecordedAt: cand.LastSnapshotRecordedAt,

@@ -556,12 +556,16 @@ func (s Server) StartSession(ctx context.Context, request api.StartSessionReques
 }
 
 func (s Server) CompleteSession(ctx context.Context, request api.CompleteSessionRequestObject) (api.CompleteSessionResponseObject, error) {
+	if request.Params.XUserID != "" {
+		clog.WithGroupField(ctx, "actor", "userId", request.Params.XUserID)
+	}
 	clog.WithGroupField(ctx, "request", "sessionId", request.SessionId)
-	if request.Body.CompletedAt != nil {
-		err := s.SessionService.Complete(ctx, request.SessionId)
+	if request.Body != nil && request.Body.CompletedAt != nil {
+		ses, err := s.SessionService.Complete(ctx, request.SessionId)
 		if err != nil {
 			return nil, err
 		}
+		return api.CompleteSession200JSONResponse(*ses), nil
 	}
 
 	ses, err := s.SessionService.Get(ctx, request.SessionId)

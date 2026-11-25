@@ -27,6 +27,7 @@ type MetaData struct {
 }
 
 type SessionCheckInOptions struct {
+	MembershipType         int64
 	LastSnapshotID         string
 	LastSnapshotHash       string
 	LastSnapshotRecordedAt time.Time

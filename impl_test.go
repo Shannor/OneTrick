@@ -2430,3 +2430,135 @@ func TestStartSessionAndStartUserSessionFireteamGuard(t *testing.T) {
 	})
 }
 
+type mockSessionCompleteService struct {
+	session.Service
+	completeCalls atomic.Int32
+	getCalls      atomic.Int32
+	completeSes   *api.Session
+	completeErr   error
+	getSes        *api.Session
+	getErr        error
+}
+
+func (m *mockSessionCompleteService) Complete(_ context.Context, id string) (*api.Session, error) {
+	m.completeCalls.Add(1)
+	if m.completeErr != nil {
+		return nil, m.completeErr
+	}
+	if m.completeSes != nil {
+		return m.completeSes, nil
+	}
+	now := time.Now().UTC()
+	return &api.Session{
+		ID:          id,
+		CompletedAt: &now,
+		Status:      new(api.SessionComplete),
+	}, nil
+}
+
+func (m *mockSessionCompleteService) Get(_ context.Context, id string) (*api.Session, error) {
+	m.getCalls.Add(1)
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	if m.getSes != nil {
+		return m.getSes, nil
+	}
+	return &api.Session{
+		ID:     id,
+		Status: new(api.SessionPending),
+	}, nil
+}
+
+func TestCompleteSessionHandler(t *testing.T) {
+	t.Run("returns completed session directly without calling Get when completedAt is provided", func(t *testing.T) {
+		completedAt := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+		sesMock := &mockSessionCompleteService{
+			completeSes: &api.Session{
+				ID:           "ses-73",
+				UserID:       "user-1",
+				CharacterID:  "char-1",
+				CompletedAt:  &completedAt,
+				Status:       new(api.SessionComplete),
+				AggregateIDs: []string{},
+			},
+		}
+		server := Server{SessionService: sesMock}
+		ctx := clog.NewContext(context.Background())
+
+		resp, err := server.CompleteSession(ctx, api.CompleteSessionRequestObject{
+			SessionId: "ses-73",
+			Params: api.CompleteSessionParams{
+				XUserID: "user-1",
+			},
+			Body: &api.CompleteSessionJSONRequestBody{
+				CharacterID: "char-1",
+				CompletedAt: new(completedAt.Format(time.RFC3339)),
+			},
+		})
+		if err != nil {
+			t.Fatalf("CompleteSession returned unexpected error: %v", err)
+		}
+		okResp, ok := resp.(api.CompleteSession200JSONResponse)
+		if !ok {
+			t.Fatalf("expected CompleteSession200JSONResponse, got %T", resp)
+		}
+		if sesMock.completeCalls.Load() != 1 {
+			t.Fatalf("expected 1 Complete call, got %d", sesMock.completeCalls.Load())
+		}
+		if sesMock.getCalls.Load() != 0 {
+			t.Fatalf("expected 0 redundant Get calls when completedAt is set, got %d", sesMock.getCalls.Load())
+		}
+		if okResp.ID != "ses-73" || okResp.Status == nil || *okResp.Status != api.SessionComplete || okResp.CompletedAt == nil {
+			t.Fatalf("unexpected CompleteSession response: %+v", okResp)
+		}
+		if !clog.BagFromContext(ctx).HasGroup("actor") {
+			t.Fatal("expected actor group enriched with userId on CompleteSession")
+		}
+	})
+
+	t.Run("falls back to Get without calling Complete when completedAt is nil", func(t *testing.T) {
+		sesMock := &mockSessionCompleteService{}
+		server := Server{SessionService: sesMock}
+
+		resp, err := server.CompleteSession(clog.NewContext(context.Background()), api.CompleteSessionRequestObject{
+			SessionId: "ses-73",
+			Body: &api.CompleteSessionJSONRequestBody{
+				CharacterID: "char-1",
+			},
+		})
+		if err != nil {
+			t.Fatalf("CompleteSession returned unexpected error: %v", err)
+		}
+		if _, ok := resp.(api.CompleteSession200JSONResponse); !ok {
+			t.Fatalf("expected CompleteSession200JSONResponse, got %T", resp)
+		}
+		if sesMock.completeCalls.Load() != 0 {
+			t.Fatalf("expected 0 Complete calls when completedAt is nil, got %d", sesMock.completeCalls.Load())
+		}
+		if sesMock.getCalls.Load() != 1 {
+			t.Fatalf("expected 1 Get call when completedAt is nil, got %d", sesMock.getCalls.Load())
+		}
+	})
+
+	t.Run("propagates Complete error without calling Get", func(t *testing.T) {
+		sesMock := &mockSessionCompleteService{
+			completeErr: errors.New("firestore unavailable"),
+		}
+		server := Server{SessionService: sesMock}
+
+		_, err := server.CompleteSession(clog.NewContext(context.Background()), api.CompleteSessionRequestObject{
+			SessionId: "ses-73",
+			Body: &api.CompleteSessionJSONRequestBody{
+				CharacterID: "char-1",
+				CompletedAt: new("2026-11-24T12:00:00Z"),
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error from CompleteSession when Complete fails")
+		}
+		if sesMock.getCalls.Load() != 0 {
+			t.Fatalf("expected 0 Get calls when Complete fails, got %d", sesMock.getCalls.Load())
+		}
+	})
+}
