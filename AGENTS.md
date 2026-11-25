@@ -79,6 +79,11 @@ This server powers the One Trick Destiny 2 Application
   - Use `clog.Go` for detached background goroutines and `clog.LoopRollup` for batch loops.
   - All `clog.Fields` keys must be `camelCase` with the `Id` suffix (e.g., `"userId"`, `"sessionId"`, `"snapshotId"`, `"characterId"`). Never log PII.
 
+## GitHub Issues & Project Tracking
+
+- Both `Shannor/OneTrick` and `Shannor/OneTrickUI` track work on the shared **One Trick** GitHub Project (`https://github.com/users/Shannor/projects/1`).
+- Whenever creating a GitHub issue via `gh issue create`, always attach it to the project with `--project "One Trick"` (e.g., `gh issue create --repo Shannor/OneTrick --project "One Trick" ...`) and set its initial `Status` to `Backlog` (or `Ready` when actionable) if not handled by the project's Auto-add workflow.
+
 ## Notable Libraries
 
 - Firebase
