@@ -14,6 +14,15 @@ var quickplayModesAndActivities = []string{
 	"Clash 3v3: Matchmade",
 }
 
+// NormalizeModeName overrides Bungie's misclassified mode label for special playlists
+// (e.g., Iron Banner: Tribute reported as Supremacy).
+func NormalizeModeName(mode, activity string) string {
+	if strings.Contains(strings.ToLower(activity), "tribute") {
+		return "Iron Banner Tribute"
+	}
+	return mode
+}
+
 // EstimateName classifies an activity into a canonical game mode string using the priority order:
 // ironBanner -> trials -> competitive -> quickplay, returning "" if unclassifiable.
 func EstimateName(mode, activity string) string {

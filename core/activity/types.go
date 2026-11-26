@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"oneTrick/core/gamemode"
 	"oneTrick/set"
 	"strconv"
 	"strings"
@@ -439,17 +440,16 @@ func (m ItemManifest) ToWeaponDisplay() WeaponDisplay {
 	}
 }
 
-func (w WeaponMetrics) WithManifest(def ItemManifest) WeaponMetrics {
+func (w *WeaponMetrics) ApplyManifest(def ItemManifest) {
 	w.HasDisplay = true
 	w.Display = def.ToWeaponDisplay()
 	w.BucketHash = def.BucketHash
 	w.ItemTypeDisplayName = def.ItemTypeDisplayName
-	return w
 }
 
-func (w WeaponMetrics) WithStoredProperties(stored WeaponMetrics) WeaponMetrics {
+func (w *WeaponMetrics) MergeStoredProperties(stored WeaponMetrics) {
 	if stored.Properties == nil {
-		return w
+		return
 	}
 	w.Properties = stored.Properties
 	if w.BucketHash == 0 && stored.Properties.BaseInfo.BucketHash != 0 {
@@ -458,7 +458,29 @@ func (w WeaponMetrics) WithStoredProperties(stored WeaponMetrics) WeaponMetrics 
 	if w.ItemTypeDisplayName == "" && stored.Properties.BaseInfo.ItemTypeDisplayName != "" {
 		w.ItemTypeDisplayName = stored.Properties.BaseInfo.ItemTypeDisplayName
 	}
-	return w
+}
+
+func (info *ActivityInfo) ApplyManifest(refDef, dirDef ActivityManifest) {
+	info.Location = refDef.Name
+	info.Description = refDef.Description
+	info.ImageURL = refDef.PgcrImageURL
+	info.Activity = dirDef.Name
+	if info.Activity == "" {
+		info.Activity = refDef.Name
+	}
+	info.Mode = gamemode.NormalizeModeName(info.Mode, dirDef.Name)
+	info.EstimatedGameMode = gamemode.EstimateName(info.Mode, info.Activity)
+}
+
+func (d CarnageActivityDetails) ManifestActivityHashes() []int64 {
+	hashes := set.NewOrdered[int64]()
+	if d.ReferenceID != 0 {
+		hashes.Add(d.ReferenceID)
+	}
+	if d.DirectorActivityHash != 0 {
+		hashes.Add(d.DirectorActivityHash)
+	}
+	return hashes.ToSlice()
 }
 
 func (r CarnageReport) HasTeams() bool {
@@ -542,11 +564,11 @@ func (e CarnageEntry) BuildPerformance(itemDefs map[int64]ItemManifest, storedPe
 			Stats:       w.Stats,
 		}
 		if def, ok := itemDefs[w.ReferenceID]; ok {
-			wm = wm.WithManifest(def)
+			wm.ApplyManifest(def)
 		}
 		if storedPerf != nil {
 			if storedWeapon, ok := storedPerf.Weapons[key]; ok {
-				wm = wm.WithStoredProperties(storedWeapon)
+				wm.MergeStoredProperties(storedWeapon)
 			}
 		}
 		weapons[key] = wm

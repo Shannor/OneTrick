@@ -161,17 +161,9 @@ func (s *service) resolveActivityInfo(
 		return info
 	}
 
-	hashSet := set.NewOrdered[int64]()
-	if details.ReferenceID != 0 {
-		hashSet.Add(details.ReferenceID)
-	}
-	if details.DirectorActivityHash != 0 {
-		hashSet.Add(details.DirectorActivityHash)
-	}
-
 	var refDef, dirDef ActivityManifest
-	if hashSet.Size() > 0 {
-		defs, err := s.manifest.GetActivitiesByIDs(ctx, hashSet.ToSlice())
+	if hashes := details.ManifestActivityHashes(); len(hashes) > 0 {
+		defs, err := s.manifest.GetActivitiesByIDs(ctx, hashes)
 		if err != nil {
 			clog.WithGroupFields(ctx, "activityService.getActivity", clog.Fields{
 				"manifestActivityWarning": err.Error(),
@@ -182,18 +174,7 @@ func (s *service) resolveActivityInfo(
 		}
 	}
 
-	info.Location = refDef.Name
-	info.Description = refDef.Description
-	info.ImageURL = refDef.PgcrImageURL
-	info.Activity = dirDef.Name
-	if info.Activity == "" {
-		info.Activity = refDef.Name
-	}
-
-	if dirDef.Name == "Iron Banner: Tribute" || strings.Contains(strings.ToLower(dirDef.Name), "tribute") {
-		info.Mode = "Iron Banner Tribute"
-	}
-	info.EstimatedGameMode = gamemode.EstimateName(info.Mode, info.Activity)
+	info.ApplyManifest(refDef, dirDef)
 
 	modeHash := dirDef.DirectActivityModeHash
 	if modeHash == 0 {
