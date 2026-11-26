@@ -979,10 +979,6 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 	if request.Params.IncludeStats != nil {
 		includeStats = *request.Params.IncludeStats
 	}
-	hasSimilar := false
-	if request.Params.HasSimilar != nil {
-		hasSimilar = *request.Params.HasSimilar
-	}
 	sortBy := "created_at"
 	if request.Params.SortBy != nil {
 		sortBy = string(*request.Params.SortBy)
@@ -995,7 +991,6 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		"offset":       offset,
 		"minimumGames": minimumGames,
 		"includeStats": includeStats,
-		"hasSimilar":   hasSimilar,
 		"sortBy":       sortBy,
 	})
 	if request.Params.GameMode != nil {
@@ -1010,7 +1005,6 @@ func (s Server) GetSnapshots(ctx context.Context, request api.GetSnapshotsReques
 		minimumGames,
 		sortBy,
 		includeStats,
-		hasSimilar,
 		count,
 		offset,
 	)

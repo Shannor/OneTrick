@@ -25,7 +25,7 @@ type Service interface {
 	GetAggregatesForSnapshot(ctx context.Context, snapshotID string, gameMode *api.GameMode) ([]api.Aggregate, error)
 
 	GetBestPerformingLoadouts(ctx context.Context, characterID string, gameMode *api.GameMode, limit int, minimumGames int) ([]api.CharacterSnapshot, map[string]api.PlayerStats, map[string]int, error)
-	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameMode *api.GameMode, minimumGames int, sortBy string, includeStats bool, hasSimilar bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error)
+	GetSnapshotsWithMetrics(ctx context.Context, userID string, characterID string, gameMode *api.GameMode, minimumGames int, sortBy string, includeStats bool, count int, offset int) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error)
 	GetSimilarSnapshots(ctx context.Context, params SimilarSnapshotsParams) (*api.CharacterSnapshot, []api.SimilarSnapshotItem, map[string]api.PlayerStats, map[string]int, error)
 
 	GetFeaturedLoadouts(ctx context.Context, count int, gameMode *api.GameMode) ([]api.FeaturedLoadout, error)
@@ -146,41 +146,17 @@ func normalizeGameModeFilter(gameMode *api.GameMode) string {
 }
 
 func filterSnapshotsByGameModeAndMinGames(allSnapshots []api.CharacterSnapshot, counts map[string]int, gameMode *api.GameMode, minimumGames int) []api.CharacterSnapshot {
-	return filterSnapshotsForList(allSnapshots, counts, nil, nil, gameMode, minimumGames, false)
-}
-
-func filterSnapshotsForList(
-	allSnapshots []api.CharacterSnapshot,
-	counts map[string]int,
-	similarCounts map[string]int,
-	peerGroups map[string][]string,
-	gameMode *api.GameMode,
-	minimumGames int,
-	hasSimilar bool,
-) []api.CharacterSnapshot {
 	gameModeActive := hasGameModeFilter(gameMode)
 	filtered := make([]api.CharacterSnapshot, 0, len(allSnapshots))
 	for _, snap := range allSnapshots {
 		if snapshot.IsArchived(&snap) {
 			continue
 		}
-		if hasSimilar && similarCounts[snap.ID] == 0 {
+		matchCount := counts[snap.ID]
+		if gameModeActive && matchCount == 0 {
 			continue
 		}
-		effectiveCount := counts[snap.ID]
-		if hasSimilar {
-			groupTotal := 0
-			for _, peerID := range peerGroups[snap.ID] {
-				groupTotal += counts[peerID]
-			}
-			if groupTotal > effectiveCount {
-				effectiveCount = groupTotal
-			}
-		}
-		if gameModeActive && effectiveCount == 0 {
-			continue
-		}
-		if minimumGames > 0 && effectiveCount < minimumGames {
+		if minimumGames > 0 && matchCount < minimumGames {
 			continue
 		}
 		filtered = append(filtered, snap)
@@ -240,7 +216,6 @@ func (s *service) GetSnapshotsWithMetrics(
 	minimumGames int,
 	sortBy string,
 	includeStats bool,
-	hasSimilar bool,
 	count int,
 	offset int,
 ) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error) {
@@ -257,10 +232,9 @@ func (s *service) GetSnapshotsWithMetrics(
 		"minimumGames": minimumGames,
 		"sortBy":       sortBy,
 		"includeStats": includeStats,
-		"hasSimilar":   hasSimilar,
 		"count":        count,
 		"offset":       offset,
-		"fastPath":     !needsAggs && !hasSimilar && sortBy == "created_at",
+		"fastPath":     !needsAggs && sortBy == "created_at",
 	})
 	if gameMode != nil {
 		clog.WithGroupField(ctx, "statsService.getSnapshotsWithMetrics", "gameMode", string(*gameMode))
@@ -273,11 +247,8 @@ func (s *service) GetSnapshotsWithMetrics(
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
-		allSimilarCounts, peerGroups := ComputeSimilarCounts(allSnapshots)
-		filtered := allSnapshots
-		if hasSimilar {
-			filtered = filterSnapshotsForList(allSnapshots, nil, allSimilarCounts, peerGroups, nil, 0, true)
-		}
+		allSimilarCounts := ComputeSimilarCounts(allSnapshots)
+		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, nil, nil, 0)
 		paged := paginateSnapshots(filtered, count, offset)
 		clog.WithGroupField(ctx, "statsService.getSnapshotsWithMetrics", "returnedCount", len(paged))
 		return paged, nil, nil, buildPageSimilarCounts(paged, allSimilarCounts), nil
@@ -290,7 +261,6 @@ func (s *service) GetSnapshotsWithMetrics(
 	var (
 		allSnapshots     []api.CharacterSnapshot
 		allSimilarCounts map[string]int
-		peerGroups       map[string][]string
 		matchStats       []CharacterMatchStat
 		stats            map[string]aggStatSummary
 		counts           map[string]int
@@ -303,7 +273,7 @@ func (s *service) GetSnapshotsWithMetrics(
 			return err
 		}
 		allSnapshots = snaps
-		allSimilarCounts, peerGroups = ComputeSimilarCounts(snaps)
+		allSimilarCounts = ComputeSimilarCounts(snaps)
 		return nil
 	})
 	g.Go(func() error {
@@ -319,7 +289,7 @@ func (s *service) GetSnapshotsWithMetrics(
 		return nil, nil, nil, nil, err
 	}
 
-	filteredSnapshots := filterSnapshotsForList(allSnapshots, counts, allSimilarCounts, peerGroups, gameMode, minimumGames, hasSimilar)
+	filteredSnapshots := filterSnapshotsByGameModeAndMinGames(allSnapshots, counts, gameMode, minimumGames)
 	passedFilterCount := len(filteredSnapshots)
 
 	// Sort snapshots based on sortBy

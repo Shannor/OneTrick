@@ -225,11 +225,11 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 	snapSvc := snapshot.NewService(db, nil, nil, aggSvc)
 	statsSvc := stats.NewService(db, firestoredriven.NewStatsStore(db), snapSvc, nil, manifestMock)
 
-	// 1. Critical Regression Test: minimumGames = 5, hasSimilar = false
+	// 1. Critical Regression Test: minimumGames = 5
 	// Loadout B (1 game) and C (2 games) are filtered out by minimumGames=5, yet Loadout A MUST still report similarCounts[A] == 2!
-	items, _, counts, simCounts, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 5, "matches_played", true, false, 10, 0)
+	items, _, counts, simCounts, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 5, "matches_played", true, 10, 0)
 	if err != nil {
-		t.Fatalf("GetSnapshotsWithMetrics(minGames=5, hasSimilar=false) failed: %v", err)
+		t.Fatalf("GetSnapshotsWithMetrics(minGames=5) failed: %v", err)
 	}
 	if len(items) != 2 || items[0].ID != snapA || items[1].ID != snapU {
 		t.Fatalf("expected [snapA, snapU] under minGames=5, got %+v", items)
@@ -244,34 +244,34 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 		t.Fatalf("expected snapU omitted from similarCounts, got %+v", simCounts)
 	}
 
-	// 2. hasSimilar = true with minimumGames = 5 surfaces twin 3-game loadouts D & E (combined 6 >= 5) and excludes U & archived Z!
-	simFiltered, _, _, simCountsFiltered, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 5, "created_at", true, true, 10, 0)
+	// 2. gameMode = trials filters out peers with 0 Trials matches (snapB, snapD, snapE, snapU)
+	//    while preserving pre-filter similarCounts == 2 for surviving snapA and snapC.
+	trialsMode := api.GameModeTrials
+	trialsItems, _, trialsCountsMap, trialsSimilarCounts, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, &trialsMode, 0, "created_at", true, 10, 0)
 	if err != nil {
-		t.Fatalf("GetSnapshotsWithMetrics(minGames=5, hasSimilar=true) failed: %v", err)
+		t.Fatalf("GetSnapshotsWithMetrics(gameMode=trials) failed: %v", err)
 	}
-	gotIDs := make([]string, 0, len(simFiltered))
-	for _, it := range simFiltered {
-		gotIDs = append(gotIDs, it.ID)
+	gotTrialsIDs := make([]string, 0, len(trialsItems))
+	for _, it := range trialsItems {
+		gotTrialsIDs = append(gotTrialsIDs, it.ID)
 	}
-	for _, wantID := range []string{snapA, snapB, snapC, snapD, snapE} {
-		if !slices.Contains(gotIDs, wantID) {
-			t.Fatalf("expected %s surfaced under hasSimilar=true & minGames=5, got %v", wantID, gotIDs)
-		}
+	if !slices.Equal(gotTrialsIDs, []string{snapA, snapC}) {
+		t.Fatalf("expected [snapA, snapC] under gameMode=trials, got %v", gotTrialsIDs)
 	}
-	if slices.Contains(gotIDs, snapU) || slices.Contains(gotIDs, snapZ) {
-		t.Fatalf("expected unique U and archived Z excluded under hasSimilar=true, got %v", gotIDs)
+	if trialsCountsMap == nil || (*trialsCountsMap)[snapA] != 5 || (*trialsCountsMap)[snapC] != 2 {
+		t.Fatalf("expected Trials counts {A:5, C:2}, got %+v", trialsCountsMap)
 	}
-	if (*simCountsFiltered)[snapD] != 1 || (*simCountsFiltered)[snapE] != 1 {
-		t.Fatalf("expected similarCounts=1 for twin loadouts D & E, got %+v", simCountsFiltered)
+	if trialsSimilarCounts == nil || (*trialsSimilarCounts)[snapA] != 2 || (*trialsSimilarCounts)[snapC] != 2 {
+		t.Fatalf("expected pre-filter similarCounts {A:2, C:2}, got %+v", trialsSimilarCounts)
 	}
 
-	// 3. Fast-path (minimumGames=0, sortBy="created_at", includeStats=false) still computes similarCounts and honors hasSimilar=true!
-	fastItems, _, _, fastSimCounts, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 0, "created_at", false, true, 10, 0)
+	// 3. Fast-path (minimumGames=0, sortBy="created_at", includeStats=false) still computes similarCounts and excludes archived Z!
+	fastItems, _, _, fastSimCounts, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 0, "created_at", false, 10, 0)
 	if err != nil {
-		t.Fatalf("fast-path GetSnapshotsWithMetrics(hasSimilar=true) failed: %v", err)
+		t.Fatalf("fast-path GetSnapshotsWithMetrics failed: %v", err)
 	}
-	if len(fastItems) != 5 || (*fastSimCounts)[snapA] != 2 {
-		t.Fatalf("unexpected fast-path hasSimilar response: len=%d simCounts=%+v", len(fastItems), fastSimCounts)
+	if len(fastItems) != 6 || (*fastSimCounts)[snapA] != 2 || (*fastSimCounts)[snapD] != 1 || (*fastSimCounts)[snapE] != 1 {
+		t.Fatalf("unexpected fast-path response: len=%d simCounts=%+v", len(fastItems), fastSimCounts)
 	}
 
 	// 4. GetSimilarSnapshots(snapA):

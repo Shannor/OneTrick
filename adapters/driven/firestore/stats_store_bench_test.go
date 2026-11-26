@@ -340,7 +340,7 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			_, _ = stats.ComputeSimilarCounts(allSnaps)
+			_ = stats.ComputeSimilarCounts(allSnaps)
 			aggs, err := legacyGetAggregatesByCharacterID(ctx, db, charID)
 			if err != nil {
 				b.Fatal(err)
@@ -353,7 +353,7 @@ func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			items, _, _, _, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 5, "kd_ratio", true, false, 10, 0)
+			items, _, _, _, err := statsSvc.GetSnapshotsWithMetrics(ctx, userID, charID, nil, 5, "kd_ratio", true, 10, 0)
 			if err != nil || len(items) == 0 {
 				b.Fatalf("expected non-empty items, got %d err=%v", len(items), err)
 			}

@@ -140,6 +140,23 @@ func TestFilterSnapshotsByGameModeAndMinGames(t *testing.T) {
 			t.Errorf("expected all 3 snapshots, got %+v", filtered)
 		}
 	})
+
+	t.Run("archived snapshots are always excluded", func(t *testing.T) {
+		withArchived := append(slices.Clone(allSnapshots), api.CharacterSnapshot{
+			ID:           "snap-archived",
+			MergedIntoID: new("snap-six"),
+		})
+		countsWithArchived := map[string]int{
+			"snap-zero":     0,
+			"snap-three":    3,
+			"snap-six":      6,
+			"snap-archived": 20,
+		}
+		filtered := filterSnapshotsByGameModeAndMinGames(withArchived, countsWithArchived, nil, 0)
+		if len(filtered) != 3 {
+			t.Errorf("expected archived snapshot excluded, got %+v", filtered)
+		}
+	})
 }
 
 type mockManifestService struct {
@@ -597,7 +614,7 @@ func TestComputeSimilarCountsSkipsArchivedAndIncomplete(t *testing.T) {
 		{ID: "empty-kin-2", Loadout: makeBaseTestLoadout("", "en-1", 3003, "pow-1", 4001)},
 	}
 
-	simCounts, groups := ComputeSimilarCounts(snaps)
+	simCounts := ComputeSimilarCounts(snaps)
 	if simCounts["a"] != 1 || simCounts["b"] != 1 {
 		t.Fatalf("expected simCounts[a]=1 and simCounts[b]=1 (excluding archived), got %+v", simCounts)
 	}
@@ -606,9 +623,6 @@ func TestComputeSimilarCountsSkipsArchivedAndIncomplete(t *testing.T) {
 	}
 	if _, ok := simCounts["empty-kin"]; ok {
 		t.Fatalf("expected incomplete empty-instanceId loadouts not to match ''=='', got %+v", simCounts)
-	}
-	if len(groups["a"]) != 2 {
-		t.Fatalf("expected peerGroup size 2 for 'a', got %+v", groups["a"])
 	}
 }
 
@@ -852,7 +866,7 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 		}
 
 		svc := NewService(nil, store, snaps, nil, nil)
-		items, statsMap, countsMap, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "kd_ratio", true, false, 10, 0)
+		items, statsMap, countsMap, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "kd_ratio", true, 10, 0)
 		if err != nil {
 			t.Fatalf("GetSnapshotsWithMetrics failed: %v", err)
 		}
@@ -864,20 +878,30 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 		}
 	})
 
-	t.Run("fast path skips statsStore when needsAggs is false and sortBy is created_at", func(t *testing.T) {
+	t.Run("fast path skips statsStore and excludes archived snapshots when needsAggs is false and sortBy is created_at", func(t *testing.T) {
 		store := &fakeStatsStore{}
-		snaps := &fakeSnapshotService{all: baseSnaps}
+		withArchived := append(slices.Clone(baseSnaps), api.CharacterSnapshot{
+			ID:           "snap-archived",
+			CharacterID:  "char-1",
+			CreatedAt:    now.Add(time.Minute),
+			MergedIntoID: new("snap-1"),
+			Loadout:      makeBaseTestLoadout("k1", "e1", 1, "p3", 10),
+		})
+		snaps := &fakeSnapshotService{all: withArchived}
 		svc := NewService(nil, store, snaps, nil, nil)
 
-		items, statsMap, countsMap, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "created_at", false, false, 10, 0)
+		items, statsMap, countsMap, simCounts, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "created_at", false, 10, 0)
 		if err != nil {
 			t.Fatalf("fast-path GetSnapshotsWithMetrics failed: %v", err)
 		}
 		if store.calls.Load() != 0 {
 			t.Fatalf("expected statsStore not to be called on fast path, got %d calls", store.calls.Load())
 		}
-		if len(items) != 2 || statsMap != nil || countsMap != nil {
-			t.Fatalf("unexpected fast-path response: items=%d stats=%v counts=%v", len(items), statsMap, countsMap)
+		if len(items) != 2 || items[0].ID != "snap-1" || items[1].ID != "snap-2" || statsMap != nil || countsMap != nil {
+			t.Fatalf("unexpected fast-path response: items=%+v stats=%v counts=%v", items, statsMap, countsMap)
+		}
+		if simCounts == nil || len(*simCounts) != 0 {
+			t.Fatalf("expected empty similarCounts when only archived peer matches, got %+v", simCounts)
 		}
 	})
 
@@ -892,9 +916,133 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 		store := &fakeStatsStore{err: wantErr}
 		svc := NewService(nil, store, snaps, nil, nil)
 
-		_, _, _, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "kd_ratio", true, false, 10, 0)
+		_, _, _, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "kd_ratio", true, 10, 0)
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("expected error %v, got %v", wantErr, err)
+		}
+	})
+}
+
+func TestGetSnapshotsWithMetricsPreservesPreFilterSimilarCounts(t *testing.T) {
+	now := time.Now().UTC()
+	mainSnap := api.CharacterSnapshot{
+		ID:          "snap-main",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		CreatedAt:   now.Add(-5 * time.Minute),
+		Loadout:     makeBaseTestLoadout("k1", "e1", 3003, "p1", 4001),
+	}
+	zeroOffshoot := api.CharacterSnapshot{
+		ID:          "snap-zero",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		CreatedAt:   now,
+		Loadout:     makeBaseTestLoadout("k1", "e1", 3003, "p2", 4002),
+	}
+	oneOffshoot := api.CharacterSnapshot{
+		ID:          "snap-one",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		CreatedAt:   now.Add(-1 * time.Minute),
+		Loadout:     makeBaseTestLoadout("k1", "e1", 3003, "p3", 4003),
+	}
+	twoOffshoot := api.CharacterSnapshot{
+		ID:          "snap-two",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		CreatedAt:   now.Add(-2 * time.Minute),
+		Loadout:     makeBaseTestLoadout("k1", "e1", 3003, "p4", 4004),
+	}
+	uniqueHigh := api.CharacterSnapshot{
+		ID:          "snap-unique",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		CreatedAt:   now.Add(-6 * time.Minute),
+		Loadout:     makeBaseTestLoadout("k3", "e3", 3003, "p1", 4001),
+	}
+
+	allSnaps := []api.CharacterSnapshot{zeroOffshoot, oneOffshoot, twoOffshoot, mainSnap, uniqueHigh}
+	snapsByID := make(map[string]*api.CharacterSnapshot, len(allSnaps))
+	for i := range allSnaps {
+		snapsByID[allSnaps[i].ID] = &allSnaps[i]
+	}
+
+	repeatMatches := func(snapID string, n int) []CharacterMatchStat {
+		out := make([]CharacterMatchStat, n)
+		for i := range n {
+			out[i] = CharacterMatchStat{SnapshotID: snapID, Kills: 10, Deaths: 5, Assists: 2, Won: true}
+		}
+		return out
+	}
+
+	t.Run("minimumGames=5 excludes low-game offshoots while preserving pre-filter similarCounts and merge candidates", func(t *testing.T) {
+		var matches []CharacterMatchStat
+		matches = append(matches, repeatMatches(mainSnap.ID, 6)...)
+		matches = append(matches, repeatMatches(oneOffshoot.ID, 1)...)
+		matches = append(matches, repeatMatches(twoOffshoot.ID, 2)...)
+		matches = append(matches, repeatMatches(uniqueHigh.ID, 8)...)
+
+		svc := NewService(nil, &fakeStatsStore{matches: matches}, &fakeSnapshotService{byID: snapsByID, all: allSnaps}, nil, nil)
+
+		items, _, countsMap, simCounts, err := svc.GetSnapshotsWithMetrics(
+			context.Background(), "user-1", "char-1", nil, 5, "created_at", true, 10, 0,
+		)
+		if err != nil {
+			t.Fatalf("GetSnapshotsWithMetrics failed: %v", err)
+		}
+		if len(items) != 2 || items[0].ID != mainSnap.ID || items[1].ID != uniqueHigh.ID {
+			t.Fatalf("expected [%s, %s], got %+v", mainSnap.ID, uniqueHigh.ID, items)
+		}
+		if countsMap == nil || (*countsMap)[mainSnap.ID] != 6 || (*countsMap)[uniqueHigh.ID] != 8 {
+			t.Fatalf("unexpected countsMap: %+v", countsMap)
+		}
+		if simCounts == nil || (*simCounts)[mainSnap.ID] != 3 {
+			t.Fatalf("expected pre-filter similarCounts[%s]=3, got %+v", mainSnap.ID, simCounts)
+		}
+		if _, exists := (*simCounts)[uniqueHigh.ID]; exists {
+			t.Fatalf("expected %s omitted from similarCounts, got %+v", uniqueHigh.ID, simCounts)
+		}
+
+		_, similarItems, _, _, err := svc.GetSimilarSnapshots(context.Background(), SimilarSnapshotsParams{
+			SnapshotID:   mainSnap.ID,
+			IncludeStats: true,
+			Tier:         SimilarTierAll,
+		})
+		if err != nil {
+			t.Fatalf("GetSimilarSnapshots failed: %v", err)
+		}
+		if len(similarItems) != 3 {
+			t.Fatalf("expected 3 mergeable offshoots surfaced by GetSimilarSnapshots, got %d", len(similarItems))
+		}
+	})
+
+	t.Run("gameMode excludes peers with 0 matches in that mode while preserving pre-filter similarCounts", func(t *testing.T) {
+		var trialsMatches []CharacterMatchStat
+		trialsMatches = append(trialsMatches, repeatMatches(mainSnap.ID, 5)...)
+		trialsMatches = append(trialsMatches, repeatMatches(twoOffshoot.ID, 2)...)
+		trialsMatches = append(trialsMatches, repeatMatches(uniqueHigh.ID, 4)...)
+
+		store := &fakeStatsStore{matches: trialsMatches}
+		svc := NewService(nil, store, &fakeSnapshotService{byID: snapsByID, all: allSnaps}, nil, nil)
+
+		mode := api.GameModeTrials
+		items, _, countsMap, simCounts, err := svc.GetSnapshotsWithMetrics(
+			context.Background(), "user-1", "char-1", &mode, 0, "created_at", true, 10, 0,
+		)
+		if err != nil {
+			t.Fatalf("GetSnapshotsWithMetrics(gameMode=trials) failed: %v", err)
+		}
+		if store.capturedGameMode != string(api.GameModeTrials) {
+			t.Fatalf("expected store gameMode=%q, got %q", api.GameModeTrials, store.capturedGameMode)
+		}
+		if len(items) != 3 || items[0].ID != twoOffshoot.ID || items[1].ID != mainSnap.ID || items[2].ID != uniqueHigh.ID {
+			t.Fatalf("expected [%s, %s, %s], got %+v", twoOffshoot.ID, mainSnap.ID, uniqueHigh.ID, items)
+		}
+		if countsMap == nil || (*countsMap)[mainSnap.ID] != 5 || (*countsMap)[twoOffshoot.ID] != 2 || (*countsMap)[uniqueHigh.ID] != 4 {
+			t.Fatalf("unexpected Trials countsMap: %+v", countsMap)
+		}
+		if simCounts == nil || (*simCounts)[mainSnap.ID] != 3 || (*simCounts)[twoOffshoot.ID] != 3 {
+			t.Fatalf("expected pre-filter similarCounts=3 for both surviving similar snapshots, got %+v", simCounts)
 		}
 	})
 }
