@@ -89,7 +89,8 @@ This server powers the One Trick Destiny 2 Application
 ### Branching, Commits & Automatic Stage Sync
 
 - **Branch naming**: Always include the YouTrack ticket ID in branches using `<type>/ot-<id>-<short-slug>` (or `<type>/ot-<id>`), where `<type>` is `feat`, `fix`, `refactor`, `perf`, `chore`, or `docs` (e.g., `feat/ot-12-fireteam-overview`, `fix/ot-16-mid-session-comp`).
-- **Commits & Pull Requests**: Include `OT-<id>` in commit subjects (e.g., `feat(session): ... (OT-12)`) and PR titles/descriptions so YouTrack's GitHub VCS integration attaches commits and PR status events to the ticket.
+- **Pull Request titles**: Prefix every PR title with `[OT-<id>]: ` so the ticket is immediately scannable and YouTrack attaches PR status events automatically (e.g., `[OT-54]: Add fireteam overview`).
+- **Commits**: Include `OT-<id>` in commit subjects (e.g., `feat(session): ... (OT-12)`) so YouTrack's GitHub VCS integration attaches commits to the ticket.
 - **Automated Kanban transitions** (via the `One Trick GitHub Stage Sync` workflow attached to project `OT`):
   - First pushed commit referencing `OT-<id>` moves `Backlog` / `Ready` -> **`In Progress`**.
   - Opening a PR referencing `OT-<id>` moves `Stage` -> **`In Review`** (unless already `Done`).

@@ -28,3 +28,24 @@ func TestEstimateName(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeModeName(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		activity string
+		want     string
+	}{
+		{name: "overrides Iron Banner Tribute", mode: "Supremacy", activity: "Iron Banner: Tribute", want: "Iron Banner Tribute"},
+		{name: "case insensitive tribute match", mode: "Control", activity: "Event tribute playlist", want: "Iron Banner Tribute"},
+		{name: "preserves non-tribute mode", mode: "Control", activity: "Javelin-4", want: "Control"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NormalizeModeName(tc.mode, tc.activity); got != tc.want {
+				t.Fatalf("NormalizeModeName(%q, %q) = %q, want %q", tc.mode, tc.activity, got, tc.want)
+			}
+		})
+	}
+}

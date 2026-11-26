@@ -104,6 +104,21 @@ func (f *fakeUserSearchStore) findUsersByMembershipIDs(_ context.Context, bungie
 	return f.crossRefUsers, nil
 }
 
+func (f *fakeUserSearchStore) findUsersByIDs(_ context.Context, userIDs []string) ([]User, error) {
+	f.lookupCalls++
+	f.capturedLookups = append([]string(nil), userIDs...)
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	results := make([]User, 0, len(userIDs))
+	for _, id := range userIDs {
+		if u, ok := f.usersByLookupID[id]; ok {
+			results = append(results, u)
+		}
+	}
+	return results, nil
+}
+
 func (f *fakeUserSearchStore) findUsersByPartyMembershipIDs(_ context.Context, membershipIDs []string) ([]User, error) {
 	f.partyLookupCalls++
 	f.capturedPartyMemIDs = append([]string(nil), membershipIDs...)
@@ -812,6 +827,60 @@ func TestFindByCharacterIDs(t *testing.T) {
 		}
 		if len(got) != 1 || got[0].ID != "u-1" {
 			t.Fatalf("unexpected users returned: %+v", got)
+		}
+	})
+}
+
+func TestUserServiceGetByIDs(t *testing.T) {
+	t.Run("short-circuits without querying store when input has no non-blank IDs", func(t *testing.T) {
+		store := &fakeUserSearchStore{}
+		svc := &userService{store: store}
+
+		got, err := svc.GetByIDs(context.Background(), []string{"", "   "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected empty slice, got %+v", got)
+		}
+		if store.lookupCalls != 0 {
+			t.Fatalf("expected 0 store calls for blank input, got %d", store.lookupCalls)
+		}
+	})
+
+	t.Run("deduplicates trimmed IDs and returns matched users", func(t *testing.T) {
+		store := &fakeUserSearchStore{
+			usersByLookupID: map[string]User{
+				"u-1": {ID: "u-1", DisplayName: "One"},
+				"u-2": {ID: "u-2", DisplayName: "Two"},
+			},
+		}
+		svc := &userService{store: store}
+
+		got, err := svc.GetByIDs(context.Background(), []string{" u-1 ", "", "u-2", "u-1", "u-missing"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if store.lookupCalls != 1 {
+			t.Fatalf("expected 1 batched store call, got %d", store.lookupCalls)
+		}
+		wantIDs := []string{"u-1", "u-2", "u-missing"}
+		if !reflect.DeepEqual(store.capturedLookups, wantIDs) {
+			t.Fatalf("expected deduplicated IDs %v, got %v", wantIDs, store.capturedLookups)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 matched users, got %d (%+v)", len(got), got)
+		}
+	})
+
+	t.Run("propagates store error", func(t *testing.T) {
+		wantErr := errors.New("firestore read failed")
+		store := &fakeUserSearchStore{lookupErr: wantErr}
+		svc := &userService{store: store}
+
+		_, err := svc.GetByIDs(context.Background(), []string{"u-1"})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected %v, got %v", wantErr, err)
 		}
 	})
 }

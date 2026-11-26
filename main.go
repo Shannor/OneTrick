@@ -4,12 +4,14 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	fireteamdriven "oneTrick/adapters/driven/fireteam"
+	activitydriven "oneTrick/adapters/driven/activity"
 	firestoredriven "oneTrick/adapters/driven/firestore"
+	fireteamdriven "oneTrick/adapters/driven/fireteam"
 	telemetrydriven "oneTrick/adapters/driven/telemetry"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
+	"oneTrick/core/activity"
 	"oneTrick/core/fireteam"
 	"oneTrick/core/telemetry"
 	"oneTrick/envvars"
@@ -84,6 +86,13 @@ func main() {
 		telemetrydriven.NewSnapshotReader(snapshotService),
 		firestoredriven.NewTelemetryMatchStore(firestore),
 	)
+	activityService := activity.NewService(
+		activitydriven.NewCarnageReportGateway(destinyService),
+		activitydriven.NewManifestLookup(manifestService),
+		activitydriven.NewAggregateReader(aggregateService),
+		activitydriven.NewSnapshotReader(snapshotService),
+		activitydriven.NewUserLookup(userService),
+	)
 	server := NewServer(
 		destinyService,
 		d2AuthAService,
@@ -95,6 +104,7 @@ func main() {
 		manifestService,
 		statsService,
 		telemetryService,
+		activityService,
 		env.InternalAPIKey,
 	)
 
