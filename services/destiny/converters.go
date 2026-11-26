@@ -482,6 +482,8 @@ func ToPlayerStats(values *map[string]bungie.HistoricalStatsValue) *api.PlayerSt
 			personalValues.Kda = (*api.StatsValuePair)(value.Basic)
 		case "standing":
 			personalValues.Standing = (*api.StatsValuePair)(value.Basic)
+		case "team":
+			personalValues.Team = (*api.StatsValuePair)(value.Basic)
 		case "fireteamId":
 			personalValues.FireTeamID = (*api.StatsValuePair)(value.Basic)
 		case "timePlayedSeconds":
