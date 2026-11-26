@@ -55,3 +55,9 @@ properties:
       $ref: ./SessionWeaponSummary.yaml
     x-oapi-codegen-extra-tags:
       firestore: topWeapons
+  companions:
+    type: array
+    items:
+      $ref: ./SessionCompanion.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: companions

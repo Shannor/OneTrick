@@ -127,6 +127,28 @@ func TestFireteamSessionConverters(t *testing.T) {
 				Status:       fireteam.SessionStatusPending,
 				StartedAt:    startedAt,
 				AggregateIDs: []string{"agg-1"},
+				Summary: &fireteam.SessionSummary{
+					TotalMatches: 1,
+					Wins:         1,
+					Companions: []fireteam.SessionCompanion{
+						{
+							UserID:        "u-1",
+							DisplayName:   "Leader",
+							SharedMatches: 1,
+							Wins:          1,
+							Losses:        0,
+							Sessions: []fireteam.CompanionInstance{
+								{
+									SessionID:     "ses-1",
+									CharacterID:   "c-1",
+									Class:         "Hunter",
+									EmblemURL:     "https://www.bungie.net/emblem.jpg",
+									SharedMatches: 1,
+								},
+							},
+						},
+					},
+				},
 			},
 		},
 	})
@@ -143,8 +165,16 @@ func TestFireteamSessionConverters(t *testing.T) {
 	if r0.Session.CompTracking == nil || !r0.Session.CompTracking.Enabled || r0.Session.CompTracking.Start == nil || r0.Session.CompTracking.Start.Points != 5800 {
 		t.Fatalf("unexpected compTracking: %+v", r0.Session.CompTracking)
 	}
-	if resp.Results[1].Outcome != api.FireteamSessionOutcomeSkippedActive || resp.Results[1].Session.ID != "ses-2" {
-		t.Fatalf("unexpected second result: %+v", resp.Results[1])
+	r1 := resp.Results[1]
+	if r1.Outcome != api.FireteamSessionOutcomeSkippedActive || r1.Session.ID != "ses-2" {
+		t.Fatalf("unexpected second result: %+v", r1)
+	}
+	if r1.Session.Summary == nil || r1.Session.Summary.Companions == nil || len(*r1.Session.Summary.Companions) != 1 {
+		t.Fatalf("expected converted summary companions, got %+v", r1.Session.Summary)
+	}
+	comp := (*r1.Session.Summary.Companions)[0]
+	if comp.UserID != "u-1" || comp.DisplayName != "Leader" || comp.SharedMatches != 1 || len(comp.Sessions) != 1 || comp.Sessions[0].Class == nil || *comp.Sessions[0].Class != "Hunter" {
+		t.Fatalf("unexpected companion conversion: %+v", comp)
 	}
 }
 

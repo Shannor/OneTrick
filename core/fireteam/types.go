@@ -155,6 +155,23 @@ type SessionWeaponSummary struct {
 	Kills int
 }
 
+type CompanionInstance struct {
+	SessionID     string
+	CharacterID   string
+	Class         string
+	EmblemURL     string
+	SharedMatches int
+}
+
+type SessionCompanion struct {
+	UserID        string
+	DisplayName   string
+	SharedMatches int
+	Wins          int
+	Losses        int
+	Sessions      []CompanionInstance
+}
+
 type SessionSummary struct {
 	TotalMatches int
 	Wins         int
@@ -167,6 +184,7 @@ type SessionSummary struct {
 	KDARatio     float64
 	ModesPlayed  []string
 	TopWeapons   []SessionWeaponSummary
+	Companions   []SessionCompanion
 }
 
 type SessionKey struct {

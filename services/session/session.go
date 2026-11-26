@@ -721,8 +721,10 @@ func (s service) Delete(ctx context.Context, sessionID string, userID string) er
 	}
 
 	// Remove session references from aggregates
+	var siblingSessionIDs []string
 	if s.aggregateService != nil {
-		if err := s.aggregateService.RemoveSession(ctx, sessionID); err != nil {
+		siblingSessionIDs, err = s.aggregateService.RemoveSession(ctx, sessionID)
+		if err != nil {
 			return fmt.Errorf("failed to clean up session aggregates: %w", err)
 		}
 	}
@@ -732,8 +734,53 @@ func (s service) Delete(ctx context.Context, sessionID string, userID string) er
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
-	clog.WithGroupField(ctx, "sessionService.delete", "deleted", true)
+	refreshedSiblings := 0
+	if len(siblingSessionIDs) > 0 {
+		if rollupErr := clog.LoopRollup(ctx, "sessionService.refreshSiblingSummary", siblingSessionIDs, func(iterCtx context.Context, _ int, siblingID string) error {
+			clog.WithGroupField(iterCtx, "session", "sessionId", siblingID)
+			if siblingID == "" || siblingID == sessionID {
+				return nil
+			}
+			updated, err := s.recomputeSessionSummaryByID(iterCtx, siblingID)
+			if err != nil {
+				return err
+			}
+			if updated {
+				refreshedSiblings++
+			}
+			return nil
+		}); rollupErr != nil {
+			clog.WithGroupFields(ctx, "sessionService.delete", clog.Fields{
+				"warning":             "failed to refresh one or more sibling session summaries",
+				"siblingRefreshError": rollupErr.Error(),
+			})
+		}
+	}
+
+	clog.WithGroupFields(ctx, "sessionService.delete", clog.Fields{
+		"deleted":                  true,
+		"siblingSessionsFound":     len(siblingSessionIDs),
+		"siblingSessionsRefreshed": refreshedSiblings,
+	})
 	return nil
+}
+
+func (s service) recomputeSessionSummaryByID(ctx context.Context, sessionID string) (bool, error) {
+	ses, err := s.store.GetDoc(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to fetch sibling session %s: %w", sessionID, err)
+	}
+	summary, err := s.ComputeSessionSummary(ctx, *ses)
+	if err != nil {
+		return false, fmt.Errorf("failed to compute summary for sibling session %s: %w", ses.ID, err)
+	}
+	if err := s.UpdateSessionSummary(ctx, ses.ID, summary); err != nil {
+		return false, fmt.Errorf("failed to update summary for sibling session %s: %w", ses.ID, err)
+	}
+	return true, nil
 }
 
 func (s service) AddAggregateIDs(ctx context.Context, sessionID string, aggregateIDs []string) error {

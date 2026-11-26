@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/set"
 	"oneTrick/utils"
+	"slices"
 	"sort"
 	"time"
 
@@ -46,8 +48,9 @@ type Service interface {
 		performance api.InstancePerformance,
 	) (*api.Aggregate, error)
 
-	// RemoveSession removes all references to sessionID from aggregates and deletes orphaned aggregates.
-	RemoveSession(ctx context.Context, sessionID string) error
+	// RemoveSession removes all references to sessionID from aggregates, deletes orphaned aggregates,
+	// and returns deduplicated surviving sibling session IDs from modified aggregates.
+	RemoveSession(ctx context.Context, sessionID string) ([]string, error)
 
 	// RemoveSnapshot removes all references to snapshotID from aggregates and deletes orphaned aggregates.
 	RemoveSnapshot(ctx context.Context, snapshotID string) error
@@ -383,68 +386,140 @@ func (s *service) UpdateAllAggregates(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (s *service) RemoveSession(ctx context.Context, sessionID string) error {
+func (s *service) RemoveSession(ctx context.Context, sessionID string) ([]string, error) {
 	if sessionID == "" {
-		return nil
+		return nil, nil
 	}
 
 	clog.WithGroupField(ctx, "aggregateService.removeSession", "sessionId", sessionID)
-	docs, err := s.DB.Collection(collection).
-		Where("sessionIds", "array-contains", sessionID).
-		Documents(ctx).GetAll()
+	aggs, err := s.store.listBySessionID(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("failed to query aggregates for session %s: %w", sessionID, err)
+		return nil, fmt.Errorf("failed to query aggregates for session %s: %w", sessionID, err)
 	}
 
 	deletedOrphans := 0
 	updatedCount := 0
-	for _, doc := range docs {
-		docRef := doc.Ref
-		data := doc.Data()
-
-		// Remove sessionID from sessionIds array
-		if sessionIDs, ok := data["sessionIds"].([]any); ok {
-			newSessionIDs := make([]any, 0, len(sessionIDs))
-			for _, id := range sessionIDs {
-				if idStr, ok := id.(string); ok && idStr == sessionID {
-					continue
-				}
-				newSessionIDs = append(newSessionIDs, id)
-			}
-			data["sessionIds"] = newSessionIDs
-		}
-
-		// Remove sessionId from snapshotLinks
-		if linksMap, ok := data["snapshotLinks"].(map[string]any); ok {
-			for charID, linkVal := range linksMap {
-				if linkObj, ok := linkVal.(map[string]any); ok {
-					if sessID, ok := linkObj["sessionId"].(string); ok && sessID == sessionID {
-						delete(linkObj, "sessionId")
-						linksMap[charID] = linkObj
-					}
-				}
-			}
-			data["snapshotLinks"] = linksMap
-		}
-
-		if isAggregateOrphaned(data) {
-			if _, err := docRef.Delete(ctx); err != nil {
-				return fmt.Errorf("failed to delete orphaned aggregate %s: %w", docRef.ID, err)
+	survivingSiblings := set.NewOrdered[string]()
+	for _, agg := range aggs {
+		plan := stripSessionFromAggregate(agg, sessionID)
+		if isTypedAggregateOrphaned(plan.cleaned) {
+			if err := s.store.deleteAggregate(ctx, agg.ID); err != nil {
+				return nil, fmt.Errorf("failed to delete orphaned aggregate %s: %w", agg.ID, err)
 			}
 			deletedOrphans++
-		} else {
-			if _, err := docRef.Set(ctx, data); err != nil {
-				return fmt.Errorf("failed to update aggregate %s: %w", docRef.ID, err)
-			}
-			updatedCount++
+			continue
+		}
+		if err := s.store.detachSession(ctx, agg.ID, sessionID, plan.clearSessionCharIDs, plan.removeCharIDs); err != nil {
+			return nil, fmt.Errorf("failed to update aggregate %s: %w", agg.ID, err)
+		}
+		updatedCount++
+		for _, siblingID := range plan.survivingSessionIDs {
+			survivingSiblings.Add(siblingID)
 		}
 	}
+
+	siblings := survivingSiblings.ToSlice()
 	clog.WithGroupFields(ctx, "aggregateService.removeSession", clog.Fields{
-		"affectedAggregates": len(docs),
-		"deletedOrphans":     deletedOrphans,
-		"updatedAggregates":  updatedCount,
+		"affectedAggregates":       len(aggs),
+		"deletedOrphans":           deletedOrphans,
+		"updatedAggregates":        updatedCount,
+		"survivingSiblingSessions": len(siblings),
 	})
-	return nil
+	return siblings, nil
+}
+
+type sessionDetachPlan struct {
+	cleaned             api.Aggregate
+	clearSessionCharIDs []string
+	removeCharIDs       []string
+	survivingSessionIDs []string
+}
+
+func stripSessionFromAggregate(agg api.Aggregate, sessionID string) sessionDetachPlan {
+	cleaned := agg
+	remainingSessionIDs := make([]string, 0, len(agg.SessionIds))
+	surviving := set.NewOrdered[string]()
+	for _, id := range agg.SessionIds {
+		if id == "" || id == sessionID {
+			continue
+		}
+		remainingSessionIDs = append(remainingSessionIDs, id)
+		surviving.Add(id)
+	}
+	cleaned.SessionIds = remainingSessionIDs
+
+	var clearSessionCharIDs []string
+	var removeCharIDs []string
+	removedSet := set.New[string]()
+	if len(agg.SnapshotLinks) > 0 {
+		cleanedLinks := make(map[string]api.SnapshotLink, len(agg.SnapshotLinks))
+		extraLinkSessions := make([]string, 0)
+		for charID, link := range agg.SnapshotLinks {
+			if link.SessionID != nil && *link.SessionID == sessionID {
+				if link.SnapshotID != nil && *link.SnapshotID != "" {
+					link.SessionID = nil
+					cleanedLinks[charID] = link
+					clearSessionCharIDs = append(clearSessionCharIDs, charID)
+				} else {
+					removeCharIDs = append(removeCharIDs, charID)
+					removedSet.Add(charID)
+				}
+				continue
+			}
+			if link.SessionID != nil && *link.SessionID != "" {
+				extraLinkSessions = append(extraLinkSessions, *link.SessionID)
+			}
+			cleanedLinks[charID] = link
+		}
+		cleaned.SnapshotLinks = cleanedLinks
+		slices.Sort(clearSessionCharIDs)
+		slices.Sort(removeCharIDs)
+		slices.Sort(extraLinkSessions)
+		for _, sid := range extraLinkSessions {
+			surviving.Add(sid)
+		}
+	}
+
+	if removedSet.Size() > 0 {
+		if len(agg.CharacterIds) > 0 {
+			remainingCharIDs := make([]string, 0, len(agg.CharacterIds))
+			for _, cid := range agg.CharacterIds {
+				if !removedSet.Contains(cid) {
+					remainingCharIDs = append(remainingCharIDs, cid)
+				}
+			}
+			cleaned.CharacterIds = remainingCharIDs
+		}
+		if len(agg.Performance) > 0 {
+			cleanedPerf := make(map[string]api.InstancePerformance, len(agg.Performance))
+			for cid, perf := range agg.Performance {
+				if !removedSet.Contains(cid) {
+					cleanedPerf[cid] = perf
+				}
+			}
+			cleaned.Performance = cleanedPerf
+		}
+	}
+
+	return sessionDetachPlan{
+		cleaned:             cleaned,
+		clearSessionCharIDs: clearSessionCharIDs,
+		removeCharIDs:       removeCharIDs,
+		survivingSessionIDs: surviving.ToSlice(),
+	}
+}
+
+func isTypedAggregateOrphaned(agg api.Aggregate) bool {
+	if len(agg.SessionIds) > 0 || len(agg.SnapshotIds) > 0 {
+		return false
+	}
+	for _, link := range agg.SnapshotLinks {
+		if (link.SnapshotID != nil && *link.SnapshotID != "") ||
+			(link.SessionID != nil && *link.SessionID != "") {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *service) RemoveSnapshot(ctx context.Context, snapshotID string) error {

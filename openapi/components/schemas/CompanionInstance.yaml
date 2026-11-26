@@ -1,0 +1,29 @@
+type: object
+required:
+  - sessionId
+  - characterId
+  - sharedMatches
+properties:
+  sessionId:
+    type: string
+    x-go-name: SessionID
+    x-oapi-codegen-extra-tags:
+      firestore: sessionId
+  characterId:
+    type: string
+    x-go-name: CharacterID
+    x-oapi-codegen-extra-tags:
+      firestore: characterId
+  class:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: "class,omitempty"
+  emblemUrl:
+    type: string
+    x-go-name: EmblemURL
+    x-oapi-codegen-extra-tags:
+      firestore: "emblemUrl,omitempty"
+  sharedMatches:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: sharedMatches

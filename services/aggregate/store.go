@@ -11,6 +11,7 @@ import (
 
 type aggregateStore interface {
 	getByActivityID(ctx context.Context, activityID string) (*api.Aggregate, error)
+	listBySessionID(ctx context.Context, sessionID string) ([]api.Aggregate, error)
 	mergeSessionActivity(
 		ctx context.Context,
 		aggregateID string,
@@ -21,6 +22,8 @@ type aggregateStore interface {
 		estimatedGameMode *api.GameMode,
 	) error
 	createAggregate(ctx context.Context, agg api.Aggregate) (api.Aggregate, error)
+	detachSession(ctx context.Context, aggregateID string, sessionID string, clearSessionCharIDs, removeCharIDs []string) error
+	deleteAggregate(ctx context.Context, aggregateID string) error
 }
 
 type firestoreAggregateStore struct {
@@ -93,4 +96,74 @@ func (f *firestoreAggregateStore) createAggregate(ctx context.Context, agg api.A
 		return api.Aggregate{}, err
 	}
 	return agg, nil
+}
+
+func (f *firestoreAggregateStore) listBySessionID(ctx context.Context, sessionID string) ([]api.Aggregate, error) {
+	docs, err := f.db.Collection(collection).
+		Where("sessionIds", "array-contains", sessionID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	aggs := make([]api.Aggregate, 0, len(docs))
+	for _, doc := range docs {
+		var agg api.Aggregate
+		if err := doc.DataTo(&agg); err != nil {
+			return nil, err
+		}
+		if agg.ID == "" {
+			agg.ID = doc.Ref.ID
+		}
+		aggs = append(aggs, agg)
+	}
+	return aggs, nil
+}
+
+func (f *firestoreAggregateStore) detachSession(ctx context.Context, aggregateID string, sessionID string, clearSessionCharIDs, removeCharIDs []string) error {
+	nonEmptyRemove := make([]string, 0, len(removeCharIDs))
+	for _, charID := range removeCharIDs {
+		if charID != "" {
+			nonEmptyRemove = append(nonEmptyRemove, charID)
+		}
+	}
+
+	updates := make([]firestore.Update, 0, 2+len(clearSessionCharIDs)+2*len(nonEmptyRemove))
+	updates = append(updates, firestore.Update{
+		Path:  "sessionIds",
+		Value: firestore.ArrayRemove(sessionID),
+	})
+	for _, charID := range clearSessionCharIDs {
+		if charID == "" {
+			continue
+		}
+		updates = append(updates, firestore.Update{
+			FieldPath: firestore.FieldPath{"snapshotLinks", charID, "sessionId"},
+			Value:     firestore.Delete,
+		})
+	}
+	if len(nonEmptyRemove) > 0 {
+		updates = append(updates, firestore.Update{
+			Path:  "characterIds",
+			Value: firestore.ArrayRemove(toInterfaceSlice(nonEmptyRemove)...),
+		})
+		for _, charID := range nonEmptyRemove {
+			updates = append(updates,
+				firestore.Update{
+					FieldPath: firestore.FieldPath{"snapshotLinks", charID},
+					Value:     firestore.Delete,
+				},
+				firestore.Update{
+					FieldPath: firestore.FieldPath{"performance", charID},
+					Value:     firestore.Delete,
+				},
+			)
+		}
+	}
+	_, err := f.db.Collection(collection).Doc(aggregateID).Update(ctx, updates)
+	return err
+}
+
+func (f *firestoreAggregateStore) deleteAggregate(ctx context.Context, aggregateID string) error {
+	_, err := f.db.Collection(collection).Doc(aggregateID).Delete(ctx)
+	return err
 }

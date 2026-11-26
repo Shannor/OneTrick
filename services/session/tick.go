@@ -65,23 +65,30 @@ type tickRunner struct {
 	now                   time.Time
 	resp                  *api.SessionTickResponse
 	compQueue             *set.OrderedSet[string]
+	dirtySessionIDs       *set.OrderedSet[string]
+	deletedSessionIDs     *set.Set[string]
+	sessionsByID          map[string]api.Session
 	usersByID             map[string]*user.User
 	pgcrCache             map[string]map[string]api.InstancePerformance
 	candidateCharacterIDs []string
 	loadoutsThrottled     int
 	aggregatesRefreshed   int
 	pgcrCacheHits         int
+	summariesUpdated      int
 }
 
 func newTickRunner(svc service, opts TickOptions) *tickRunner {
 	return &tickRunner{
-		svc:       svc,
-		opts:      opts,
-		now:       svc.now(),
-		resp:      &api.SessionTickResponse{DryRun: opts.DryRun},
-		compQueue: set.NewOrdered[string](),
-		usersByID: make(map[string]*user.User),
-		pgcrCache: make(map[string]map[string]api.InstancePerformance),
+		svc:               svc,
+		opts:              opts,
+		now:               svc.now(),
+		resp:              &api.SessionTickResponse{DryRun: opts.DryRun},
+		compQueue:         set.NewOrdered[string](),
+		dirtySessionIDs:   set.NewOrdered[string](),
+		deletedSessionIDs: set.New[string](),
+		sessionsByID:      make(map[string]api.Session),
+		usersByID:         make(map[string]*user.User),
+		pgcrCache:         make(map[string]map[string]api.InstancePerformance),
 	}
 }
 
@@ -115,6 +122,7 @@ func (r *tickRunner) recordSummary(ctx context.Context, tickStart time.Time) {
 		"aggregatesAddedTotal":    r.resp.AggregatesAddedTotal,
 		"aggregatesRefreshed":     r.aggregatesRefreshed,
 		"pgcrCacheHits":           r.pgcrCacheHits,
+		"summariesUpdated":        r.summariesUpdated,
 		"compFinalizedCount":      r.resp.CompFinalizedCount,
 		"emptySessionsCleaned":    r.resp.EmptySessionsCleaned,
 		"errorsTotal":             r.resp.ErrorsTotal,
@@ -129,8 +137,18 @@ func (r *tickRunner) run(ctx context.Context) (*api.SessionTickResponse, error) 
 	}
 	r.resp.TotalSessions = len(candidates)
 	r.candidateCharacterIDs = collectCandidateCharacterIDs(candidates, r.now)
+	for _, cand := range candidates {
+		if cand.Session.ID != "" {
+			ses := cand.Session
+			ses.AggregateIDs = slices.Clone(ses.AggregateIDs)
+			r.sessionsByID[ses.ID] = ses
+		}
+	}
 
+	// Phase 1: link activities across all candidates and collect dirty session IDs.
 	r.processCandidates(ctx, candidates)
+	// Phase 2: recompute summaries once per dirty session after all links are in place.
+	r.recomputeDirtySummaries(ctx)
 	r.finalizeCompSessions(ctx)
 	r.cleanupEmptyCompleted(ctx)
 
@@ -240,6 +258,10 @@ func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bo
 
 	if !cand.hasAggregates() {
 		*emptyCounter++
+		if !r.opts.DryRun && cand.Session.ID != "" {
+			delete(r.sessionsByID, cand.Session.ID)
+			r.deletedSessionIDs.Add(cand.Session.ID)
+		}
 	} else {
 		r.resp.SessionsStaleEnded++
 		r.queueCompFinalize(cand.Session)
@@ -356,15 +378,17 @@ func (r *tickRunner) fetchNewActivities(ctx context.Context, cand TickCandidate,
 
 type linkActivitiesResult struct {
 	aggregateIDs    []string
+	dirtySessionIDs []string
 	refreshedCount  int
 	hasPendingRetry bool
 }
 
 type activityLinkOutcome struct {
-	aggregateID  string
-	linked       bool
-	refreshed    bool
-	pendingRetry bool
+	aggregateID     string
+	dirtySessionIDs []string
+	linked          bool
+	refreshed       bool
+	pendingRetry    bool
 }
 
 func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, participant tickParticipant, histories []api.ActivityHistory) (linkActivitiesResult, error) {
@@ -390,6 +414,7 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, pa
 	res := linkActivitiesResult{
 		aggregateIDs: make([]string, 0, len(histories)),
 	}
+	dirty := set.NewOrdered[string]()
 	_ = clog.LoopRollup(iterCtx, "aggregateService.processActivity", histories, func(actCtx context.Context, _ int, history api.ActivityHistory) error {
 		defer func() {
 			if bag := clog.BagFromContext(actCtx); bag != nil && bag.HasWarning() {
@@ -408,12 +433,16 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, pa
 		}
 		if outcome.linked {
 			res.aggregateIDs = append(res.aggregateIDs, outcome.aggregateID)
+			for _, dirtyID := range outcome.dirtySessionIDs {
+				dirty.Add(dirtyID)
+			}
 			if outcome.refreshed {
 				res.refreshedCount++
 			}
 		}
 		return nil
 	})
+	res.dirtySessionIDs = dirty.ToSlice()
 
 	return res, nil
 }
@@ -510,11 +539,37 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		})
 	}
 	return activityLinkOutcome{
-		aggregateID:  agg.ID,
-		linked:       true,
-		refreshed:    refreshing,
-		pendingRetry: incomplete,
+		aggregateID:     agg.ID,
+		dirtySessionIDs: collectAggregateSessionIDs(agg),
+		linked:          true,
+		refreshed:       refreshing,
+		pendingRetry:    incomplete,
 	}, nil
+}
+
+func collectAggregateSessionIDs(agg *api.Aggregate) []string {
+	if agg == nil {
+		return nil
+	}
+	ids := set.NewOrdered[string]()
+	for _, sid := range agg.SessionIds {
+		if sid != "" {
+			ids.Add(sid)
+		}
+	}
+	if len(agg.SnapshotLinks) > 0 {
+		extra := make([]string, 0, len(agg.SnapshotLinks))
+		for _, link := range agg.SnapshotLinks {
+			if link.SessionID != nil && *link.SessionID != "" {
+				extra = append(extra, *link.SessionID)
+			}
+		}
+		slices.Sort(extra)
+		for _, sid := range extra {
+			ids.Add(sid)
+		}
+	}
+	return ids.ToSlice()
 }
 
 func collectCandidateCharacterIDs(candidates []TickCandidate, now time.Time) []string {
@@ -604,6 +659,11 @@ func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickC
 
 	if len(newAggIDs) > 0 {
 		if err := r.svc.AddAggregateIDs(iterCtx, ses.ID, newAggIDs); err != nil {
+			for _, dirtyID := range linkRes.dirtySessionIDs {
+				if dirtyID != "" && dirtyID != ses.ID {
+					r.dirtySessionIDs.Add(dirtyID)
+				}
+			}
 			r.resp.SessionsErrored++
 			r.resp.ErrorsTotal++
 			return errors.Join(append(postErrs, fmt.Errorf("failed to add aggregate IDs to session %s: %w", ses.ID, err))...)
@@ -611,19 +671,59 @@ func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickC
 	}
 
 	ses.AggregateIDs = utils.UnionNonZero(ses.AggregateIDs, newAggIDs)
-	summary, err := r.svc.ComputeSessionSummary(iterCtx, *ses)
-	if err != nil {
-		r.resp.ErrorsTotal++
-		postErrs = append(postErrs, fmt.Errorf("failed to compute session summary for session %s: %w", ses.ID, err))
-	} else if err := r.svc.UpdateSessionSummary(iterCtx, ses.ID, summary); err != nil {
-		r.resp.ErrorsTotal++
-		postErrs = append(postErrs, fmt.Errorf("failed to update session summary for session %s: %w", ses.ID, err))
+	updatedSes := *ses
+	updatedSes.AggregateIDs = slices.Clone(ses.AggregateIDs)
+	r.sessionsByID[ses.ID] = updatedSes
+	r.dirtySessionIDs.Add(ses.ID)
+	for _, dirtyID := range linkRes.dirtySessionIDs {
+		if dirtyID != "" {
+			r.dirtySessionIDs.Add(dirtyID)
+		}
 	}
 
 	r.resp.SessionsProcessed++
 	r.resp.AggregatesAddedTotal += len(newAggIDs)
 	r.aggregatesRefreshed += linkRes.refreshedCount
 	return errors.Join(postErrs...)
+}
+
+func (r *tickRunner) recomputeDirtySummaries(ctx context.Context) {
+	sessionIDs := r.dirtySessionIDs.ToSlice()
+	if len(sessionIDs) == 0 || r.opts.DryRun {
+		return
+	}
+
+	_ = clog.LoopRollup(ctx, "sessionService.recomputeSummary", sessionIDs, func(iterCtx context.Context, _ int, sessionID string) error {
+		clog.WithGroupField(iterCtx, "session", "sessionId", sessionID)
+		if sessionID == "" || r.deletedSessionIDs.Contains(sessionID) {
+			return nil
+		}
+
+		ses, ok := r.sessionsByID[sessionID]
+		if !ok {
+			fetched, err := r.svc.store.GetDoc(iterCtx, sessionID)
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return nil
+				}
+				r.resp.ErrorsTotal++
+				return fmt.Errorf("failed to fetch dirty session %s: %w", sessionID, err)
+			}
+			ses = *fetched
+		}
+
+		summary, err := r.svc.ComputeSessionSummary(iterCtx, ses)
+		if err != nil {
+			r.resp.ErrorsTotal++
+			return fmt.Errorf("failed to compute session summary for session %s: %w", ses.ID, err)
+		}
+		if err := r.svc.UpdateSessionSummary(iterCtx, ses.ID, summary); err != nil {
+			r.resp.ErrorsTotal++
+			return fmt.Errorf("failed to update session summary for session %s: %w", ses.ID, err)
+		}
+		r.summariesUpdated++
+		return nil
+	})
 }
 
 func (r *tickRunner) finalizeCompSessions(ctx context.Context) {

@@ -30,6 +30,7 @@ type userStore interface {
 	findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error)
 	findUsersByMembershipIDs(ctx context.Context, bungieNetIDs []string, primaryMembershipIDs []string) ([]User, error)
 	findUsersByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
+	findUsersByCharacterIDs(ctx context.Context, characterIDs []string) ([]User, error)
 }
 
 type firestoreUserStore struct {
@@ -370,6 +371,42 @@ func (f *firestoreUserStore) findUsersByPartyMembershipIDs(ctx context.Context, 
 		}
 		docs, err := f.db.Collection(userCollection).
 			WhereEntity(orFilter).
+			Documents(ctx).
+			GetAll()
+		if err != nil {
+			return nil, err
+		}
+		users, err := utils.GetAllToStructs[User](docs)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range users {
+			if u.ID != "" {
+				byID[u.ID] = u
+			}
+		}
+	}
+
+	results := make([]User, 0, len(byID))
+	for _, u := range byID {
+		results = append(results, u)
+	}
+	return results, nil
+}
+
+func (f *firestoreUserStore) findUsersByCharacterIDs(ctx context.Context, characterIDs []string) ([]User, error) {
+	if f.db == nil {
+		return nil, nil
+	}
+	chunks := utils.Chunk(utils.UniqueTrimmedStrings(characterIDs), firestoreInBatchLimit)
+	if len(chunks) == 0 {
+		return nil, nil
+	}
+
+	byID := make(map[string]User, len(characterIDs))
+	for _, chunk := range chunks {
+		docs, err := f.db.Collection(userCollection).
+			Where("characterIds", "array-contains-any", chunk).
 			Documents(ctx).
 			GetAll()
 		if err != nil {
