@@ -17,6 +17,7 @@ import (
 type Service interface {
 	GetUser(ctx context.Context, ID string) (*User, error)
 	FindByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
+	FindByCharacterIDs(ctx context.Context, characterIDs []string) ([]User, error)
 	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
 	GetPrimaryMembership(ctx context.Context, userID string) (int64, int64, error)
@@ -74,6 +75,21 @@ func (s *userService) FindByPartyMembershipIDs(ctx context.Context, membershipID
 		return []User{}, nil
 	}
 	return s.store.findUsersByPartyMembershipIDs(ctx, uniqueIDs)
+}
+
+func (s *userService) FindByCharacterIDs(ctx context.Context, characterIDs []string) ([]User, error) {
+	uniqueIDs := utils.UniqueTrimmedStrings(characterIDs)
+	clog.WithGroupField(ctx, "userService.findByCharacterIds", "requestedCount", len(uniqueIDs))
+	if s.store == nil || len(uniqueIDs) == 0 {
+		clog.WithGroupField(ctx, "userService.findByCharacterIds", "returnedCount", 0)
+		return []User{}, nil
+	}
+	users, err := s.store.findUsersByCharacterIDs(ctx, uniqueIDs)
+	if err != nil {
+		return nil, err
+	}
+	clog.WithGroupField(ctx, "userService.findByCharacterIds", "returnedCount", len(users))
+	return users, nil
 }
 
 func (s *userService) CreateUser(ctx context.Context, user *User) (*User, error) {

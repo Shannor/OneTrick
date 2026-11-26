@@ -33,6 +33,7 @@ type memorySessionStore struct {
 	docs                         map[string]*api.Session
 	updatedAt                    map[string]time.Time
 	lastSnapshots                map[string]lastSnapshotRecord
+	candidateOrder               []string
 	seq                          int
 	getDocCalls                  atomic.Int32
 	getActiveByUserIDsCalls      atomic.Int32
@@ -209,11 +210,21 @@ func (m *memorySessionStore) ListCompletedInWindow(_ context.Context, since, unt
 func (m *memorySessionStore) GetTickCandidates(_ context.Context, completedSince time.Time) ([]TickCandidate, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ids := make([]string, 0, len(m.docs))
-	for id := range m.docs {
-		ids = append(ids, id)
+	var ids []string
+	if len(m.candidateOrder) > 0 {
+		ids = make([]string, 0, len(m.candidateOrder))
+		for _, id := range m.candidateOrder {
+			if _, ok := m.docs[id]; ok {
+				ids = append(ids, id)
+			}
+		}
+	} else {
+		ids = make([]string, 0, len(m.docs))
+		for id := range m.docs {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
 	}
-	slices.Sort(ids)
 
 	out := make([]TickCandidate, 0, len(ids))
 	for _, id := range ids {
@@ -394,10 +405,68 @@ type fakeSessionUserService struct {
 	u                       *user.User
 	users                   map[string]*user.User
 	getUserErr              error
+	findByCharErr           error
 	getPrimaryMembershipErr error
 	getPrimaryMembershipFn  func(ctx context.Context, userID string) (int64, int64, error)
 	membershipCalls         atomic.Int32
 	userCalls               atomic.Int32
+	findByCharCalls         atomic.Int32
+}
+
+func (f *fakeSessionUserService) FindByCharacterIDs(_ context.Context, characterIDs []string) ([]user.User, error) {
+	f.findByCharCalls.Add(1)
+	if f.findByCharErr != nil {
+		return nil, f.findByCharErr
+	}
+	wanted := make(map[string]struct{}, len(characterIDs))
+	for _, cid := range characterIDs {
+		if cid != "" {
+			wanted[cid] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return []user.User{}, nil
+	}
+
+	seen := make(map[string]struct{})
+	out := make([]user.User, 0)
+	checkUser := func(u *user.User) {
+		if u == nil {
+			return
+		}
+		if _, dup := seen[u.ID]; dup && u.ID != "" {
+			return
+		}
+		matched := false
+		for _, cid := range u.CharacterIDs {
+			if _, ok := wanted[cid]; ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			for _, ch := range u.Characters {
+				if _, ok := wanted[ch.Id]; ok {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			if u.ID != "" {
+				seen[u.ID] = struct{}{}
+			}
+			out = append(out, *u)
+		}
+	}
+	if f.users != nil {
+		for _, u := range f.users {
+			checkUser(u)
+		}
+	} else {
+		checkUser(f.u)
+	}
+	return out, nil
 }
 
 func (f *fakeSessionUserService) GetUser(_ context.Context, userID string) (*user.User, error) {
@@ -677,6 +746,59 @@ func (f *fakeSessionAggregateService) UpsertSessionActivity(_ context.Context, c
 	f.byActivity[activityHistory.InstanceID] = agg
 	cp := *agg
 	return &cp, nil
+}
+
+func (f *fakeSessionAggregateService) RemoveSession(_ context.Context, sessionID string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	siblings := make([]string, 0)
+	seen := make(map[string]struct{})
+	for id, agg := range f.byID {
+		if !slices.Contains(agg.SessionIds, sessionID) {
+			continue
+		}
+		f.writes.Add(1)
+		filteredSessions := make([]string, 0, len(agg.SessionIds))
+		for _, sid := range agg.SessionIds {
+			if sid != sessionID {
+				filteredSessions = append(filteredSessions, sid)
+			}
+		}
+		agg.SessionIds = filteredSessions
+
+		for cid, link := range agg.SnapshotLinks {
+			if link.SessionID != nil && *link.SessionID == sessionID {
+				link.SessionID = nil
+				agg.SnapshotLinks[cid] = link
+			}
+		}
+
+		hasSnapshot := len(agg.SnapshotIds) > 0
+		if !hasSnapshot {
+			for _, link := range agg.SnapshotLinks {
+				if link.SnapshotID != nil && *link.SnapshotID != "" {
+					hasSnapshot = true
+					break
+				}
+			}
+		}
+		if len(agg.SessionIds) == 0 && !hasSnapshot {
+			delete(f.byID, id)
+			delete(f.byActivity, agg.ActivityID)
+			continue
+		}
+		for _, sid := range agg.SessionIds {
+			if sid == "" || sid == sessionID {
+				continue
+			}
+			if _, ok := seen[sid]; !ok {
+				seen[sid] = struct{}{}
+				siblings = append(siblings, sid)
+			}
+		}
+	}
+	slices.Sort(siblings)
+	return siblings, nil
 }
 
 type fakeSessionManifestService struct {

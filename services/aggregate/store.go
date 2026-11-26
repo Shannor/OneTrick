@@ -11,6 +11,7 @@ import (
 
 type aggregateStore interface {
 	getByActivityID(ctx context.Context, activityID string) (*api.Aggregate, error)
+	listBySessionID(ctx context.Context, sessionID string) ([]api.Aggregate, error)
 	mergeSessionActivity(
 		ctx context.Context,
 		aggregateID string,
@@ -21,6 +22,8 @@ type aggregateStore interface {
 		estimatedGameMode *api.GameMode,
 	) error
 	createAggregate(ctx context.Context, agg api.Aggregate) (api.Aggregate, error)
+	detachSession(ctx context.Context, aggregateID string, sessionID string, linkCharacterIDs []string) error
+	deleteAggregate(ctx context.Context, aggregateID string) error
 }
 
 type firestoreAggregateStore struct {
@@ -93,4 +96,49 @@ func (f *firestoreAggregateStore) createAggregate(ctx context.Context, agg api.A
 		return api.Aggregate{}, err
 	}
 	return agg, nil
+}
+
+func (f *firestoreAggregateStore) listBySessionID(ctx context.Context, sessionID string) ([]api.Aggregate, error) {
+	docs, err := f.db.Collection(collection).
+		Where("sessionIds", "array-contains", sessionID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	aggs := make([]api.Aggregate, 0, len(docs))
+	for _, doc := range docs {
+		var agg api.Aggregate
+		if err := doc.DataTo(&agg); err != nil {
+			return nil, err
+		}
+		if agg.ID == "" {
+			agg.ID = doc.Ref.ID
+		}
+		aggs = append(aggs, agg)
+	}
+	return aggs, nil
+}
+
+func (f *firestoreAggregateStore) detachSession(ctx context.Context, aggregateID string, sessionID string, linkCharacterIDs []string) error {
+	updates := make([]firestore.Update, 0, 1+len(linkCharacterIDs))
+	updates = append(updates, firestore.Update{
+		Path:  "sessionIds",
+		Value: firestore.ArrayRemove(sessionID),
+	})
+	for _, charID := range linkCharacterIDs {
+		if charID == "" {
+			continue
+		}
+		updates = append(updates, firestore.Update{
+			FieldPath: firestore.FieldPath{"snapshotLinks", charID, "sessionId"},
+			Value:     firestore.Delete,
+		})
+	}
+	_, err := f.db.Collection(collection).Doc(aggregateID).Update(ctx, updates)
+	return err
+}
+
+func (f *firestoreAggregateStore) deleteAggregate(ctx context.Context, aggregateID string) error {
+	_, err := f.db.Collection(collection).Doc(aggregateID).Delete(ctx)
+	return err
 }

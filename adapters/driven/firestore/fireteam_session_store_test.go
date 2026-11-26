@@ -55,6 +55,24 @@ func TestFireteamSessionStoreDocRoundTrip(t *testing.T) {
 			TopWeapons: []corefireteam.SessionWeaponSummary{
 				{Name: "Rose", Icon: "/img/rose.png", Kills: 18},
 			},
+			Companions: []corefireteam.SessionCompanion{
+				{
+					UserID:        "u-2",
+					DisplayName:   "Maverick",
+					SharedMatches: 2,
+					Wins:          2,
+					Losses:        0,
+					Sessions: []corefireteam.SessionCompanionSession{
+						{
+							SessionID:     "ses-2",
+							CharacterID:   "char-2",
+							Class:         "Titan",
+							EmblemURL:     "https://www.bungie.net/emblem-2.jpg",
+							SharedMatches: 2,
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -77,6 +95,9 @@ func TestFireteamSessionStoreDocRoundTrip(t *testing.T) {
 	}
 	if got.Summary == nil || got.Summary.TotalMatches != 3 || len(got.Summary.TopWeapons) != 1 || got.Summary.TopWeapons[0].Name != "Rose" {
 		t.Fatalf("summary mismatch: %+v", got.Summary)
+	}
+	if len(got.Summary.Companions) != 1 || got.Summary.Companions[0].UserID != "u-2" || len(got.Summary.Companions[0].Sessions) != 1 || got.Summary.Companions[0].Sessions[0].Class != "Titan" {
+		t.Fatalf("summary companions mismatch: %+v", got.Summary.Companions)
 	}
 }
 

@@ -1829,6 +1829,73 @@ components:
           type: integer
           x-oapi-codegen-extra-tags:
             firestore: kills
+    SessionCompanionSession:
+      type: object
+      required:
+        - sessionId
+        - characterId
+        - sharedMatches
+      properties:
+        sessionId:
+          type: string
+          x-go-name: SessionID
+          x-oapi-codegen-extra-tags:
+            firestore: sessionId
+        characterId:
+          type: string
+          x-go-name: CharacterID
+          x-oapi-codegen-extra-tags:
+            firestore: characterId
+        class:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: class,omitempty
+        emblemUrl:
+          type: string
+          x-go-name: EmblemURL
+          x-oapi-codegen-extra-tags:
+            firestore: emblemUrl,omitempty
+        sharedMatches:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: sharedMatches
+    SessionCompanion:
+      type: object
+      required:
+        - userId
+        - displayName
+        - sharedMatches
+        - wins
+        - losses
+        - sessions
+      properties:
+        userId:
+          type: string
+          x-go-name: UserID
+          x-oapi-codegen-extra-tags:
+            firestore: userId
+        displayName:
+          type: string
+          x-oapi-codegen-extra-tags:
+            firestore: displayName
+        sharedMatches:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: sharedMatches
+        wins:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: wins
+        losses:
+          type: integer
+          x-oapi-codegen-extra-tags:
+            firestore: losses
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionCompanionSession'
+          x-oapi-codegen-extra-tags:
+            firestore: sessions
     SessionSummary:
       type: object
       x-oapi-codegen-extra-tags:
@@ -1887,6 +1954,12 @@ components:
             $ref: '#/components/schemas/SessionWeaponSummary'
           x-oapi-codegen-extra-tags:
             firestore: topWeapons
+        companions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionCompanion'
+          x-oapi-codegen-extra-tags:
+            firestore: companions
     CompRankSnapshot:
       type: object
       required:

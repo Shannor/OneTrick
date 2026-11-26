@@ -63,6 +63,11 @@ type fakeUserSearchStore struct {
 	partyErr            error
 	partyLookupCalls    int
 	capturedPartyMemIDs []string
+
+	charUsers       []User
+	charErr         error
+	charLookupCalls int
+	capturedCharIDs []string
 }
 
 func (f *fakeUserSearchStore) findUserByLookupID(_ context.Context, id string) (*User, error) {
@@ -106,6 +111,15 @@ func (f *fakeUserSearchStore) findUsersByPartyMembershipIDs(_ context.Context, m
 		return nil, f.partyErr
 	}
 	return f.partyUsers, nil
+}
+
+func (f *fakeUserSearchStore) findUsersByCharacterIDs(_ context.Context, characterIDs []string) ([]User, error) {
+	f.charLookupCalls++
+	f.capturedCharIDs = append([]string(nil), characterIDs...)
+	if f.charErr != nil {
+		return nil, f.charErr
+	}
+	return f.charUsers, nil
 }
 
 func TestUserPrimaryMembership(t *testing.T) {
@@ -769,3 +783,35 @@ func TestFirestoreEmulatorFindUsersByPartyMembershipIDs(t *testing.T) {
 	}
 }
 
+func TestFindByCharacterIDs(t *testing.T) {
+	t.Run("deduplicates trimmed character IDs and skips store on empty input", func(t *testing.T) {
+		store := &fakeUserSearchStore{
+			charUsers: []User{
+				{ID: "u-1", DisplayName: "Alpha", CharacterIDs: []string{"char-1"}},
+			},
+		}
+		svc := &userService{store: store}
+
+		empty, err := svc.FindByCharacterIDs(context.Background(), []string{"", "   "})
+		if err != nil {
+			t.Fatalf("unexpected error on empty input: %v", err)
+		}
+		if len(empty) != 0 || store.charLookupCalls != 0 {
+			t.Fatalf("expected 0 calls and empty slice, got len=%d calls=%d", len(empty), store.charLookupCalls)
+		}
+
+		got, err := svc.FindByCharacterIDs(context.Background(), []string{" char-1 ", "char-1", "", "char-2"})
+		if err != nil {
+			t.Fatalf("FindByCharacterIDs failed: %v", err)
+		}
+		if store.charLookupCalls != 1 {
+			t.Fatalf("expected 1 store call, got %d", store.charLookupCalls)
+		}
+		if len(store.capturedCharIDs) != 2 || store.capturedCharIDs[0] != "char-1" || store.capturedCharIDs[1] != "char-2" {
+			t.Fatalf("expected deduplicated [char-1 char-2], got %v", store.capturedCharIDs)
+		}
+		if len(got) != 1 || got[0].ID != "u-1" {
+			t.Fatalf("unexpected users returned: %+v", got)
+		}
+	})
+}

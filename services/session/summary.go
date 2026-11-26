@@ -1,12 +1,15 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math"
 	"oneTrick/api"
+	"oneTrick/ptr"
 	"oneTrick/services/destiny"
 	"oneTrick/set"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,19 +38,21 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 	}
 
 	acc := newSummaryAccumulator(len(aggregates))
-	for _, agg := range aggregates {
-		acc.addAggregate(agg, ses.CharacterID)
+	for i, agg := range aggregates {
+		acc.addAggregate(i, agg, ses)
 	}
 
 	s.resolveMissingModes(ctx, acc)
 	topWeapons := s.buildTopWeapons(ctx, acc)
-	summary := acc.buildSummary(topWeapons)
+	companions := s.buildCompanions(ctx, ses, acc.companionObs)
+	summary := acc.buildSummary(topWeapons, companions)
 
 	clog.WithGroupFields(ctx, "sessionService.computeSummary", clog.Fields{
-		"sessionId":    ses.ID,
-		"totalMatches": *summary.TotalMatches,
-		"wins":         *summary.Wins,
-		"losses":       *summary.Losses,
+		"sessionId":      ses.ID,
+		"totalMatches":   *summary.TotalMatches,
+		"wins":           *summary.Wins,
+		"losses":         *summary.Losses,
+		"companionCount": len(companions),
 	})
 	return summary, nil
 }
@@ -55,6 +60,41 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 func (s service) UpdateSessionSummary(ctx context.Context, sessionID string, summary *api.SessionSummary) error {
 	clog.WithGroupField(ctx, "sessionService.updateSummary", "sessionId", sessionID)
 	return s.store.UpdateSummary(ctx, sessionID, summary, s.now())
+}
+
+type companionObservation struct {
+	matchIndex     int
+	characterID    string
+	sessionID      string
+	userID         string
+	displayName    string
+	characterClass string
+	emblemURL      string
+	won            bool
+}
+
+type companionParticipantMeta struct {
+	userID         string
+	displayName    string
+	characterClass string
+	emblemURL      string
+}
+
+type companionSessionTally struct {
+	sessionID      string
+	characterID    string
+	characterClass string
+	emblemURL      string
+	sharedMatches  int
+}
+
+type companionTally struct {
+	userID        string
+	displayName   string
+	sharedMatches int
+	wins          int
+	losses        int
+	sessions      map[string]*companionSessionTally
 }
 
 type summaryAccumulator struct {
@@ -66,6 +106,7 @@ type summaryAccumulator struct {
 	modes             *set.OrderedSet[string]
 	missingModeHashes []int64
 	weapons           map[int64]*weaponTally
+	companionObs      []companionObservation
 }
 
 func newSummaryAccumulator(totalMatches int) *summaryAccumulator {
@@ -76,15 +117,52 @@ func newSummaryAccumulator(totalMatches int) *summaryAccumulator {
 	}
 }
 
-func (a *summaryAccumulator) addAggregate(agg api.Aggregate, characterID string) {
+func (a *summaryAccumulator) addAggregate(matchIndex int, agg api.Aggregate, ses api.Session) {
 	a.recordMode(agg.ActivityDetails)
 
-	perf, ok := agg.Performance[characterID]
+	perf, ok := agg.Performance[ses.CharacterID]
 	if !ok {
 		return
 	}
 	a.recordPlayerStats(perf.PlayerStats)
 	a.recordWeapons(perf.Weapons)
+	a.recordCompanions(matchIndex, agg, ses, perf.PlayerStats)
+}
+
+func (a *summaryAccumulator) recordCompanions(matchIndex int, agg api.Aggregate, ses api.Session, ownerStats api.PlayerStats) {
+	if isPrivateActivity(agg.ActivityDetails) || len(agg.SnapshotLinks) <= 1 {
+		return
+	}
+	ownerWon := isWin(ownerStats)
+	for mapCharID, link := range agg.SnapshotLinks {
+		charID := mapCharID
+		if charID == "" {
+			charID = link.CharacterID
+		}
+		if charID == "" || charID == ses.CharacterID {
+			continue
+		}
+		if link.SessionID == nil || *link.SessionID == "" || *link.SessionID == ses.ID {
+			continue
+		}
+		otherPerf, ok := agg.Performance[charID]
+		if !ok {
+			continue
+		}
+		if !areFireteamCompanions(ownerStats, otherPerf.PlayerStats) {
+			continue
+		}
+		a.companionObs = append(a.companionObs, companionObservation{
+			matchIndex:     matchIndex,
+			characterID:    charID,
+			sessionID:      *link.SessionID,
+			userID:         ptr.Deref(link.UserID),
+			displayName:    ptr.Deref(link.DisplayName),
+			characterClass: ptr.Deref(link.CharacterClass),
+			emblemURL:      ptr.Deref(link.EmblemURL),
+			won:            ownerWon,
+		})
+	}
 }
 
 func (a *summaryAccumulator) recordMode(details api.ActivityHistory) {
@@ -142,7 +220,7 @@ func (a *summaryAccumulator) weaponHashes() []int64 {
 	return hashes
 }
 
-func (a *summaryAccumulator) buildSummary(topWeapons []api.SessionWeaponSummary) *api.SessionSummary {
+func (a *summaryAccumulator) buildSummary(topWeapons []api.SessionWeaponSummary, companions []api.SessionCompanion) *api.SessionSummary {
 	totalMatches := a.totalMatches
 	wins := a.wins
 	losses := totalMatches - wins
@@ -171,6 +249,7 @@ func (a *summaryAccumulator) buildSummary(topWeapons []api.SessionWeaponSummary)
 		KDARatio:     &kdaRatio,
 		ModesPlayed:  &modes,
 		TopWeapons:   &topWeapons,
+		Companions:   &companions,
 	}
 }
 
@@ -277,12 +356,255 @@ func (s service) buildTopWeapons(ctx context.Context, acc *summaryAccumulator) [
 	return topWeapons
 }
 
+func (s service) buildCompanions(ctx context.Context, ses api.Session, obs []companionObservation) []api.SessionCompanion {
+	if len(obs) == 0 {
+		return make([]api.SessionCompanion, 0)
+	}
+
+	metaByChar := make(map[string]companionParticipantMeta, len(obs))
+	for _, o := range obs {
+		if o.userID == "" {
+			continue
+		}
+		meta := metaByChar[o.characterID]
+		if meta.userID == "" {
+			meta.userID = o.userID
+		}
+		if meta.displayName == "" {
+			meta.displayName = o.displayName
+		}
+		if meta.characterClass == "" {
+			meta.characterClass = o.characterClass
+		}
+		if meta.emblemURL == "" {
+			meta.emblemURL = o.emblemURL
+		}
+		metaByChar[o.characterID] = meta
+	}
+
+	missingCharIDs := set.NewOrdered[string]()
+	for _, o := range obs {
+		if o.userID != "" {
+			continue
+		}
+		if existing, ok := metaByChar[o.characterID]; ok && existing.userID != "" {
+			continue
+		}
+		missingCharIDs.Add(o.characterID)
+	}
+
+	if missingCharIDs.Size() > 0 && s.userService != nil {
+		if resolved, err := s.userService.FindByCharacterIDs(ctx, missingCharIDs.ToSlice()); err != nil {
+			clog.WithGroupFields(ctx, "sessionService.computeSummary", clog.Fields{
+				"warning":              "failed to resolve legacy companion users",
+				"companionLookupError": err.Error(),
+			})
+		} else {
+			for _, u := range resolved {
+				if u.ID == "" {
+					continue
+				}
+				for _, cid := range u.CharacterIDs {
+					if cid == "" {
+						continue
+					}
+					meta := metaByChar[cid]
+					if meta.userID == "" {
+						meta.userID = u.ID
+					}
+					if meta.displayName == "" {
+						meta.displayName = u.DisplayName
+					}
+					metaByChar[cid] = meta
+				}
+				for _, ch := range u.Characters {
+					if ch.Id == "" {
+						continue
+					}
+					meta := metaByChar[ch.Id]
+					if meta.userID == "" {
+						meta.userID = u.ID
+					}
+					if meta.displayName == "" {
+						meta.displayName = u.DisplayName
+					}
+					if meta.characterClass == "" {
+						meta.characterClass = ch.Class
+					}
+					if meta.emblemURL == "" {
+						meta.emblemURL = ch.EmblemURL
+					}
+					metaByChar[ch.Id] = meta
+				}
+			}
+		}
+	}
+
+	type matchEntityKey struct {
+		id         string
+		matchIndex int
+	}
+
+	byUser := make(map[string]*companionTally)
+	seenUserMatches := set.New[matchEntityKey]()
+	seenSessionMatches := set.New[matchEntityKey]()
+
+	for _, o := range obs {
+		meta := metaByChar[o.characterID]
+		userID := firstNonEmpty(o.userID, meta.userID)
+		if userID == "" || (ses.UserID != "" && userID == ses.UserID) {
+			continue
+		}
+		displayName := firstNonEmpty(o.displayName, meta.displayName)
+		charClass := firstNonEmpty(o.characterClass, meta.characterClass)
+		emblemURL := firstNonEmpty(o.emblemURL, meta.emblemURL)
+
+		tally, exists := byUser[userID]
+		if !exists {
+			tally = &companionTally{
+				userID:      userID,
+				displayName: displayName,
+				sessions:    make(map[string]*companionSessionTally),
+			}
+			byUser[userID] = tally
+		} else if tally.displayName == "" && displayName != "" {
+			tally.displayName = displayName
+		}
+
+		uKey := matchEntityKey{id: userID, matchIndex: o.matchIndex}
+		if !seenUserMatches.Contains(uKey) {
+			seenUserMatches.Add(uKey)
+			tally.sharedMatches++
+			if o.won {
+				tally.wins++
+			} else {
+				tally.losses++
+			}
+		}
+
+		sesTally, sesExists := tally.sessions[o.sessionID]
+		if !sesExists {
+			sesTally = &companionSessionTally{
+				sessionID:      o.sessionID,
+				characterID:    o.characterID,
+				characterClass: charClass,
+				emblemURL:      emblemURL,
+			}
+			tally.sessions[o.sessionID] = sesTally
+		} else {
+			if sesTally.characterClass == "" && charClass != "" {
+				sesTally.characterClass = charClass
+			}
+			if sesTally.emblemURL == "" && emblemURL != "" {
+				sesTally.emblemURL = emblemURL
+			}
+		}
+
+		sKey := matchEntityKey{id: o.sessionID, matchIndex: o.matchIndex}
+		if !seenSessionMatches.Contains(sKey) {
+			seenSessionMatches.Add(sKey)
+			sesTally.sharedMatches++
+		}
+	}
+
+	companions := make([]api.SessionCompanion, 0, len(byUser))
+	for _, tally := range byUser {
+		sessions := make([]api.SessionCompanionSession, 0, len(tally.sessions))
+		for _, cs := range tally.sessions {
+			sessions = append(sessions, api.SessionCompanionSession{
+				SessionID:     cs.sessionID,
+				CharacterID:   cs.characterID,
+				Class:         ptr.NonEmpty(cs.characterClass),
+				EmblemURL:     ptr.NonEmpty(cs.emblemURL),
+				SharedMatches: cs.sharedMatches,
+			})
+		}
+		slices.SortFunc(sessions, func(a, b api.SessionCompanionSession) int {
+			return cmp.Or(
+				cmp.Compare(b.SharedMatches, a.SharedMatches),
+				strings.Compare(a.SessionID, b.SessionID),
+			)
+		})
+		companions = append(companions, api.SessionCompanion{
+			UserID:        tally.userID,
+			DisplayName:   tally.displayName,
+			SharedMatches: tally.sharedMatches,
+			Wins:          tally.wins,
+			Losses:        tally.losses,
+			Sessions:      sessions,
+		})
+	}
+
+	slices.SortFunc(companions, func(a, b api.SessionCompanion) int {
+		return cmp.Or(
+			cmp.Compare(b.SharedMatches, a.SharedMatches),
+			cmp.Compare(b.Wins, a.Wins),
+			strings.Compare(strings.ToLower(a.DisplayName), strings.ToLower(b.DisplayName)),
+			strings.Compare(a.UserID, b.UserID),
+		)
+	})
+	return companions
+}
+
 func emptySessionSummary() *api.SessionSummary {
-	return newSummaryAccumulator(0).buildSummary(make([]api.SessionWeaponSummary, 0))
+	return newSummaryAccumulator(0).buildSummary(
+		make([]api.SessionWeaponSummary, 0),
+		make([]api.SessionCompanion, 0),
+	)
+}
+
+func isPrivateActivity(details api.ActivityHistory) bool {
+	return details.IsPrivate != nil && *details.IsPrivate
+}
+
+func areFireteamCompanions(a, b api.PlayerStats) bool {
+	if !sameNonZeroFireteamID(a.FireTeamID, b.FireTeamID) {
+		return false
+	}
+	return sameTeamOrStanding(a, b)
+}
+
+func sameNonZeroFireteamID(a, b *api.StatsValuePair) bool {
+	aVal, aOK := statFloat(a)
+	bVal, bOK := statFloat(b)
+	if !aOK || !bOK || aVal == 0 || aVal != bVal {
+		return false
+	}
+	if a.DisplayValue != nil && *a.DisplayValue != "" &&
+		b.DisplayValue != nil && *b.DisplayValue != "" &&
+		*a.DisplayValue != *b.DisplayValue {
+		return false
+	}
+	return true
+}
+
+func sameTeamOrStanding(a, b api.PlayerStats) bool {
+	if aTeam, aOK := statFloat(a.Team); aOK {
+		if bTeam, bOK := statFloat(b.Team); bOK {
+			return aTeam == bTeam
+		}
+	}
+	aStanding, aOK := statFloat(a.Standing)
+	bStanding, bOK := statFloat(b.Standing)
+	return aOK && bOK && aStanding == bStanding
+}
+
+func firstNonEmpty(primary, fallback string) string {
+	if primary != "" {
+		return primary
+	}
+	return fallback
 }
 
 func isWin(stats api.PlayerStats) bool {
 	return stats.Standing != nil && stats.Standing.Value != nil && *stats.Standing.Value == 0
+}
+
+func statFloat(pair *api.StatsValuePair) (float64, bool) {
+	if pair == nil || pair.Value == nil {
+		return 0, false
+	}
+	return *pair.Value, true
 }
 
 func statInt(pair *api.StatsValuePair) int {

@@ -1,0 +1,36 @@
+type: object
+required:
+  - userId
+  - displayName
+  - sharedMatches
+  - wins
+  - losses
+  - sessions
+properties:
+  userId:
+    type: string
+    x-go-name: UserID
+    x-oapi-codegen-extra-tags:
+      firestore: userId
+  displayName:
+    type: string
+    x-oapi-codegen-extra-tags:
+      firestore: displayName
+  sharedMatches:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: sharedMatches
+  wins:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: wins
+  losses:
+    type: integer
+    x-oapi-codegen-extra-tags:
+      firestore: losses
+  sessions:
+    type: array
+    items:
+      $ref: ./SessionCompanionSession.yaml
+    x-oapi-codegen-extra-tags:
+      firestore: sessions

@@ -180,6 +180,27 @@ func toAPISessionSummary(sum *fireteam.SessionSummary) *api.SessionSummary {
 			Kills: new(w.Kills),
 		})
 	}
+	companions := make([]api.SessionCompanion, 0, len(sum.Companions))
+	for _, c := range sum.Companions {
+		sessions := make([]api.SessionCompanionSession, 0, len(c.Sessions))
+		for _, cs := range c.Sessions {
+			sessions = append(sessions, api.SessionCompanionSession{
+				SessionID:     cs.SessionID,
+				CharacterID:   cs.CharacterID,
+				Class:         ptr.NonEmpty(cs.Class),
+				EmblemURL:     ptr.NonEmpty(cs.EmblemURL),
+				SharedMatches: cs.SharedMatches,
+			})
+		}
+		companions = append(companions, api.SessionCompanion{
+			UserID:        c.UserID,
+			DisplayName:   c.DisplayName,
+			SharedMatches: c.SharedMatches,
+			Wins:          c.Wins,
+			Losses:        c.Losses,
+			Sessions:      sessions,
+		})
+	}
 	return &api.SessionSummary{
 		TotalMatches: new(sum.TotalMatches),
 		Wins:         new(sum.Wins),
@@ -192,6 +213,7 @@ func toAPISessionSummary(sum *fireteam.SessionSummary) *api.SessionSummary {
 		KDARatio:     new(sum.KDARatio),
 		ModesPlayed:  &modes,
 		TopWeapons:   &weapons,
+		Companions:   &companions,
 	}
 }
 

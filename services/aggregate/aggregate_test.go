@@ -162,6 +162,43 @@ func (m *memAggregateStore) createAggregate(_ context.Context, agg api.Aggregate
 	return agg, nil
 }
 
+func (m *memAggregateStore) listBySessionID(_ context.Context, sessionID string) ([]api.Aggregate, error) {
+	out := make([]api.Aggregate, 0)
+	for _, doc := range m.docs {
+		if slices.Contains(doc.SessionIds, sessionID) {
+			out = append(out, cloneAggregate(doc))
+		}
+	}
+	return out, nil
+}
+
+func (m *memAggregateStore) detachSession(_ context.Context, aggregateID string, sessionID string, linkCharacterIDs []string) error {
+	doc, ok := m.docs[aggregateID]
+	if !ok {
+		return NotFound
+	}
+	doc.SessionIds = slices.DeleteFunc(slices.Clone(doc.SessionIds), func(id string) bool {
+		return id == sessionID
+	})
+	if doc.SnapshotLinks != nil {
+		links := make(map[string]api.SnapshotLink, len(doc.SnapshotLinks))
+		for k, v := range doc.SnapshotLinks {
+			if slices.Contains(linkCharacterIDs, k) {
+				v.SessionID = nil
+			}
+			links[k] = v
+		}
+		doc.SnapshotLinks = links
+	}
+	m.docs[aggregateID] = doc
+	return nil
+}
+
+func (m *memAggregateStore) deleteAggregate(_ context.Context, aggregateID string) error {
+	delete(m.docs, aggregateID)
+	return nil
+}
+
 func TestUpsertSessionActivity(t *testing.T) {
 	ctx := context.Background()
 
@@ -256,6 +293,92 @@ func TestUpsertSessionActivity(t *testing.T) {
 		}
 		if len(again.SessionIds) != 2 || len(again.SnapshotIds) != 2 || len(again.CharacterIds) != 2 {
 			t.Fatalf("expected deduplicated arrays of len 2, got sessions=%v snapshots=%v chars=%v", again.SessionIds, again.SnapshotIds, again.CharacterIds)
+		}
+	})
+}
+
+func TestRemoveSession(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("detaches session, deletes orphans, and returns deduplicated surviving siblings", func(t *testing.T) {
+		store := newMemAggregateStore()
+		store.docs["agg-shared-1"] = api.Aggregate{
+			ID:          "agg-shared-1",
+			ActivityID:  "act-1",
+			SessionIds:  []string{"ses-a", "ses-b"},
+			SnapshotIds: []string{"snap-a", "snap-b"},
+			SnapshotLinks: map[string]api.SnapshotLink{
+				"char-a": {CharacterID: "char-a", SessionID: new("ses-a"), SnapshotID: new("snap-a")},
+				"char-b": {CharacterID: "char-b", SessionID: new("ses-b"), SnapshotID: new("snap-b")},
+			},
+		}
+		store.docs["agg-shared-2"] = api.Aggregate{
+			ID:          "agg-shared-2",
+			ActivityID:  "act-2",
+			SessionIds:  []string{"ses-a", "ses-b", "ses-c"},
+			SnapshotIds: []string{"snap-a", "snap-b", "snap-c"},
+			SnapshotLinks: map[string]api.SnapshotLink{
+				"char-a": {CharacterID: "char-a", SessionID: new("ses-a"), SnapshotID: new("snap-a")},
+				"char-b": {CharacterID: "char-b", SessionID: new("ses-b"), SnapshotID: new("snap-b")},
+				"char-c": {CharacterID: "char-c", SessionID: new("ses-c"), SnapshotID: new("snap-c")},
+			},
+		}
+		store.docs["agg-orphan"] = api.Aggregate{
+			ID:         "agg-orphan",
+			ActivityID: "act-3",
+			SessionIds: []string{"ses-b"},
+			SnapshotLinks: map[string]api.SnapshotLink{
+				"char-b": {CharacterID: "char-b", SessionID: new("ses-b")},
+			},
+		}
+		store.docs["agg-snapshot-only"] = api.Aggregate{
+			ID:          "agg-snapshot-only",
+			ActivityID:  "act-4",
+			SessionIds:  []string{"ses-b"},
+			SnapshotIds: []string{"snap-b"},
+			SnapshotLinks: map[string]api.SnapshotLink{
+				"char-b": {CharacterID: "char-b", SessionID: new("ses-b"), SnapshotID: new("snap-b")},
+			},
+		}
+
+		svc := &service{store: store}
+		siblings, err := svc.RemoveSession(ctx, "ses-b")
+		if err != nil {
+			t.Fatalf("RemoveSession failed: %v", err)
+		}
+
+		slices.Sort(siblings)
+		if !slices.Equal(siblings, []string{"ses-a", "ses-c"}) {
+			t.Fatalf("expected surviving siblings [ses-a ses-c], got %v", siblings)
+		}
+
+		if _, exists := store.docs["agg-orphan"]; exists {
+			t.Fatal("expected orphaned aggregate to be deleted")
+		}
+		if _, exists := store.docs["agg-snapshot-only"]; !exists {
+			t.Fatal("expected snapshot-backed aggregate to survive session deletion")
+		}
+		if store.docs["agg-snapshot-only"].SnapshotLinks["char-b"].SessionID != nil {
+			t.Fatalf("expected char-b sessionId cleared on snapshot-only aggregate, got %v", store.docs["agg-snapshot-only"].SnapshotLinks["char-b"].SessionID)
+		}
+
+		shared1 := store.docs["agg-shared-1"]
+		if !slices.Equal(shared1.SessionIds, []string{"ses-a"}) {
+			t.Fatalf("expected agg-shared-1 SessionIds=[ses-a], got %v", shared1.SessionIds)
+		}
+		if shared1.SnapshotLinks["char-b"].SessionID != nil {
+			t.Fatalf("expected char-b sessionId cleared on agg-shared-1, got %v", shared1.SnapshotLinks["char-b"].SessionID)
+		}
+		if shared1.SnapshotLinks["char-a"].SessionID == nil || *shared1.SnapshotLinks["char-a"].SessionID != "ses-a" {
+			t.Fatalf("expected char-a sessionId preserved on agg-shared-1, got %+v", shared1.SnapshotLinks["char-a"])
+		}
+	})
+
+	t.Run("empty sessionID is a no-op", func(t *testing.T) {
+		svc := &service{store: newMemAggregateStore()}
+		siblings, err := svc.RemoveSession(ctx, "")
+		if err != nil || len(siblings) != 0 {
+			t.Fatalf("expected nil siblings and nil err, got siblings=%v err=%v", siblings, err)
 		}
 	})
 }

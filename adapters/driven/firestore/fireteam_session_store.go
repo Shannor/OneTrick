@@ -63,8 +63,26 @@ type sessionWeaponSummaryDoc struct {
 	Name  *string `firestore:"name"`
 }
 
+type sessionCompanionSessionDoc struct {
+	CharacterID   string  `firestore:"characterId"`
+	Class         *string `firestore:"class,omitempty"`
+	EmblemURL     *string `firestore:"emblemUrl,omitempty"`
+	SessionID     string  `firestore:"sessionId"`
+	SharedMatches int     `firestore:"sharedMatches"`
+}
+
+type sessionCompanionDoc struct {
+	DisplayName   string                       `firestore:"displayName"`
+	Losses        int                          `firestore:"losses"`
+	Sessions      []sessionCompanionSessionDoc `firestore:"sessions"`
+	SharedMatches int                          `firestore:"sharedMatches"`
+	UserID        string                       `firestore:"userId"`
+	Wins          int                          `firestore:"wins"`
+}
+
 type sessionSummaryDoc struct {
 	Assists      *int                       `firestore:"assists"`
+	Companions   *[]sessionCompanionDoc     `firestore:"companions"`
 	Deaths       *int                       `firestore:"deaths"`
 	KDRatio      *float64                   `firestore:"kdRatio"`
 	KDARatio     *float64                   `firestore:"kdaRatio"`
@@ -387,6 +405,27 @@ func toSessionSummaryDoc(sum *corefireteam.SessionSummary) *sessionSummaryDoc {
 			Kills: new(w.Kills),
 		})
 	}
+	companions := make([]sessionCompanionDoc, 0, len(sum.Companions))
+	for _, c := range sum.Companions {
+		sessions := make([]sessionCompanionSessionDoc, 0, len(c.Sessions))
+		for _, cs := range c.Sessions {
+			sessions = append(sessions, sessionCompanionSessionDoc{
+				SessionID:     cs.SessionID,
+				CharacterID:   cs.CharacterID,
+				Class:         ptr.NonEmpty(cs.Class),
+				EmblemURL:     ptr.NonEmpty(cs.EmblemURL),
+				SharedMatches: cs.SharedMatches,
+			})
+		}
+		companions = append(companions, sessionCompanionDoc{
+			UserID:        c.UserID,
+			DisplayName:   c.DisplayName,
+			SharedMatches: c.SharedMatches,
+			Wins:          c.Wins,
+			Losses:        c.Losses,
+			Sessions:      sessions,
+		})
+	}
 	return &sessionSummaryDoc{
 		TotalMatches: new(sum.TotalMatches),
 		Wins:         new(sum.Wins),
@@ -399,6 +438,7 @@ func toSessionSummaryDoc(sum *corefireteam.SessionSummary) *sessionSummaryDoc {
 		KDARatio:     new(sum.KDARatio),
 		ModesPlayed:  &modes,
 		TopWeapons:   &weapons,
+		Companions:   &companions,
 	}
 }
 
@@ -418,6 +458,7 @@ func fromSessionSummaryDoc(sum *sessionSummaryDoc) *corefireteam.SessionSummary 
 		KDARatio:     ptr.Deref(sum.KDARatio),
 		ModesPlayed:  make([]string, 0),
 		TopWeapons:   make([]corefireteam.SessionWeaponSummary, 0),
+		Companions:   make([]corefireteam.SessionCompanion, 0),
 	}
 	if sum.ModesPlayed != nil {
 		out.ModesPlayed = append(out.ModesPlayed, (*sum.ModesPlayed)...)
@@ -429,6 +470,29 @@ func fromSessionSummaryDoc(sum *sessionSummaryDoc) *corefireteam.SessionSummary 
 				Name:  ptr.Deref(w.Name),
 				Icon:  ptr.Deref(w.Icon),
 				Kills: ptr.Deref(w.Kills),
+			})
+		}
+	}
+	if sum.Companions != nil {
+		out.Companions = make([]corefireteam.SessionCompanion, 0, len(*sum.Companions))
+		for _, c := range *sum.Companions {
+			sessions := make([]corefireteam.SessionCompanionSession, 0, len(c.Sessions))
+			for _, cs := range c.Sessions {
+				sessions = append(sessions, corefireteam.SessionCompanionSession{
+					SessionID:     cs.SessionID,
+					CharacterID:   cs.CharacterID,
+					Class:         ptr.Deref(cs.Class),
+					EmblemURL:     ptr.Deref(cs.EmblemURL),
+					SharedMatches: cs.SharedMatches,
+				})
+			}
+			out.Companions = append(out.Companions, corefireteam.SessionCompanion{
+				UserID:        c.UserID,
+				DisplayName:   c.DisplayName,
+				SharedMatches: c.SharedMatches,
+				Wins:          c.Wins,
+				Losses:        c.Losses,
+				Sessions:      sessions,
 			})
 		}
 	}
