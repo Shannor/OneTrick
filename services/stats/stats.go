@@ -248,7 +248,8 @@ func (s *service) GetSnapshotsWithMetrics(
 			return nil, nil, nil, nil, err
 		}
 		allSimilarCounts := ComputeSimilarCounts(allSnapshots)
-		paged := paginateSnapshots(allSnapshots, count, offset)
+		filtered := filterSnapshotsByGameModeAndMinGames(allSnapshots, nil, nil, 0)
+		paged := paginateSnapshots(filtered, count, offset)
 		clog.WithGroupField(ctx, "statsService.getSnapshotsWithMetrics", "returnedCount", len(paged))
 		return paged, nil, nil, buildPageSimilarCounts(paged, allSimilarCounts), nil
 	}

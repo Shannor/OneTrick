@@ -878,20 +878,30 @@ func TestGetSnapshotsWithMetricsConcurrentFetchAndFastPath(t *testing.T) {
 		}
 	})
 
-	t.Run("fast path skips statsStore when needsAggs is false and sortBy is created_at", func(t *testing.T) {
+	t.Run("fast path skips statsStore and excludes archived snapshots when needsAggs is false and sortBy is created_at", func(t *testing.T) {
 		store := &fakeStatsStore{}
-		snaps := &fakeSnapshotService{all: baseSnaps}
+		withArchived := append(slices.Clone(baseSnaps), api.CharacterSnapshot{
+			ID:           "snap-archived",
+			CharacterID:  "char-1",
+			CreatedAt:    now.Add(time.Minute),
+			MergedIntoID: new("snap-1"),
+			Loadout:      makeBaseTestLoadout("k1", "e1", 1, "p3", 10),
+		})
+		snaps := &fakeSnapshotService{all: withArchived}
 		svc := NewService(nil, store, snaps, nil, nil)
 
-		items, statsMap, countsMap, _, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "created_at", false, 10, 0)
+		items, statsMap, countsMap, simCounts, err := svc.GetSnapshotsWithMetrics(context.Background(), "user-1", "char-1", nil, 0, "created_at", false, 10, 0)
 		if err != nil {
 			t.Fatalf("fast-path GetSnapshotsWithMetrics failed: %v", err)
 		}
 		if store.calls.Load() != 0 {
 			t.Fatalf("expected statsStore not to be called on fast path, got %d calls", store.calls.Load())
 		}
-		if len(items) != 2 || statsMap != nil || countsMap != nil {
-			t.Fatalf("unexpected fast-path response: items=%d stats=%v counts=%v", len(items), statsMap, countsMap)
+		if len(items) != 2 || items[0].ID != "snap-1" || items[1].ID != "snap-2" || statsMap != nil || countsMap != nil {
+			t.Fatalf("unexpected fast-path response: items=%+v stats=%v counts=%v", items, statsMap, countsMap)
+		}
+		if simCounts == nil || len(*simCounts) != 0 {
+			t.Fatalf("expected empty similarCounts when only archived peer matches, got %+v", simCounts)
 		}
 	})
 
