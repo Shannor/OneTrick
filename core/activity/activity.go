@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"oneTrick/core/gamemode"
 	"oneTrick/set"
 	"slices"
 	"strconv"
@@ -139,28 +138,11 @@ func (s *service) resolveActivityInfo(
 	if hasAgg {
 		return agg.ActivityDetails
 	}
+	if s.manifest == nil {
+		return report.ToActivityInfo(activityID, ActivityManifest{}, ActivityManifest{}, "")
+	}
 
 	details := report.ActivityDetails
-	instanceID := details.InstanceID
-	if instanceID == "" {
-		instanceID = activityID
-	}
-
-	info := ActivityInfo{
-		ReferenceID:  details.ReferenceID,
-		ActivityHash: details.DirectorActivityHash,
-		InstanceID:   instanceID,
-		Period:       report.Period,
-		IsPrivate:    details.IsPrivate,
-		HasIsPrivate: details.HasIsPrivate,
-		Mode:         details.ModeName,
-	}
-
-	if s.manifest == nil {
-		info.EstimatedGameMode = gamemode.EstimateName(info.Mode, info.Activity)
-		return info
-	}
-
 	var refDef, dirDef ActivityManifest
 	if hashes := details.ManifestActivityHashes(); len(hashes) > 0 {
 		defs, err := s.manifest.GetActivitiesByIDs(ctx, hashes)
@@ -174,8 +156,7 @@ func (s *service) resolveActivityInfo(
 		}
 	}
 
-	info.ApplyManifest(refDef, dirDef)
-
+	var activityIcon string
 	modeHash := dirDef.DirectActivityModeHash
 	if modeHash == 0 {
 		modeHash = refDef.DirectActivityModeHash
@@ -187,11 +168,11 @@ func (s *service) resolveActivityInfo(
 				"manifestModeWarning": err.Error(),
 			})
 		} else if ok {
-			info.ActivityIcon = modeDef.IconURL
+			activityIcon = modeDef.IconURL
 		}
 	}
 
-	return info
+	return report.ToActivityInfo(activityID, refDef, dirDef, activityIcon)
 }
 
 func (s *service) fetchItemDefinitions(ctx context.Context, report CarnageReport) map[int64]ItemManifest {

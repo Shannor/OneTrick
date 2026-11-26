@@ -440,36 +440,38 @@ func (m ItemManifest) ToWeaponDisplay() WeaponDisplay {
 	}
 }
 
-func (w *WeaponMetrics) ApplyManifest(def ItemManifest) {
-	w.HasDisplay = true
-	w.Display = def.ToWeaponDisplay()
-	w.BucketHash = def.BucketHash
-	w.ItemTypeDisplayName = def.ItemTypeDisplayName
-}
+func (w CarnageWeapon) ToMetrics(def ItemManifest, hasDef bool, stored WeaponMetrics, hasStored bool) WeaponMetrics {
+	var (
+		display    WeaponDisplay
+		bucketHash int64
+		itemType   string
+	)
+	if hasDef {
+		display = def.ToWeaponDisplay()
+		bucketHash = def.BucketHash
+		itemType = def.ItemTypeDisplayName
+	}
 
-func (w *WeaponMetrics) MergeStoredProperties(stored WeaponMetrics) {
-	if stored.Properties == nil {
-		return
+	var props *ItemProperties
+	if hasStored && stored.Properties != nil {
+		props = stored.Properties
+		if bucketHash == 0 && props.BaseInfo.BucketHash != 0 {
+			bucketHash = props.BaseInfo.BucketHash
+		}
+		if itemType == "" && props.BaseInfo.ItemTypeDisplayName != "" {
+			itemType = props.BaseInfo.ItemTypeDisplayName
+		}
 	}
-	w.Properties = stored.Properties
-	if w.BucketHash == 0 && stored.Properties.BaseInfo.BucketHash != 0 {
-		w.BucketHash = stored.Properties.BaseInfo.BucketHash
-	}
-	if w.ItemTypeDisplayName == "" && stored.Properties.BaseInfo.ItemTypeDisplayName != "" {
-		w.ItemTypeDisplayName = stored.Properties.BaseInfo.ItemTypeDisplayName
-	}
-}
 
-func (info *ActivityInfo) ApplyManifest(refDef, dirDef ActivityManifest) {
-	info.Location = refDef.Name
-	info.Description = refDef.Description
-	info.ImageURL = refDef.PgcrImageURL
-	info.Activity = dirDef.Name
-	if info.Activity == "" {
-		info.Activity = refDef.Name
+	return WeaponMetrics{
+		ReferenceID:         w.ReferenceID,
+		Display:             display,
+		HasDisplay:          hasDef,
+		BucketHash:          bucketHash,
+		ItemTypeDisplayName: itemType,
+		Properties:          props,
+		Stats:               w.Stats,
 	}
-	info.Mode = gamemode.NormalizeModeName(info.Mode, dirDef.Name)
-	info.EstimatedGameMode = gamemode.EstimateName(info.Mode, info.Activity)
 }
 
 func (d CarnageActivityDetails) ManifestActivityHashes() []int64 {
@@ -481,6 +483,36 @@ func (d CarnageActivityDetails) ManifestActivityHashes() []int64 {
 		hashes.Add(d.DirectorActivityHash)
 	}
 	return hashes.ToSlice()
+}
+
+func (r CarnageReport) ToActivityInfo(fallbackID string, refDef, dirDef ActivityManifest, activityIcon string) ActivityInfo {
+	details := r.ActivityDetails
+	instanceID := details.InstanceID
+	if instanceID == "" {
+		instanceID = fallbackID
+	}
+
+	activityName := dirDef.Name
+	if activityName == "" {
+		activityName = refDef.Name
+	}
+
+	mode := gamemode.NormalizeModeName(details.ModeName, dirDef.Name)
+	return ActivityInfo{
+		ReferenceID:       details.ReferenceID,
+		ActivityHash:      details.DirectorActivityHash,
+		InstanceID:        instanceID,
+		Location:          refDef.Name,
+		Description:       refDef.Description,
+		Activity:          activityName,
+		ImageURL:          refDef.PgcrImageURL,
+		ActivityIcon:      activityIcon,
+		Period:            r.Period,
+		IsPrivate:         details.IsPrivate,
+		HasIsPrivate:      details.HasIsPrivate,
+		Mode:              mode,
+		EstimatedGameMode: gamemode.EstimateName(mode, activityName),
+	}
 }
 
 func (r CarnageReport) HasTeams() bool {
@@ -559,19 +591,15 @@ func (e CarnageEntry) BuildPerformance(itemDefs map[int64]ItemManifest, storedPe
 			continue
 		}
 		key := strconv.FormatInt(w.ReferenceID, 10)
-		wm := WeaponMetrics{
-			ReferenceID: w.ReferenceID,
-			Stats:       w.Stats,
-		}
-		if def, ok := itemDefs[w.ReferenceID]; ok {
-			wm.ApplyManifest(def)
-		}
+		def, hasDef := itemDefs[w.ReferenceID]
+		var (
+			stored    WeaponMetrics
+			hasStored bool
+		)
 		if storedPerf != nil {
-			if storedWeapon, ok := storedPerf.Weapons[key]; ok {
-				wm.MergeStoredProperties(storedWeapon)
-			}
+			stored, hasStored = storedPerf.Weapons[key]
 		}
-		weapons[key] = wm
+		weapons[key] = w.ToMetrics(def, hasDef, stored, hasStored)
 	}
 	return Performance{
 		PlayerStats: e.PlayerStats,
