@@ -62,7 +62,7 @@ func TestFireteamSessionStoreDocRoundTrip(t *testing.T) {
 					SharedMatches: 2,
 					Wins:          2,
 					Losses:        0,
-					Sessions: []corefireteam.SessionCompanionSession{
+					Sessions: []corefireteam.CompanionInstance{
 						{
 							SessionID:     "ses-2",
 							CharacterID:   "char-2",

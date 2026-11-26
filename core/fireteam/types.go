@@ -155,7 +155,7 @@ type SessionWeaponSummary struct {
 	Kills int
 }
 
-type SessionCompanionSession struct {
+type CompanionInstance struct {
 	SessionID     string
 	CharacterID   string
 	Class         string
@@ -169,7 +169,7 @@ type SessionCompanion struct {
 	SharedMatches int
 	Wins          int
 	Losses        int
-	Sessions      []SessionCompanionSession
+	Sessions      []CompanionInstance
 }
 
 type SessionSummary struct {

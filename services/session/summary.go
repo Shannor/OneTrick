@@ -509,9 +509,9 @@ func (s service) buildCompanions(ctx context.Context, ses api.Session, obs []com
 
 	companions := make([]api.SessionCompanion, 0, len(byUser))
 	for _, tally := range byUser {
-		sessions := make([]api.SessionCompanionSession, 0, len(tally.sessions))
+		sessions := make([]api.CompanionInstance, 0, len(tally.sessions))
 		for _, cs := range tally.sessions {
-			sessions = append(sessions, api.SessionCompanionSession{
+			sessions = append(sessions, api.CompanionInstance{
 				SessionID:     cs.sessionID,
 				CharacterID:   cs.characterID,
 				Class:         ptr.NonEmpty(cs.characterClass),
@@ -519,7 +519,7 @@ func (s service) buildCompanions(ctx context.Context, ses api.Session, obs []com
 				SharedMatches: cs.sharedMatches,
 			})
 		}
-		slices.SortFunc(sessions, func(a, b api.SessionCompanionSession) int {
+		slices.SortFunc(sessions, func(a, b api.CompanionInstance) int {
 			return cmp.Or(
 				cmp.Compare(b.SharedMatches, a.SharedMatches),
 				strings.Compare(a.SessionID, b.SessionID),

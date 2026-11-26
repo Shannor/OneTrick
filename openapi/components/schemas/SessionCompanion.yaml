@@ -31,6 +31,6 @@ properties:
   sessions:
     type: array
     items:
-      $ref: ./SessionCompanionSession.yaml
+      $ref: ./CompanionInstance.yaml
     x-oapi-codegen-extra-tags:
       firestore: sessions

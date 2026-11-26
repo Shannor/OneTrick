@@ -1834,7 +1834,7 @@ components:
           type: integer
           x-oapi-codegen-extra-tags:
             firestore: kills
-    SessionCompanionSession:
+    CompanionInstance:
       type: object
       required:
         - sessionId
@@ -1898,7 +1898,7 @@ components:
         sessions:
           type: array
           items:
-            $ref: '#/components/schemas/SessionCompanionSession'
+            $ref: '#/components/schemas/CompanionInstance'
           x-oapi-codegen-extra-tags:
             firestore: sessions
     SessionSummary:

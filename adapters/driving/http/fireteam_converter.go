@@ -182,9 +182,9 @@ func toAPISessionSummary(sum *fireteam.SessionSummary) *api.SessionSummary {
 	}
 	companions := make([]api.SessionCompanion, 0, len(sum.Companions))
 	for _, c := range sum.Companions {
-		sessions := make([]api.SessionCompanionSession, 0, len(c.Sessions))
+		sessions := make([]api.CompanionInstance, 0, len(c.Sessions))
 		for _, cs := range c.Sessions {
-			sessions = append(sessions, api.SessionCompanionSession{
+			sessions = append(sessions, api.CompanionInstance{
 				SessionID:     cs.SessionID,
 				CharacterID:   cs.CharacterID,
 				Class:         ptr.NonEmpty(cs.Class),

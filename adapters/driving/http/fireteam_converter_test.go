@@ -137,7 +137,7 @@ func TestFireteamSessionConverters(t *testing.T) {
 							SharedMatches: 1,
 							Wins:          1,
 							Losses:        0,
-							Sessions: []fireteam.SessionCompanionSession{
+							Sessions: []fireteam.CompanionInstance{
 								{
 									SessionID:     "ses-1",
 									CharacterID:   "c-1",

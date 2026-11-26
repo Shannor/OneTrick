@@ -63,7 +63,7 @@ type sessionWeaponSummaryDoc struct {
 	Name  *string `firestore:"name"`
 }
 
-type sessionCompanionSessionDoc struct {
+type companionInstanceDoc struct {
 	CharacterID   string  `firestore:"characterId"`
 	Class         *string `firestore:"class,omitempty"`
 	EmblemURL     *string `firestore:"emblemUrl,omitempty"`
@@ -72,12 +72,12 @@ type sessionCompanionSessionDoc struct {
 }
 
 type sessionCompanionDoc struct {
-	DisplayName   string                       `firestore:"displayName"`
-	Losses        int                          `firestore:"losses"`
-	Sessions      []sessionCompanionSessionDoc `firestore:"sessions"`
-	SharedMatches int                          `firestore:"sharedMatches"`
-	UserID        string                       `firestore:"userId"`
-	Wins          int                          `firestore:"wins"`
+	DisplayName   string                 `firestore:"displayName"`
+	Losses        int                    `firestore:"losses"`
+	Sessions      []companionInstanceDoc `firestore:"sessions"`
+	SharedMatches int                    `firestore:"sharedMatches"`
+	UserID        string                 `firestore:"userId"`
+	Wins          int                    `firestore:"wins"`
 }
 
 type sessionSummaryDoc struct {
@@ -407,9 +407,9 @@ func toSessionSummaryDoc(sum *corefireteam.SessionSummary) *sessionSummaryDoc {
 	}
 	companions := make([]sessionCompanionDoc, 0, len(sum.Companions))
 	for _, c := range sum.Companions {
-		sessions := make([]sessionCompanionSessionDoc, 0, len(c.Sessions))
+		sessions := make([]companionInstanceDoc, 0, len(c.Sessions))
 		for _, cs := range c.Sessions {
-			sessions = append(sessions, sessionCompanionSessionDoc{
+			sessions = append(sessions, companionInstanceDoc{
 				SessionID:     cs.SessionID,
 				CharacterID:   cs.CharacterID,
 				Class:         ptr.NonEmpty(cs.Class),
@@ -476,9 +476,9 @@ func fromSessionSummaryDoc(sum *sessionSummaryDoc) *corefireteam.SessionSummary 
 	if sum.Companions != nil {
 		out.Companions = make([]corefireteam.SessionCompanion, 0, len(*sum.Companions))
 		for _, c := range *sum.Companions {
-			sessions := make([]corefireteam.SessionCompanionSession, 0, len(c.Sessions))
+			sessions := make([]corefireteam.CompanionInstance, 0, len(c.Sessions))
 			for _, cs := range c.Sessions {
-				sessions = append(sessions, corefireteam.SessionCompanionSession{
+				sessions = append(sessions, corefireteam.CompanionInstance{
 					SessionID:     cs.SessionID,
 					CharacterID:   cs.CharacterID,
 					Class:         ptr.Deref(cs.Class),
