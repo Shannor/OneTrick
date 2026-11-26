@@ -43,12 +43,10 @@ var classArmorBucketKey = strconv.FormatUint(uint64(destiny.ClassArmor), 10)
 var powerBucketKey = strconv.Itoa(destiny.Power)
 
 // ComputeSimilarCounts groups all active (non-archived) snapshots by their BaseIdentityKey
-// ("{kineticInstanceId}:{energyInstanceId}:{subclassItemHash}") and returns:
-//   - similarCounts: map of snapshot ID -> count of OTHER active mergeable snapshots on the character (len(group)-1)
-//   - peerGroups: map of snapshot ID -> slice of all active snapshot IDs in the same similarity group (including itself)
-func ComputeSimilarCounts(snapshots []api.CharacterSnapshot) (map[string]int, map[string][]string) {
+// ("{kineticInstanceId}:{energyInstanceId}:{subclassItemHash}") and returns a map of
+// snapshot ID -> count of other active mergeable snapshots on the character (len(group)-1).
+func ComputeSimilarCounts(snapshots []api.CharacterSnapshot) map[string]int {
 	similarCounts := make(map[string]int)
-	peerGroups := make(map[string][]string)
 
 	byKey := make(map[string][]string)
 	seen := make(map[string]struct{}, len(snapshots))
@@ -77,11 +75,10 @@ func ComputeSimilarCounts(snapshots []api.CharacterSnapshot) (map[string]int, ma
 		peerCount := len(ids) - 1
 		for _, id := range ids {
 			similarCounts[id] = peerCount
-			peerGroups[id] = ids
 		}
 	}
 
-	return similarCounts, peerGroups
+	return similarCounts
 }
 
 // CompareSimilarLoadout classifies a candidate snapshot against a target snapshot ('high' vs 'base')

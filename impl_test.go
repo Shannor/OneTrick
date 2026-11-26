@@ -338,17 +338,16 @@ func TestGetUserSessionsEmptyCharacterID(t *testing.T) {
 
 type mockStatsService struct {
 	stats.Service
-	capturedCount        int
-	capturedOffset       int
-	capturedGameMode     *api.GameMode
-	capturedHasSimilar   bool
-	capturedCharacterID  string
-	capturedMinimumGames int
-	capturedLimit        int
-	bestLoadouts         []api.CharacterSnapshot
-	bestStats            map[string]api.PlayerStats
-	bestCounts           map[string]int
-	bestErr              error
+	capturedCount         int
+	capturedOffset        int
+	capturedGameMode      *api.GameMode
+	capturedCharacterID   string
+	capturedMinimumGames  int
+	capturedLimit         int
+	bestLoadouts          []api.CharacterSnapshot
+	bestStats             map[string]api.PlayerStats
+	bestCounts            map[string]int
+	bestErr               error
 	similarCountsResp     *map[string]int
 	similarTarget         *api.CharacterSnapshot
 	similarItems          []api.SimilarSnapshotItem
@@ -383,14 +382,12 @@ func (m *mockStatsService) GetSnapshotsWithMetrics(
 	minimumGames int,
 	sortBy string,
 	includeStats bool,
-	hasSimilar bool,
 	count int,
 	offset int,
 ) ([]api.CharacterSnapshot, *map[string]api.PlayerStats, *map[string]int, *map[string]int, error) {
 	m.capturedCount = count
 	m.capturedOffset = offset
 	m.capturedGameMode = gameMode
-	m.capturedHasSimilar = hasSimilar
 	return []api.CharacterSnapshot{}, nil, nil, m.similarCountsResp, nil
 }
 
@@ -768,7 +765,7 @@ func TestMergeSnapshotsSingleAndBatchRequestValidation(t *testing.T) {
 	})
 }
 
-func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
+func TestGetSimilarSnapshotsAndSimilarCountsHandler(t *testing.T) {
 	t.Run("returns 404 when target not found", func(t *testing.T) {
 		server := Server{StatsService: &mockStatsService{similarErr: snapshot.NotFound}}
 		resp, err := server.GetSimilarSnapshots(context.Background(), api.GetSimilarSnapshotsRequestObject{
@@ -882,7 +879,7 @@ func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("GetSnapshots forwards hasSimilar and returns similarCounts", func(t *testing.T) {
+	t.Run("GetSnapshots returns similarCounts", func(t *testing.T) {
 		simCounts := map[string]int{"snap-a": 2}
 		statsMock := &mockStatsService{similarCountsResp: &simCounts}
 		server := Server{StatsService: statsMock}
@@ -891,14 +888,10 @@ func TestGetSimilarSnapshotsAndHasSimilarHandler(t *testing.T) {
 			Params: api.GetSnapshotsParams{
 				UserID:      "u1",
 				CharacterID: "c1",
-				HasSimilar:  new(true),
 			},
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
-		}
-		if !statsMock.capturedHasSimilar {
-			t.Fatal("expected hasSimilar=true to be forwarded to StatsService")
 		}
 		okResp, ok := resp.(api.GetSnapshots200JSONResponse)
 		if !ok {
@@ -993,7 +986,7 @@ func TestHTTPRouterOpenAPIMiddlewareEndpoints(t *testing.T) {
 		}
 	})
 
-	t.Run("GET /snapshots accepts hasSimilar query param", func(t *testing.T) {
+	t.Run("GET /snapshots ignores unknown legacy query params", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/snapshots?userId=u1&characterId=c1&hasSimilar=true", nil)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
