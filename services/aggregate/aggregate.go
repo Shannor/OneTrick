@@ -401,19 +401,19 @@ func (s *service) RemoveSession(ctx context.Context, sessionID string) ([]string
 	updatedCount := 0
 	survivingSiblings := set.NewOrdered[string]()
 	for _, agg := range aggs {
-		cleaned, removedCharIDs, surviving := stripSessionFromAggregate(agg, sessionID)
-		if isTypedAggregateOrphaned(cleaned) {
+		plan := stripSessionFromAggregate(agg, sessionID)
+		if isTypedAggregateOrphaned(plan.cleaned) {
 			if err := s.store.deleteAggregate(ctx, agg.ID); err != nil {
 				return nil, fmt.Errorf("failed to delete orphaned aggregate %s: %w", agg.ID, err)
 			}
 			deletedOrphans++
 			continue
 		}
-		if err := s.store.detachSession(ctx, agg.ID, sessionID, removedCharIDs); err != nil {
+		if err := s.store.detachSession(ctx, agg.ID, sessionID, plan.clearSessionCharIDs, plan.removeCharIDs); err != nil {
 			return nil, fmt.Errorf("failed to update aggregate %s: %w", agg.ID, err)
 		}
 		updatedCount++
-		for _, siblingID := range surviving {
+		for _, siblingID := range plan.survivingSessionIDs {
 			survivingSiblings.Add(siblingID)
 		}
 	}
@@ -428,7 +428,14 @@ func (s *service) RemoveSession(ctx context.Context, sessionID string) ([]string
 	return siblings, nil
 }
 
-func stripSessionFromAggregate(agg api.Aggregate, sessionID string) (api.Aggregate, []string, []string) {
+type sessionDetachPlan struct {
+	cleaned             api.Aggregate
+	clearSessionCharIDs []string
+	removeCharIDs       []string
+	survivingSessionIDs []string
+}
+
+func stripSessionFromAggregate(agg api.Aggregate, sessionID string) sessionDetachPlan {
 	cleaned := agg
 	remainingSessionIDs := make([]string, 0, len(agg.SessionIds))
 	surviving := set.NewOrdered[string]()
@@ -441,28 +448,65 @@ func stripSessionFromAggregate(agg api.Aggregate, sessionID string) (api.Aggrega
 	}
 	cleaned.SessionIds = remainingSessionIDs
 
-	var removedCharIDs []string
+	var clearSessionCharIDs []string
+	var removeCharIDs []string
+	removedSet := set.New[string]()
 	if len(agg.SnapshotLinks) > 0 {
 		cleanedLinks := make(map[string]api.SnapshotLink, len(agg.SnapshotLinks))
 		extraLinkSessions := make([]string, 0)
 		for charID, link := range agg.SnapshotLinks {
 			if link.SessionID != nil && *link.SessionID == sessionID {
-				link.SessionID = nil
-				removedCharIDs = append(removedCharIDs, charID)
-			} else if link.SessionID != nil && *link.SessionID != "" {
+				if link.SnapshotID != nil && *link.SnapshotID != "" {
+					link.SessionID = nil
+					cleanedLinks[charID] = link
+					clearSessionCharIDs = append(clearSessionCharIDs, charID)
+				} else {
+					removeCharIDs = append(removeCharIDs, charID)
+					removedSet.Add(charID)
+				}
+				continue
+			}
+			if link.SessionID != nil && *link.SessionID != "" {
 				extraLinkSessions = append(extraLinkSessions, *link.SessionID)
 			}
 			cleanedLinks[charID] = link
 		}
 		cleaned.SnapshotLinks = cleanedLinks
-		slices.Sort(removedCharIDs)
+		slices.Sort(clearSessionCharIDs)
+		slices.Sort(removeCharIDs)
 		slices.Sort(extraLinkSessions)
 		for _, sid := range extraLinkSessions {
 			surviving.Add(sid)
 		}
 	}
 
-	return cleaned, removedCharIDs, surviving.ToSlice()
+	if removedSet.Size() > 0 {
+		if len(agg.CharacterIds) > 0 {
+			remainingCharIDs := make([]string, 0, len(agg.CharacterIds))
+			for _, cid := range agg.CharacterIds {
+				if !removedSet.Contains(cid) {
+					remainingCharIDs = append(remainingCharIDs, cid)
+				}
+			}
+			cleaned.CharacterIds = remainingCharIDs
+		}
+		if len(agg.Performance) > 0 {
+			cleanedPerf := make(map[string]api.InstancePerformance, len(agg.Performance))
+			for cid, perf := range agg.Performance {
+				if !removedSet.Contains(cid) {
+					cleanedPerf[cid] = perf
+				}
+			}
+			cleaned.Performance = cleanedPerf
+		}
+	}
+
+	return sessionDetachPlan{
+		cleaned:             cleaned,
+		clearSessionCharIDs: clearSessionCharIDs,
+		removeCharIDs:       removeCharIDs,
+		survivingSessionIDs: surviving.ToSlice(),
+	}
 }
 
 func isTypedAggregateOrphaned(agg api.Aggregate) bool {

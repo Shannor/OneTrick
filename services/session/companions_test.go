@@ -100,6 +100,18 @@ func TestAreFireteamCompanions(t *testing.T) {
 			b:    api.PlayerStats{FireTeamID: statVal(777)},
 			want: false,
 		},
+		{
+			name: "FFA negative team sentinel (-1) is never a companion even with same fireteam id",
+			a:    api.PlayerStats{FireTeamID: statPair(99001, "99001"), Team: statVal(-1), Standing: statVal(0)},
+			b:    api.PlayerStats{FireTeamID: statPair(99001, "99001"), Team: statVal(-1), Standing: statVal(0)},
+			want: false,
+		},
+		{
+			name: "single negative team sentinel (-1) does not fall back to standing",
+			a:    api.PlayerStats{FireTeamID: statPair(99001, "99001"), Team: statVal(-1), Standing: statVal(0)},
+			b:    api.PlayerStats{FireTeamID: statPair(99001, "99001"), Standing: statVal(0)},
+			want: false,
+		},
 	}
 
 	for _, tc := range tests {

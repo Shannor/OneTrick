@@ -172,7 +172,7 @@ func (m *memAggregateStore) listBySessionID(_ context.Context, sessionID string)
 	return out, nil
 }
 
-func (m *memAggregateStore) detachSession(_ context.Context, aggregateID string, sessionID string, linkCharacterIDs []string) error {
+func (m *memAggregateStore) detachSession(_ context.Context, aggregateID string, sessionID string, clearSessionCharIDs, removeCharIDs []string) error {
 	doc, ok := m.docs[aggregateID]
 	if !ok {
 		return NotFound
@@ -180,10 +180,28 @@ func (m *memAggregateStore) detachSession(_ context.Context, aggregateID string,
 	doc.SessionIds = slices.DeleteFunc(slices.Clone(doc.SessionIds), func(id string) bool {
 		return id == sessionID
 	})
+	if len(removeCharIDs) > 0 {
+		doc.CharacterIds = slices.DeleteFunc(slices.Clone(doc.CharacterIds), func(cid string) bool {
+			return slices.Contains(removeCharIDs, cid)
+		})
+		if doc.Performance != nil {
+			perf := make(map[string]api.InstancePerformance, len(doc.Performance))
+			for k, v := range doc.Performance {
+				if slices.Contains(removeCharIDs, k) {
+					continue
+				}
+				perf[k] = v
+			}
+			doc.Performance = perf
+		}
+	}
 	if doc.SnapshotLinks != nil {
 		links := make(map[string]api.SnapshotLink, len(doc.SnapshotLinks))
 		for k, v := range doc.SnapshotLinks {
-			if slices.Contains(linkCharacterIDs, k) {
+			if slices.Contains(removeCharIDs, k) {
+				continue
+			}
+			if slices.Contains(clearSessionCharIDs, k) {
 				v.SessionID = nil
 			}
 			links[k] = v
@@ -371,6 +389,78 @@ func TestRemoveSession(t *testing.T) {
 		}
 		if shared1.SnapshotLinks["char-a"].SessionID == nil || *shared1.SnapshotLinks["char-a"].SessionID != "ses-a" {
 			t.Fatalf("expected char-a sessionId preserved on agg-shared-1, got %+v", shared1.SnapshotLinks["char-a"])
+		}
+	})
+
+	t.Run("removes unlinked session-only character from shared aggregate while preserving teammate and snapshot-backed characters", func(t *testing.T) {
+		store := newMemAggregateStore()
+		store.docs["agg-shared-unlinked"] = api.Aggregate{
+			ID:           "agg-shared-unlinked",
+			ActivityID:   "act-unlinked",
+			CharacterIds: []string{"char-a", "char-b"},
+			SessionIds:   []string{"ses-a", "ses-b"},
+			SnapshotIds:  []string{"snap-a"},
+			SnapshotLinks: map[string]api.SnapshotLink{
+				"char-a": {CharacterID: "char-a", SessionID: new("ses-a"), SnapshotID: new("snap-a")},
+				"char-b": {CharacterID: "char-b", SessionID: new("ses-b"), SnapshotID: nil},
+			},
+			Performance: map[string]api.InstancePerformance{
+				"char-a": {PlayerStats: api.PlayerStats{}},
+				"char-b": {PlayerStats: api.PlayerStats{}},
+			},
+		}
+		store.docs["agg-shared-snap"] = api.Aggregate{
+			ID:           "agg-shared-snap",
+			ActivityID:   "act-snap",
+			CharacterIds: []string{"char-a", "char-b"},
+			SessionIds:   []string{"ses-a", "ses-b"},
+			SnapshotIds:  []string{"snap-a", "snap-b"},
+			SnapshotLinks: map[string]api.SnapshotLink{
+				"char-a": {CharacterID: "char-a", SessionID: new("ses-a"), SnapshotID: new("snap-a")},
+				"char-b": {CharacterID: "char-b", SessionID: new("ses-b"), SnapshotID: new("snap-b")},
+			},
+			Performance: map[string]api.InstancePerformance{
+				"char-a": {PlayerStats: api.PlayerStats{}},
+				"char-b": {PlayerStats: api.PlayerStats{}},
+			},
+		}
+
+		svc := &service{store: store}
+		siblings, err := svc.RemoveSession(ctx, "ses-b")
+		if err != nil {
+			t.Fatalf("RemoveSession failed: %v", err)
+		}
+		if !slices.Equal(siblings, []string{"ses-a"}) {
+			t.Fatalf("expected surviving sibling [ses-a], got %v", siblings)
+		}
+
+		unlinked := store.docs["agg-shared-unlinked"]
+		if !slices.Equal(unlinked.CharacterIds, []string{"char-a"}) {
+			t.Fatalf("expected char-b removed from CharacterIds, got %v", unlinked.CharacterIds)
+		}
+		if _, exists := unlinked.SnapshotLinks["char-b"]; exists {
+			t.Fatalf("expected char-b removed from SnapshotLinks, got %+v", unlinked.SnapshotLinks)
+		}
+		if _, exists := unlinked.Performance["char-b"]; exists {
+			t.Fatalf("expected char-b removed from Performance, got %+v", unlinked.Performance)
+		}
+		if _, exists := unlinked.SnapshotLinks["char-a"]; !exists {
+			t.Fatalf("expected teammate char-a preserved in SnapshotLinks")
+		}
+		if _, exists := unlinked.Performance["char-a"]; !exists {
+			t.Fatalf("expected teammate char-a preserved in Performance")
+		}
+
+		snapped := store.docs["agg-shared-snap"]
+		if !slices.Equal(snapped.CharacterIds, []string{"char-a", "char-b"}) {
+			t.Fatalf("expected snapshot-backed char-b preserved in CharacterIds, got %v", snapped.CharacterIds)
+		}
+		linkB, exists := snapped.SnapshotLinks["char-b"]
+		if !exists || linkB.SessionID != nil || linkB.SnapshotID == nil || *linkB.SnapshotID != "snap-b" {
+			t.Fatalf("expected snapshot-backed char-b link preserved with nil SessionID, got exists=%v link=%+v", exists, linkB)
+		}
+		if _, exists := snapped.Performance["char-b"]; !exists {
+			t.Fatalf("expected snapshot-backed char-b preserved in Performance")
 		}
 	})
 

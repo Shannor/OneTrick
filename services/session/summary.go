@@ -579,10 +579,16 @@ func sameNonZeroFireteamID(a, b *api.StatsValuePair) bool {
 }
 
 func sameTeamOrStanding(a, b api.PlayerStats) bool {
-	if aTeam, aOK := statFloat(a.Team); aOK {
-		if bTeam, bOK := statFloat(b.Team); bOK {
-			return aTeam == bTeam
+	aTeam, aTeamOK := statFloat(a.Team)
+	bTeam, bTeamOK := statFloat(b.Team)
+	if aTeamOK && bTeamOK {
+		if aTeam < 0 || bTeam < 0 {
+			return false
 		}
+		return aTeam == bTeam
+	}
+	if (aTeamOK && aTeam < 0) || (bTeamOK && bTeam < 0) {
+		return false
 	}
 	aStanding, aOK := statFloat(a.Standing)
 	bStanding, bOK := statFloat(b.Standing)

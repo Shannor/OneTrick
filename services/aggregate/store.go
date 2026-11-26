@@ -22,7 +22,7 @@ type aggregateStore interface {
 		estimatedGameMode *api.GameMode,
 	) error
 	createAggregate(ctx context.Context, agg api.Aggregate) (api.Aggregate, error)
-	detachSession(ctx context.Context, aggregateID string, sessionID string, linkCharacterIDs []string) error
+	detachSession(ctx context.Context, aggregateID string, sessionID string, clearSessionCharIDs, removeCharIDs []string) error
 	deleteAggregate(ctx context.Context, aggregateID string) error
 }
 
@@ -119,13 +119,20 @@ func (f *firestoreAggregateStore) listBySessionID(ctx context.Context, sessionID
 	return aggs, nil
 }
 
-func (f *firestoreAggregateStore) detachSession(ctx context.Context, aggregateID string, sessionID string, linkCharacterIDs []string) error {
-	updates := make([]firestore.Update, 0, 1+len(linkCharacterIDs))
+func (f *firestoreAggregateStore) detachSession(ctx context.Context, aggregateID string, sessionID string, clearSessionCharIDs, removeCharIDs []string) error {
+	nonEmptyRemove := make([]string, 0, len(removeCharIDs))
+	for _, charID := range removeCharIDs {
+		if charID != "" {
+			nonEmptyRemove = append(nonEmptyRemove, charID)
+		}
+	}
+
+	updates := make([]firestore.Update, 0, 2+len(clearSessionCharIDs)+2*len(nonEmptyRemove))
 	updates = append(updates, firestore.Update{
 		Path:  "sessionIds",
 		Value: firestore.ArrayRemove(sessionID),
 	})
-	for _, charID := range linkCharacterIDs {
+	for _, charID := range clearSessionCharIDs {
 		if charID == "" {
 			continue
 		}
@@ -133,6 +140,24 @@ func (f *firestoreAggregateStore) detachSession(ctx context.Context, aggregateID
 			FieldPath: firestore.FieldPath{"snapshotLinks", charID, "sessionId"},
 			Value:     firestore.Delete,
 		})
+	}
+	if len(nonEmptyRemove) > 0 {
+		updates = append(updates, firestore.Update{
+			Path:  "characterIds",
+			Value: firestore.ArrayRemove(toInterfaceSlice(nonEmptyRemove)...),
+		})
+		for _, charID := range nonEmptyRemove {
+			updates = append(updates,
+				firestore.Update{
+					FieldPath: firestore.FieldPath{"snapshotLinks", charID},
+					Value:     firestore.Delete,
+				},
+				firestore.Update{
+					FieldPath: firestore.FieldPath{"performance", charID},
+					Value:     firestore.Delete,
+				},
+			)
+		}
 	}
 	_, err := f.db.Collection(collection).Doc(aggregateID).Update(ctx, updates)
 	return err
