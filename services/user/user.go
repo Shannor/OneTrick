@@ -16,6 +16,7 @@ import (
 
 type Service interface {
 	GetUser(ctx context.Context, ID string) (*User, error)
+	GetByIDs(ctx context.Context, userIDs []string) ([]User, error)
 	FindByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
 	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetMembershipType(ctx context.Context, userID string, membershipID string) (int64, error)
@@ -66,6 +67,14 @@ func (s *userService) GetUser(ctx context.Context, ID string) (*User, error) {
 	}
 	clog.WithGroupField(ctx, "userService.getUser", "userId", u.ID)
 	return u, nil
+}
+
+func (s *userService) GetByIDs(ctx context.Context, userIDs []string) ([]User, error) {
+	uniqueIDs := utils.UniqueTrimmedStrings(userIDs)
+	if s.store == nil || len(uniqueIDs) == 0 {
+		return []User{}, nil
+	}
+	return s.store.findUsersByIDs(ctx, uniqueIDs)
 }
 
 func (s *userService) FindByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error) {

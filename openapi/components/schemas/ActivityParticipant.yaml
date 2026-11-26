@@ -1,0 +1,74 @@
+type: object
+required:
+  - characterId
+  - membershipId
+  - membershipType
+  - displayName
+  - characterClass
+  - lightLevel
+  - standing
+  - completed
+  - performance
+properties:
+  characterId:
+    type: string
+    x-go-name: CharacterID
+    description: Destiny 2 character ID for this match participant.
+  membershipId:
+    type: string
+    x-go-name: MembershipID
+    description: Destiny 2 platform membership ID for this match participant.
+  membershipType:
+    type: integer
+    format: int32
+    description: Bungie membership type enum value for this participant's platform.
+  displayName:
+    type: string
+    description: Bungie global display name, falling back to platform display name.
+  displayNameCode:
+    type: string
+    description: Optional four-digit Bungie global display name code (e.g., "0042" or "1234"), without leading '#'.
+  characterClass:
+    type: string
+    description: Character class name (Hunter, Titan, or Warlock).
+  lightLevel:
+    type: integer
+    format: int32
+    description: Character light level during the match.
+  emblemIconUrl:
+    type: string
+    x-go-name: EmblemIconURL
+    description: Full Bungie CDN URL for the participant's equipped emblem icon, resolved from the Manifest.
+  teamId:
+    type: string
+    x-go-name: TeamID
+    description: Team ID matching teams[].id; omitted for free-for-all modes (e.g., Rumble).
+  standing:
+    type: integer
+    format: int32
+    description: Match standing (0 for Victory, 1 for Defeat, or placement rank in FFA modes).
+  score:
+    $ref: ./StatsValuePair.yaml
+  completed:
+    type: boolean
+    description: Whether the participant remained until the end of the match (false indicates DNF).
+  fireteamId:
+    type: string
+    x-go-name: FireteamID
+    description: Optional Bungie fireteam identifier shared by pre-made fireteam members.
+  performance:
+    $ref: ./InstancePerformance.yaml
+  userId:
+    type: string
+    x-go-name: UserID
+    description: 1 Trick user ID when this participant has a registered 1 Trick account.
+  sessionId:
+    type: string
+    x-go-name: SessionID
+    description: 1 Trick session ID when this match was tracked by a 1 Trick session for this character.
+  snapshotId:
+    type: string
+    x-go-name: SnapshotID
+    description: 1 Trick character snapshot ID when a loadout snapshot was matched for this character in this match.
+  confidenceLevel:
+    $ref: ./ConfidenceLevel.yaml

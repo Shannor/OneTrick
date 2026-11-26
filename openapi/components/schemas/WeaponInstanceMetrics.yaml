@@ -11,6 +11,17 @@ properties:
       firestore: referenceId
   display:
     $ref: ./Display.yaml
+  bucketHash:
+    type: integer
+    format: int64
+    description: Equipment slot bucket hash (e.g., Kinetic, Energy, Power) resolved from the Manifest.
+    x-oapi-codegen-extra-tags:
+      firestore: "bucketHash,omitempty"
+  itemTypeDisplayName:
+    type: string
+    description: Weapon archetype display name (e.g., Hand Cannon, Shotgun) resolved from the Manifest.
+    x-oapi-codegen-extra-tags:
+      firestore: "itemTypeDisplayName,omitempty"
   properties:
     $ref: ./ItemProperties.yaml
   stats:

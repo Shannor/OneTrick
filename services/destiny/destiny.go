@@ -533,6 +533,8 @@ func (a *service) GetPartyMembers(ctx context.Context, primaryMembershipId int64
 	return members, nil
 }
 
+const bungieErrorCodePGCRNotFound = 1653
+
 func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.PostGameCarnageReportData, []api.Team, error) {
 	id, err := strconv.ParseInt(activityID, 10, 64)
 	if err != nil {
@@ -544,6 +546,20 @@ func (a *service) GetActivity(ctx context.Context, activityID string) (*bungie.P
 	resp, err := a.Client.Destiny2GetPostGameCarnageReportWithResponse(ctx, id)
 	if err != nil {
 		return nil, nil, err
+	}
+	if resp.StatusCode() == http.StatusServiceUnavailable {
+		return nil, nil, ErrDestinyServerDown
+	}
+	if resp.StatusCode() == http.StatusNotFound {
+		return nil, nil, ErrActivityNotFound
+	}
+	if resp.JSON200 != nil && resp.JSON200.ErrorCode != nil {
+		switch *resp.JSON200.ErrorCode {
+		case bungieErrorCodeSystemDisabled:
+			return nil, nil, ErrDestinyServerDown
+		case bungieErrorCodePGCRNotFound:
+			return nil, nil, ErrActivityNotFound
+		}
 	}
 	if resp.JSON200 == nil || resp.JSON200.PostGameCarnageReportData == nil {
 		return nil, nil, fmt.Errorf("nil data response")

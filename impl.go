@@ -7,6 +7,7 @@ import (
 	"fmt"
 	httpadapter "oneTrick/adapters/driving/http"
 	"oneTrick/api"
+	"oneTrick/core/activity"
 	"oneTrick/core/fireteam"
 	"oneTrick/core/telemetry"
 	"oneTrick/services/aggregate"
@@ -22,7 +23,6 @@ import (
 	"time"
 
 	clog "github.com/Shannor/canonical-logger"
-	"github.com/fatih/structs"
 )
 
 // ensure that we've conformed to the `ServerInterface` with a compile-time check
@@ -39,6 +39,7 @@ type Server struct {
 	FireteamService   fireteam.Service
 	StatsService      stats.Service
 	TelemetryService  telemetry.Service
+	ActivityService   activity.Service
 	InternalAPIKey    string
 }
 
@@ -53,6 +54,7 @@ func NewServer(
 	manifestService destiny.ManifestService,
 	statsService stats.Service,
 	telemetrySvc telemetry.Service,
+	activitySvc activity.Service,
 	internalAPIKey string,
 ) Server {
 	return Server{
@@ -66,6 +68,7 @@ func NewServer(
 		D2ManifestService: manifestService,
 		StatsService:      statsService,
 		TelemetryService:  telemetrySvc,
+		ActivityService:   activitySvc,
 		InternalAPIKey:    internalAPIKey,
 	}
 }
@@ -1120,93 +1123,17 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 }
 
 func (s Server) GetActivity(ctx context.Context, request api.GetActivityRequestObject) (api.GetActivityResponseObject, error) {
-	activityID := request.ActivityID
+	reqFields := clog.Fields{"activityId": request.ActivityID}
+	if request.Params.CharacterID != nil && *request.Params.CharacterID != "" {
+		reqFields["characterId"] = *request.Params.CharacterID
+	}
+	clog.WithGroupFields(ctx, "request", reqFields)
 
-	clog.WithGroupField(ctx, "request", "activityId", activityID)
-	activityDetails, teams, err := s.D2Service.GetActivity(ctx, activityID)
+	report, err := s.ActivityService.GetActivity(ctx, request.ActivityID)
 	if err != nil {
-		return api.GetActivity500JSONResponse{Message: "failed to fetch weapon data for activity"}, nil
+		return httpadapter.ToAPIActivityError(err), nil
 	}
-	if activityDetails == nil {
-		return api.GetActivity500JSONResponse{Message: "no activity data"}, nil
-	}
-
-	// TODO: Come to fix this when no aggregate has been made for an activity
-	agg, err := s.AggregateService.GetAggregate(ctx, activityID)
-	if err != nil && !errors.Is(err, aggregate.NotFound) {
-		return api.GetActivity500JSONResponse{Message: err.Error()}, nil
-	}
-
-	entries := make([]map[string]any, 0)
-	for _, entry := range *activityDetails.Entries {
-		entries = append(entries, structs.Map(entry))
-	}
-
-	var snapshotIDS []string
-	for _, link := range agg.SnapshotLinks {
-		if link.SnapshotID == nil {
-			continue
-		}
-		snapshotIDS = append(snapshotIDS, *link.SnapshotID)
-	}
-
-	if len(snapshotIDS) == 0 {
-		// TODO: Technically, could still grab the users but not snapshots.
-		return api.GetActivity200JSONResponse{
-			Activity:        agg.ActivityDetails,
-			Teams:           teams,
-			Aggregate:       agg,
-			PostGameEntries: &entries,
-		}, nil
-	}
-
-	snapshots := make(map[string]api.CharacterSnapshot)
-	snaps, err := s.SnapshotService.GetByIDs(ctx, snapshotIDS)
-	if err != nil {
-		return api.GetActivity500JSONResponse{Message: err.Error()}, nil
-	}
-	for _, snap := range snaps {
-		snapshots[snap.CharacterID] = snap
-	}
-	// Build users map keyed by characterId when available
-	users := make(map[string]api.User)
-	for characterID, snap := range snapshots {
-		u, err := s.UserService.GetUser(ctx, snap.UserID)
-		if err != nil {
-			continue
-		}
-		if u == nil {
-			continue
-		}
-		// Map service user to API user
-		apiUser := api.User{
-			ID:                  u.ID,
-			MemberID:            u.MemberID,
-			PrimaryMembershipID: u.PrimaryMembershipID,
-			UniqueName:          u.UniqueName,
-			DisplayName:         u.DisplayName,
-			CreatedAt:           u.CreatedAt,
-			CharacterIDs:        u.CharacterIDs,
-		}
-		// memberships
-		if len(u.Memberships) > 0 {
-			ms := make([]api.Membership, 0, len(u.Memberships))
-			for _, m := range u.Memberships {
-				ms = append(ms, api.Membership{ID: m.ID, Type: m.Type, DisplayName: m.DisplayName})
-			}
-			apiUser.Memberships = ms
-		}
-		users[characterID] = apiUser
-	}
-	return api.GetActivity200JSONResponse{
-		Activity:        agg.ActivityDetails,
-		Teams:           teams,
-		Aggregate:       agg,
-		PostGameEntries: &entries,
-		Snapshots:       snapshots,
-		Users:           users,
-	}, nil
-
+	return httpadapter.ToAPIActivityResponse(report), nil
 }
 
 // Admin endpoint to backfill character IDs for all users
@@ -1295,4 +1222,3 @@ func (s Server) GetCharacterTelemetry(ctx context.Context, request api.GetCharac
 
 	return httpadapter.ToAPITelemetryResponse(result), nil
 }
-
