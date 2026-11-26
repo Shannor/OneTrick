@@ -26,6 +26,7 @@ const (
 
 type userStore interface {
 	findUserByLookupID(ctx context.Context, id string) (*User, error)
+	findUsersByIDs(ctx context.Context, userIDs []string) ([]User, error)
 	findUsersByPrefix(ctx context.Context, queryLower string, rawTrimmed string) ([]User, error)
 	findUsersByMembershipIDs(ctx context.Context, bungieNetIDs []string, primaryMembershipIDs []string) ([]User, error)
 	findUsersByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
@@ -76,6 +77,35 @@ func (f *firestoreUserStore) findUserByLookupID(ctx context.Context, id string) 
 		return &u, nil
 	}
 	return nil, NotFound
+}
+
+func (f *firestoreUserStore) findUsersByIDs(ctx context.Context, userIDs []string) ([]User, error) {
+	if f.db == nil {
+		return nil, nil
+	}
+	uniqueIDs := utils.UniqueTrimmedStrings(userIDs)
+	if len(uniqueIDs) == 0 {
+		return []User{}, nil
+	}
+
+	col := f.db.Collection(userCollection)
+	results := make([]User, 0, len(uniqueIDs))
+	for _, chunk := range utils.Chunk(uniqueIDs, firestoreInBatchLimit) {
+		refs := make([]*firestore.DocumentRef, len(chunk))
+		for i, id := range chunk {
+			refs[i] = col.Doc(id)
+		}
+		docs, err := f.db.GetAll(ctx, refs)
+		if err != nil {
+			return nil, err
+		}
+		chunkUsers, err := utils.GetAllToStructs[User](docs)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, chunkUsers...)
+	}
+	return results, nil
 }
 
 func (f *firestoreUserStore) evictLegacyUser(userID string) {

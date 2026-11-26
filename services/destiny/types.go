@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-var ErrDestinyServerDown = errors.New("destiny server is down")
+var (
+	ErrDestinyServerDown = errors.New("destiny server is down")
+	ErrActivityNotFound  = errors.New("activity not found")
+)
 
 type Manifest struct {
 	ArtDyeChannelDefinition                  map[string]any                       `json:"DestinyArtDyeChannelDefinition"`

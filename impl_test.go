@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/core/activity"
 	"oneTrick/core/fireteam"
 	"oneTrick/core/telemetry"
 	"oneTrick/logger"
@@ -2552,6 +2553,145 @@ func TestCompleteSessionHandler(t *testing.T) {
 		}
 		if sesMock.getCalls.Load() != 0 {
 			t.Fatalf("expected 0 Get calls when Complete fails, got %d", sesMock.getCalls.Load())
+		}
+	})
+}
+
+type mockActivityService struct {
+	report             activity.MatchReport
+	err                error
+	capturedActivityID string
+}
+
+func (m *mockActivityService) GetActivity(_ context.Context, activityID string) (activity.MatchReport, error) {
+	m.capturedActivityID = activityID
+	if m.err != nil {
+		return activity.MatchReport{}, m.err
+	}
+	return m.report, nil
+}
+
+func TestGetActivityHandler(t *testing.T) {
+	t.Run("returns 200 with participants and enriches clog request fields", func(t *testing.T) {
+		actMock := &mockActivityService{
+			report: activity.MatchReport{
+				Activity: activity.ActivityInfo{
+					InstanceID: "123456",
+					Location:   "Javelin-4",
+					Mode:       "Control",
+				},
+				Participants: []activity.Participant{
+					{
+						CharacterID:     "char-1",
+						MembershipID:    "mem-1",
+						MembershipType:  3,
+						DisplayName:     "Guardian",
+						DisplayNameCode: "1234",
+						CharacterClass:  "Hunter",
+						LightLevel:      2010,
+						TeamID:          "18",
+						Completed:       true,
+						UserID:          "user-1",
+						SessionID:       "ses-1",
+						SnapshotID:      "snap-1",
+						ConfidenceLevel: activity.ConfidenceHigh,
+					},
+				},
+			},
+		}
+		server := Server{ActivityService: actMock}
+		ctx := clog.NewContext(context.Background())
+
+		resp, err := server.GetActivity(ctx, api.GetActivityRequestObject{
+			ActivityID: "123456",
+			Params: api.GetActivityParams{
+				CharacterID: new("char-1"),
+			},
+		})
+		if err != nil {
+			t.Fatalf("GetActivity returned unexpected error: %v", err)
+		}
+		okResp, ok := resp.(api.GetActivity200JSONResponse)
+		if !ok {
+			t.Fatalf("expected GetActivity200JSONResponse, got %T", resp)
+		}
+		if actMock.capturedActivityID != "123456" {
+			t.Fatalf("expected activityId 123456 forwarded, got %q", actMock.capturedActivityID)
+		}
+		if len(okResp.Participants) != 1 || okResp.Participants[0].CharacterID != "char-1" {
+			t.Fatalf("unexpected participants in response: %+v", okResp.Participants)
+		}
+		if okResp.Participants[0].SnapshotID == nil || *okResp.Participants[0].SnapshotID != "snap-1" {
+			t.Fatalf("expected snapshotId snap-1, got %v", okResp.Participants[0].SnapshotID)
+		}
+		if !clog.BagFromContext(ctx).HasGroup("request") {
+			t.Fatal("expected request group enriched on GetActivity")
+		}
+	})
+
+	t.Run("maps domain sentinel errors to 400, 404, and 500 responses", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			err    error
+			assert func(t *testing.T, resp api.GetActivityResponseObject)
+		}{
+			{
+				name: "invalid activity ID -> 400",
+				err:  activity.ErrInvalidActivityID,
+				assert: func(t *testing.T, resp api.GetActivityResponseObject) {
+					if _, ok := resp.(api.GetActivity400JSONResponse); !ok {
+						t.Fatalf("expected GetActivity400JSONResponse, got %T", resp)
+					}
+				},
+			},
+			{
+				name: "not found -> 404",
+				err:  activity.ErrActivityNotFound,
+				assert: func(t *testing.T, resp api.GetActivityResponseObject) {
+					if _, ok := resp.(api.GetActivity404JSONResponse); !ok {
+						t.Fatalf("expected GetActivity404JSONResponse, got %T", resp)
+					}
+				},
+			},
+			{
+				name: "destiny unavailable -> 500 with ErrDestinyServerDown",
+				err:  activity.ErrDestinyUnavailable,
+				assert: func(t *testing.T, resp api.GetActivityResponseObject) {
+					r, ok := resp.(api.GetActivity500JSONResponse)
+					if !ok {
+						t.Fatalf("expected GetActivity500JSONResponse, got %T", resp)
+					}
+					if r.Status != api.ErrDestinyServerDown {
+						t.Fatalf("expected ErrDestinyServerDown, got %q", r.Status)
+					}
+				},
+			},
+			{
+				name: "unexpected error -> 500 with ErrInternalSystemDown",
+				err:  errors.New("boom"),
+				assert: func(t *testing.T, resp api.GetActivityResponseObject) {
+					r, ok := resp.(api.GetActivity500JSONResponse)
+					if !ok {
+						t.Fatalf("expected GetActivity500JSONResponse, got %T", resp)
+					}
+					if r.Status != api.ErrInternalSystemDown {
+						t.Fatalf("expected ErrInternalSystemDown, got %q", r.Status)
+					}
+				},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				server := Server{ActivityService: &mockActivityService{err: tc.err}}
+				resp, err := server.GetActivity(clog.NewContext(context.Background()), api.GetActivityRequestObject{
+					ActivityID: "123456",
+				})
+				if err != nil {
+					t.Fatalf("expected nil Go error (typed HTTP response), got %v", err)
+				}
+				tc.assert(t, resp)
+			})
 		}
 	})
 }

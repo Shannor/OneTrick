@@ -15,7 +15,7 @@ get:
       description: The unique identifier for the activity.
   responses:
     '200':
-      description: Array of used guns during an activity
+      description: Match details, teams, full participant roster, and 1 Trick tracking metadata for an activity
       content:
         application/json:
           schema:
@@ -23,6 +23,7 @@ get:
             required:
               - activity
               - teams
+              - participants
               - snapshots
               - users
             properties:
@@ -32,6 +33,10 @@ get:
                 type: array
                 items:
                   $ref: ../components/schemas/Team.yaml
+              participants:
+                type: array
+                items:
+                  $ref: ../components/schemas/ActivityParticipant.yaml
               aggregate:
                 $ref: ../components/schemas/Aggregate.yaml
               snapshots:
