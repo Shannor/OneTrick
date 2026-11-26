@@ -71,14 +71,14 @@ func (s *service) GetActivity(ctx context.Context, activityID string) (MatchRepo
 	}
 
 	activityInfo := s.resolveActivityInfo(ctx, trimmedID, report, agg, hasAgg)
-	itemDefs := s.fetchItemDefinitions(ctx, report.Entries)
+	itemDefs := s.fetchItemDefinitions(ctx, report)
 
 	snapshotsByChar, missingSnapshotCount, err := s.loadSnapshots(ctx, agg, hasAgg)
 	if err != nil {
 		return MatchReport{}, fmt.Errorf("load snapshots for activity %s: %w", trimmedID, err)
 	}
 
-	userIdx, err := s.resolveUsers(ctx, report.Entries, agg, hasAgg, snapshotsByChar)
+	userIdx, err := s.resolveUsers(ctx, report, agg, hasAgg, snapshotsByChar)
 	if err != nil {
 		return MatchReport{}, fmt.Errorf("resolve users for activity %s: %w", trimmedID, err)
 	}
@@ -213,27 +213,17 @@ func (s *service) resolveActivityInfo(
 	return info
 }
 
-func (s *service) fetchItemDefinitions(ctx context.Context, entries []CarnageEntry) map[int64]ItemManifest {
-	if s.manifest == nil || len(entries) == 0 {
+func (s *service) fetchItemDefinitions(ctx context.Context, report CarnageReport) map[int64]ItemManifest {
+	if s.manifest == nil {
 		return make(map[int64]ItemManifest)
 	}
 
-	hashes := set.NewOrdered[int64]()
-	for _, entry := range entries {
-		if entry.EmblemHash != 0 {
-			hashes.Add(entry.EmblemHash)
-		}
-		for _, w := range entry.Weapons {
-			if w.ReferenceID != 0 {
-				hashes.Add(w.ReferenceID)
-			}
-		}
-	}
-	if hashes.Size() == 0 {
+	hashes := report.ManifestItemIDs()
+	if len(hashes) == 0 {
 		return make(map[int64]ItemManifest)
 	}
 
-	defs, err := s.manifest.GetItemsByIDs(ctx, hashes.ToSlice())
+	defs, err := s.manifest.GetItemsByIDs(ctx, hashes)
 	if err != nil {
 		clog.WithGroupFields(ctx, "activityService.getActivity", clog.Fields{
 			"manifestItemsWarning": err.Error(),
@@ -252,21 +242,16 @@ func (s *service) loadSnapshots(
 	hasAgg bool,
 ) (map[string]CharacterSnapshot, int, error) {
 	snapshotsByChar := make(map[string]CharacterSnapshot)
-	if !hasAgg || len(agg.SnapshotLinks) == 0 || s.snapshots == nil {
+	if !hasAgg || s.snapshots == nil {
 		return snapshotsByChar, 0, nil
 	}
 
-	snapshotIDs := set.NewOrdered[string]()
-	for _, link := range agg.SnapshotLinks {
-		if id := strings.TrimSpace(link.SnapshotID); id != "" {
-			snapshotIDs.Add(id)
-		}
-	}
-	if snapshotIDs.Size() == 0 {
+	snapshotIDs := agg.UniqueSnapshotIDs()
+	if len(snapshotIDs) == 0 {
 		return snapshotsByChar, 0, nil
 	}
 
-	snaps, err := s.snapshots.GetByIDs(ctx, snapshotIDs.ToSlice())
+	snaps, err := s.snapshots.GetByIDs(ctx, snapshotIDs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -303,103 +288,131 @@ type userIndex struct {
 	byCharacterID  map[string]User
 }
 
-func buildUserIndex(userSlices ...[]User) userIndex {
-	total := 0
-	for _, s := range userSlices {
-		total += len(s)
+func newUserIndex(capacity int) userIndex {
+	return userIndex{
+		byID:           make(map[string]User, capacity),
+		byMembershipID: make(map[string]User, capacity*2),
+		byCharacterID:  make(map[string]User, capacity*3),
 	}
-	idx := userIndex{
-		byID:           make(map[string]User, total),
-		byMembershipID: make(map[string]User, total*2),
-		byCharacterID:  make(map[string]User, total*3),
-	}
-	for _, users := range userSlices {
-		for _, u := range users {
-			if id := strings.TrimSpace(u.ID); id != "" {
-				idx.byID[id] = u
-			}
-			if id := strings.TrimSpace(u.PrimaryMembershipID); id != "" {
+}
+
+func (idx *userIndex) add(users []User) {
+	for _, u := range users {
+		if id := strings.TrimSpace(u.ID); id != "" {
+			idx.byID[id] = u
+		}
+		if id := strings.TrimSpace(u.PrimaryMembershipID); id != "" {
+			idx.byMembershipID[id] = u
+		}
+		if id := strings.TrimSpace(u.MemberID); id != "" {
+			idx.byMembershipID[id] = u
+		}
+		for _, m := range u.Memberships {
+			if id := strings.TrimSpace(m.ID); id != "" {
 				idx.byMembershipID[id] = u
 			}
-			if id := strings.TrimSpace(u.MemberID); id != "" {
-				idx.byMembershipID[id] = u
-			}
-			for _, m := range u.Memberships {
-				if id := strings.TrimSpace(m.ID); id != "" {
-					idx.byMembershipID[id] = u
-				}
-			}
-			for _, cID := range u.CharacterIDs {
-				if id := strings.TrimSpace(cID); id != "" {
-					idx.byCharacterID[id] = u
-				}
+		}
+		for _, cID := range u.CharacterIDs {
+			if id := strings.TrimSpace(cID); id != "" {
+				idx.byCharacterID[id] = u
 			}
 		}
 	}
-	return idx
+}
+
+func (idx userIndex) hasID(userID string) bool {
+	_, ok := idx.byID[userID]
+	return ok
+}
+
+func (idx userIndex) resolveForParticipant(
+	charID string,
+	entry CarnageEntry,
+	link SnapshotLink,
+	hasLink bool,
+	snap CharacterSnapshot,
+	hasSnap bool,
+) (User, bool, string) {
+	if hasSnap {
+		if uid := strings.TrimSpace(snap.UserID); uid != "" {
+			if u, ok := idx.byID[uid]; ok {
+				return u, true, u.ID
+			}
+			return User{}, false, uid
+		}
+	}
+
+	if hasLink {
+		if uid := strings.TrimSpace(link.UserID); uid != "" {
+			if u, ok := idx.byID[uid]; ok {
+				return u, true, u.ID
+			}
+			return User{}, false, uid
+		}
+	}
+
+	if id := strings.TrimSpace(entry.MembershipID); id != "" {
+		if u, ok := idx.byMembershipID[id]; ok {
+			return u, true, u.ID
+		}
+	}
+	if id := strings.TrimSpace(entry.BungieNetMembershipID); id != "" {
+		if u, ok := idx.byMembershipID[id]; ok {
+			return u, true, u.ID
+		}
+	}
+	if u, ok := idx.byCharacterID[charID]; ok {
+		return u, true, u.ID
+	}
+	return User{}, false, ""
 }
 
 func (s *service) resolveUsers(
 	ctx context.Context,
-	entries []CarnageEntry,
+	report CarnageReport,
 	agg Aggregate,
 	hasAgg bool,
 	snapshotsByChar map[string]CharacterSnapshot,
 ) (userIndex, error) {
 	if s.users == nil {
-		return buildUserIndex(), nil
-	}
-
-	membershipIDs := set.NewOrdered[string]()
-	for _, entry := range entries {
-		if id := strings.TrimSpace(entry.MembershipID); id != "" {
-			membershipIDs.Add(id)
-		}
-		if id := strings.TrimSpace(entry.BungieNetMembershipID); id != "" {
-			membershipIDs.Add(id)
-		}
+		return newUserIndex(0), nil
 	}
 
 	var matchedUsers []User
-	if membershipIDs.Size() > 0 {
+	if membershipIDs := report.MembershipLookupIDs(); len(membershipIDs) > 0 {
 		var err error
-		matchedUsers, err = s.users.FindByPartyMembershipIDs(ctx, membershipIDs.ToSlice())
+		matchedUsers, err = s.users.FindByPartyMembershipIDs(ctx, membershipIDs)
 		if err != nil {
-			return buildUserIndex(), err
+			return newUserIndex(0), err
 		}
 	}
 
-	foundIDs := set.New[string]()
-	for _, u := range matchedUsers {
-		if id := strings.TrimSpace(u.ID); id != "" {
-			foundIDs.Add(id)
-		}
-	}
+	idx := newUserIndex(len(matchedUsers))
+	idx.add(matchedUsers)
 
 	missingUserIDs := set.NewOrdered[string]()
 	for _, snap := range snapshotsByChar {
-		if uID := strings.TrimSpace(snap.UserID); uID != "" && !foundIDs.Contains(uID) {
+		if uID := strings.TrimSpace(snap.UserID); uID != "" && !idx.hasID(uID) {
 			missingUserIDs.Add(uID)
 		}
 	}
 	if hasAgg {
 		for _, link := range agg.SnapshotLinks {
-			if uID := strings.TrimSpace(link.UserID); uID != "" && !foundIDs.Contains(uID) {
+			if uID := strings.TrimSpace(link.UserID); uID != "" && !idx.hasID(uID) {
 				missingUserIDs.Add(uID)
 			}
 		}
 	}
 
-	var extraUsers []User
 	if missingUserIDs.Size() > 0 {
-		var err error
-		extraUsers, err = s.users.GetByIDs(ctx, missingUserIDs.ToSlice())
+		extraUsers, err := s.users.GetByIDs(ctx, missingUserIDs.ToSlice())
 		if err != nil {
-			return buildUserIndex(), err
+			return newUserIndex(0), err
 		}
+		idx.add(extraUsers)
 	}
 
-	return buildUserIndex(matchedUsers, extraUsers), nil
+	return idx, nil
 }
 
 type participantMetrics struct {
@@ -416,7 +429,7 @@ func buildParticipants(
 	snapshotsByChar map[string]CharacterSnapshot,
 	userIdx userIndex,
 ) ([]Participant, map[string]User, participantMetrics) {
-	hasTeams := len(report.Teams) > 0
+	hasTeams := report.HasTeams()
 	participants := make([]Participant, 0, len(report.Entries))
 	usersByChar := make(map[string]User)
 	var metrics participantMetrics
@@ -428,21 +441,18 @@ func buildParticipants(
 		}
 
 		var (
-			link    SnapshotLink
-			hasLink bool
+			link       SnapshotLink
+			hasLink    bool
+			storedPerf *Performance
 		)
-		if hasAgg && agg.SnapshotLinks != nil {
-			link, hasLink = agg.SnapshotLinks[charID]
-		}
-
-		snap, hasSnap := snapshotsByChar[charID]
-
-		var storedPerf *Performance
-		if hasAgg && agg.Performance != nil {
-			if p, ok := agg.Performance[charID]; ok {
+		if hasAgg {
+			link, hasLink = agg.LinkFor(charID)
+			if p, ok := agg.PerformanceFor(charID); ok {
 				storedPerf = &p
 			}
 		}
+
+		snap, hasSnap := snapshotsByChar[charID]
 
 		emblemIconURL := ""
 		if entry.EmblemHash != 0 {
@@ -459,17 +469,9 @@ func buildParticipants(
 			charClass = link.CharacterClass
 		}
 
-		standing := entry.Standing
-		if !entry.HasStanding && entry.PlayerStats.Standing.Present {
-			standing = int32(entry.PlayerStats.Standing.Value)
-		}
-
-		teamID := extractTeamID(entry.PlayerStats.Team, hasTeams)
-		fireteamID := extractFireteamID(entry.PlayerStats.FireteamID)
-
-		resolvedUser, resolvedUserID := resolveParticipantUser(charID, entry, link, hasLink, snap, hasSnap, userIdx)
-		if resolvedUser != nil {
-			usersByChar[charID] = *resolvedUser
+		resolvedUser, hasUser, resolvedUserID := userIdx.resolveForParticipant(charID, entry, link, hasLink, snap, hasSnap)
+		if hasUser {
+			usersByChar[charID] = resolvedUser
 		}
 
 		var (
@@ -477,12 +479,12 @@ func buildParticipants(
 			snapshotID      string
 			confidenceLevel ConfidenceLevel
 		)
-		if hasLink {
-			sessionID = strings.TrimSpace(link.SessionID)
-			confidenceLevel = link.ConfidenceLevel
-		}
 		if hasSnap {
 			snapshotID = snap.ID
+		}
+		if hasLink {
+			sessionID = strings.TrimSpace(link.SessionID)
+			confidenceLevel = link.ActiveConfidenceLevel(snapshotID)
 		}
 
 		if snapshotID != "" {
@@ -495,8 +497,6 @@ func buildParticipants(
 			metrics.registeredUserCount++
 		}
 
-		perf := buildParticipantPerformance(entry, itemDefs, storedPerf)
-
 		participants = append(participants, Participant{
 			CharacterID:     charID,
 			MembershipID:    entry.MembershipID,
@@ -506,12 +506,12 @@ func buildParticipants(
 			CharacterClass:  charClass,
 			LightLevel:      entry.LightLevel,
 			EmblemIconURL:   emblemIconURL,
-			TeamID:          teamID,
-			Standing:        standing,
+			TeamID:          entry.TeamID(hasTeams),
+			Standing:        entry.ResolvedStanding(),
 			Score:           entry.Score,
 			Completed:       entry.Completed,
-			FireteamID:      fireteamID,
-			Performance:     perf,
+			FireteamID:      entry.FireteamID(),
+			Performance:     entry.BuildPerformance(itemDefs, storedPerf),
 			UserID:          resolvedUserID,
 			SessionID:       sessionID,
 			SnapshotID:      snapshotID,
@@ -544,123 +544,30 @@ func buildParticipants(
 	return participants, usersByChar, metrics
 }
 
-func resolveParticipantUser(
-	charID string,
-	entry CarnageEntry,
-	link SnapshotLink,
-	hasLink bool,
-	snap CharacterSnapshot,
-	hasSnap bool,
-	idx userIndex,
-) (*User, string) {
-	if hasSnap && strings.TrimSpace(snap.UserID) != "" {
-		uid := strings.TrimSpace(snap.UserID)
-		if u, ok := idx.byID[uid]; ok {
-			uCopy := u
-			return &uCopy, u.ID
-		}
-		return nil, uid
-	}
-
-	if hasLink && strings.TrimSpace(link.UserID) != "" {
-		uid := strings.TrimSpace(link.UserID)
-		if u, ok := idx.byID[uid]; ok {
-			uCopy := u
-			return &uCopy, u.ID
-		}
-		return nil, uid
-	}
-
-	if id := strings.TrimSpace(entry.MembershipID); id != "" {
-		if u, ok := idx.byMembershipID[id]; ok {
-			uCopy := u
-			return &uCopy, u.ID
-		}
-	}
-	if id := strings.TrimSpace(entry.BungieNetMembershipID); id != "" {
-		if u, ok := idx.byMembershipID[id]; ok {
-			uCopy := u
-			return &uCopy, u.ID
-		}
-	}
-	if u, ok := idx.byCharacterID[charID]; ok {
-		uCopy := u
-		return &uCopy, u.ID
-	}
-	return nil, ""
+type teamSortKey struct {
+	standingRank       int
+	minParticipantRank int32
+	hasParticipantRank bool
+	originalTeamIndex  int
+	isUnknownTeam      bool
 }
 
-func buildParticipantPerformance(
-	entry CarnageEntry,
-	itemDefs map[int64]ItemManifest,
-	storedPerf *Performance,
-) Performance {
-	weapons := make(map[string]WeaponMetrics, len(entry.Weapons))
-
-	for _, w := range entry.Weapons {
-		if w.ReferenceID == 0 {
-			continue
+func compareTeamSortKey(a, b teamSortKey) int {
+	if a.isUnknownTeam != b.isUnknownTeam {
+		if !a.isUnknownTeam {
+			return -1
 		}
-		key := strconv.FormatInt(w.ReferenceID, 10)
-		wm := WeaponMetrics{
-			ReferenceID: w.ReferenceID,
-			Stats:       w.Stats,
+		return 1
+	}
+	if c := cmp.Compare(a.standingRank, b.standingRank); c != 0 {
+		return c
+	}
+	if a.hasParticipantRank && b.hasParticipantRank {
+		if c := cmp.Compare(a.minParticipantRank, b.minParticipantRank); c != 0 {
+			return c
 		}
-
-		if def, ok := itemDefs[w.ReferenceID]; ok {
-			wm.HasDisplay = true
-			wm.Display = WeaponDisplay{
-				Name:        def.Name,
-				Description: def.ItemTypeAndTierDisplayName,
-				Icon:        def.IconURL,
-				HasIcon:     def.HasIcon,
-			}
-			wm.BucketHash = def.BucketHash
-			wm.ItemTypeDisplayName = def.ItemTypeDisplayName
-		}
-
-		if storedPerf != nil {
-			if storedWeapon, ok := storedPerf.Weapons[key]; ok && storedWeapon.Properties != nil {
-				wm.Properties = storedWeapon.Properties
-				if wm.BucketHash == 0 && storedWeapon.Properties.BaseInfo.BucketHash != 0 {
-					wm.BucketHash = storedWeapon.Properties.BaseInfo.BucketHash
-				}
-				if wm.ItemTypeDisplayName == "" && storedWeapon.Properties.BaseInfo.ItemTypeDisplayName != "" {
-					wm.ItemTypeDisplayName = storedWeapon.Properties.BaseInfo.ItemTypeDisplayName
-				}
-			}
-		}
-
-		weapons[key] = wm
 	}
-
-	return Performance{
-		PlayerStats: entry.PlayerStats,
-		Weapons:     weapons,
-		Extra:       entry.ExtraStats,
-	}
-}
-
-func extractTeamID(teamStat StatValuePair, hasTeams bool) string {
-	if !hasTeams || !teamStat.Present || teamStat.Value < 0 {
-		return ""
-	}
-	return strconv.FormatInt(int64(teamStat.Value), 10)
-}
-
-func extractFireteamID(ftStat StatValuePair) string {
-	if !ftStat.Present {
-		return ""
-	}
-	// Prefer DisplayValue to avoid float64 precision loss on 64-bit Bungie fireteam IDs.
-	trimmed := strings.TrimSpace(ftStat.DisplayValue)
-	if trimmed != "" && trimmed != "0" {
-		return trimmed
-	}
-	if ftStat.Value != 0 {
-		return strconv.FormatInt(int64(ftStat.Value), 10)
-	}
-	return ""
+	return cmp.Compare(a.originalTeamIndex, b.originalTeamIndex)
 }
 
 func sortedParticipants(participants []Participant, teams []Team) []Participant {
@@ -670,23 +577,39 @@ func sortedParticipants(participants []Participant, teams []Team) []Participant 
 	}
 
 	if len(teams) > 0 {
-		teamOrder := make(map[string]int, len(teams))
+		teamKeys := make(map[string]teamSortKey, len(teams))
 		for i, t := range teams {
-			teamOrder[t.ID] = i
-		}
-		unknownOrder := len(teams)
-		orderOf := func(teamID string) int {
-			if ord, ok := teamOrder[teamID]; ok {
-				return ord
+			teamKeys[t.ID] = teamSortKey{
+				standingRank:      t.StandingRank(),
+				originalTeamIndex: i,
 			}
-			return unknownOrder
+		}
+		for _, p := range out {
+			if key, ok := teamKeys[p.TeamID]; ok {
+				if !key.hasParticipantRank || p.Standing < key.minParticipantRank {
+					key.minParticipantRank = p.Standing
+					key.hasParticipantRank = true
+					teamKeys[p.TeamID] = key
+				}
+			}
+		}
+		unknownKey := teamSortKey{
+			standingRank:      3,
+			originalTeamIndex: len(teams),
+			isUnknownTeam:     true,
+		}
+		keyOf := func(teamID string) teamSortKey {
+			if k, ok := teamKeys[teamID]; ok {
+				return k
+			}
+			return unknownKey
 		}
 
 		slices.SortFunc(out, func(a, b Participant) int {
-			if c := cmp.Compare(orderOf(a.TeamID), orderOf(b.TeamID)); c != 0 {
+			if c := compareTeamSortKey(keyOf(a.TeamID), keyOf(b.TeamID)); c != 0 {
 				return c
 			}
-			return compareParticipantPerformanceDesc(a, b)
+			return a.ComparePerformanceDesc(b)
 		})
 		return out
 	}
@@ -695,20 +618,7 @@ func sortedParticipants(participants []Participant, teams []Team) []Participant 
 		if c := cmp.Compare(a.Standing, b.Standing); c != 0 {
 			return c
 		}
-		return compareParticipantPerformanceDesc(a, b)
+		return a.ComparePerformanceDesc(b)
 	})
 	return out
-}
-
-func compareParticipantPerformanceDesc(a, b Participant) int {
-	if c := cmp.Compare(b.Score.Value, a.Score.Value); c != 0 {
-		return c
-	}
-	if c := cmp.Compare(b.Performance.PlayerStats.Kills.Value, a.Performance.PlayerStats.Kills.Value); c != 0 {
-		return c
-	}
-	if c := cmp.Compare(b.Performance.PlayerStats.KDA.Value, a.Performance.PlayerStats.KDA.Value); c != 0 {
-		return c
-	}
-	return cmp.Compare(a.CharacterID, b.CharacterID)
 }

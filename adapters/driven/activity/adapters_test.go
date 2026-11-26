@@ -94,8 +94,13 @@ func TestCarnageReportGateway_ConversionAndErrors(t *testing.T) {
 			ReferenceId: &weaponHash,
 			Values: &map[string]bungie.HistoricalStatsValue{
 				"uniqueWeaponKills": {Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{Value: new(8.0), DisplayValue: new("8")}},
+				"nilBasicStat":      {StatId: new("nilBasicStat"), Basic: nil},
 			},
 		},
+	}
+	extVals := map[string]bungie.HistoricalStatsValue{
+		"weaponKillsSuper": {Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{Value: new(2.0), DisplayValue: new("2")}},
+		"nilExtendedBasic": {StatId: new("nilExtendedBasic"), Basic: nil},
 	}
 
 	entries := []bungie.PostGameCarnageReportEntry{
@@ -115,7 +120,7 @@ func TestCarnageReportGateway_ConversionAndErrors(t *testing.T) {
 				},
 			},
 			Values:   &vals,
-			Extended: &bungie.PostGameCarnageReportExtendedData{Weapons: &weapons},
+			Extended: &bungie.PostGameCarnageReportExtendedData{Weapons: &weapons, Values: &extVals},
 		},
 	}
 
@@ -150,6 +155,15 @@ func TestCarnageReportGateway_ConversionAndErrors(t *testing.T) {
 	}
 	if len(e.Weapons) != 1 || e.Weapons[0].ReferenceID != 444 {
 		t.Fatalf("expected weapon 444, got %+v", e.Weapons)
+	}
+	if _, exists := e.Weapons[0].Stats["nilBasicStat"]; exists {
+		t.Fatal("expected weapon stat with nil Basic to be skipped")
+	}
+	if _, exists := e.ExtraStats["nilExtendedBasic"]; exists {
+		t.Fatal("expected extended stat with nil Basic to be skipped")
+	}
+	if _, exists := e.ExtraStats["weaponKillsSuper"]; !exists {
+		t.Fatal("expected extended stat with non-nil Basic to be preserved")
 	}
 
 	t.Run("not found error mapped", func(t *testing.T) {

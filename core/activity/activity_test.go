@@ -798,3 +798,152 @@ func TestGetActivity_ValidationAndErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestGetActivity_BravoWinsAndHighScoreDNFSortsBehindCompletedTeammates(t *testing.T) {
+	carnage := &fakeCarnageGateway{
+		report: CarnageReport{
+			Teams: []Team{
+				{ID: "18", Standing: "Defeat", Score: "80", TeamName: "Alpha"},
+				{ID: "19", Standing: "Victory", Score: "150", TeamName: "Bravo"},
+			},
+			Entries: []CarnageEntry{
+				{
+					CharacterID: "alpha-dnf-higher",
+					DisplayName: "AlphaQuitter",
+					Standing:    1,
+					HasStanding: true,
+					Score:       stat(40, "40"),
+					Completed:   false,
+					PlayerStats: PlayerStats{
+						Kills: stat(35, "35"),
+						Team:  stat(18, "18"),
+					},
+				},
+				{
+					CharacterID: "alpha-top",
+					DisplayName: "AlphaFinisher",
+					Standing:    1,
+					HasStanding: true,
+					Score:       stat(25, "25"),
+					Completed:   true,
+					PlayerStats: PlayerStats{
+						Kills: stat(20, "20"),
+						Team:  stat(18, "18"),
+					},
+				},
+				{
+					CharacterID: "bravo-dnf-high",
+					DisplayName: "BravoQuitter",
+					Standing:    0,
+					HasStanding: true,
+					Score:       stat(30, "30"),
+					Completed:   false,
+					PlayerStats: PlayerStats{
+						Kills: stat(25, "25"),
+						Team:  stat(19, "19"),
+					},
+				},
+				{
+					CharacterID: "bravo-completed-low",
+					DisplayName: "BravoSupport",
+					Standing:    0,
+					HasStanding: true,
+					Score:       stat(10, "10"),
+					Completed:   true,
+					PlayerStats: PlayerStats{
+						Kills: stat(8, "8"),
+						Team:  stat(19, "19"),
+					},
+				},
+				{
+					CharacterID: "bravo-completed-top",
+					DisplayName: "BravoMVP",
+					Standing:    0,
+					HasStanding: true,
+					Score:       stat(22, "22"),
+					Completed:   true,
+					PlayerStats: PlayerStats{
+						Kills: stat(18, "18"),
+						Team:  stat(19, "19"),
+					},
+				},
+			},
+		},
+	}
+
+	svc := NewService(carnage, &fakeManifestLookup{}, &fakeAggregateReader{found: false}, &fakeSnapshotReader{}, &fakeUserLookup{})
+	report, err := svc.GetActivity(context.Background(), "777001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotOrder := make([]string, 0, len(report.Participants))
+	for _, p := range report.Participants {
+		gotOrder = append(gotOrder, p.CharacterID)
+	}
+	wantOrder := []string{
+		"bravo-completed-top",
+		"bravo-completed-low",
+		"bravo-dnf-high",
+		"alpha-top",
+		"alpha-dnf-higher",
+	}
+	if !slices.Equal(gotOrder, wantOrder) {
+		t.Fatalf("expected winning Bravo team first and DNFs behind completed teammates: got %v, want %v", gotOrder, wantOrder)
+	}
+}
+
+func TestGetActivity_DetachedSnapshotLinkOmitsStaleConfidenceLevel(t *testing.T) {
+	carnage := &fakeCarnageGateway{
+		report: CarnageReport{
+			Entries: []CarnageEntry{
+				{
+					CharacterID:  "char-detached",
+					MembershipID: "mem-1",
+					DisplayName:  "DetachedPlayer",
+					Completed:    true,
+				},
+			},
+		},
+	}
+
+	aggReader := &fakeAggregateReader{
+		found: true,
+		agg: Aggregate{
+			ID:         "agg-detached",
+			ActivityID: "777002",
+			SnapshotLinks: map[string]SnapshotLink{
+				"char-detached": {
+					CharacterID:     "char-detached",
+					SessionID:       "",
+					SnapshotID:      "",
+					ConfidenceLevel: ConfidenceHigh,
+					UserID:          "user-1",
+				},
+			},
+		},
+	}
+
+	userLookup := &fakeUserLookup{
+		partyUsers: []User{{ID: "user-1", PrimaryMembershipID: "mem-1", DisplayName: "DetachedPlayer"}},
+	}
+
+	svc := NewService(carnage, &fakeManifestLookup{}, aggReader, &fakeSnapshotReader{}, userLookup)
+	report, err := svc.GetActivity(context.Background(), "777002")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(report.Participants) != 1 {
+		t.Fatalf("expected 1 participant, got %d", len(report.Participants))
+	}
+	p := report.Participants[0]
+	if p.ConfidenceLevel != "" {
+		t.Fatalf("expected empty ConfidenceLevel for detached SnapshotLink, got %q", p.ConfidenceLevel)
+	}
+	if p.SessionID != "" || p.SnapshotID != "" {
+		t.Fatalf("expected empty SessionID/SnapshotID, got session=%q snapshot=%q", p.SessionID, p.SnapshotID)
+	}
+	if p.UserID != "user-1" {
+		t.Fatalf("expected registered userId still populated, got %q", p.UserID)
+	}
+}

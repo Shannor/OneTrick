@@ -1,8 +1,12 @@
 package activity
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"oneTrick/set"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -377,4 +381,198 @@ type SnapshotReader interface {
 type UserLookup interface {
 	FindByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
 	GetByIDs(ctx context.Context, userIDs []string) ([]User, error)
+}
+
+func (t Team) StandingRank() int {
+	switch strings.ToLower(strings.TrimSpace(t.Standing)) {
+	case "victory":
+		return 0
+	case "defeat":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func (l SnapshotLink) ActiveConfidenceLevel(snapshotID string) ConfidenceLevel {
+	if strings.TrimSpace(l.SessionID) == "" && strings.TrimSpace(snapshotID) == "" {
+		return ""
+	}
+	return l.ConfidenceLevel
+}
+
+func (a Aggregate) LinkFor(characterID string) (SnapshotLink, bool) {
+	if len(a.SnapshotLinks) == 0 {
+		return SnapshotLink{}, false
+	}
+	link, ok := a.SnapshotLinks[characterID]
+	return link, ok
+}
+
+func (a Aggregate) PerformanceFor(characterID string) (Performance, bool) {
+	if len(a.Performance) == 0 {
+		return Performance{}, false
+	}
+	perf, ok := a.Performance[characterID]
+	return perf, ok
+}
+
+func (a Aggregate) UniqueSnapshotIDs() []string {
+	if len(a.SnapshotLinks) == 0 {
+		return nil
+	}
+	ids := set.NewOrdered[string]()
+	for _, link := range a.SnapshotLinks {
+		if id := strings.TrimSpace(link.SnapshotID); id != "" {
+			ids.Add(id)
+		}
+	}
+	return ids.ToSlice()
+}
+
+func (m ItemManifest) ToWeaponDisplay() WeaponDisplay {
+	return WeaponDisplay{
+		Name:        m.Name,
+		Description: m.ItemTypeAndTierDisplayName,
+		Icon:        m.IconURL,
+		HasIcon:     m.HasIcon,
+	}
+}
+
+func (w WeaponMetrics) WithManifest(def ItemManifest) WeaponMetrics {
+	w.HasDisplay = true
+	w.Display = def.ToWeaponDisplay()
+	w.BucketHash = def.BucketHash
+	w.ItemTypeDisplayName = def.ItemTypeDisplayName
+	return w
+}
+
+func (w WeaponMetrics) WithStoredProperties(stored WeaponMetrics) WeaponMetrics {
+	if stored.Properties == nil {
+		return w
+	}
+	w.Properties = stored.Properties
+	if w.BucketHash == 0 && stored.Properties.BaseInfo.BucketHash != 0 {
+		w.BucketHash = stored.Properties.BaseInfo.BucketHash
+	}
+	if w.ItemTypeDisplayName == "" && stored.Properties.BaseInfo.ItemTypeDisplayName != "" {
+		w.ItemTypeDisplayName = stored.Properties.BaseInfo.ItemTypeDisplayName
+	}
+	return w
+}
+
+func (r CarnageReport) HasTeams() bool {
+	return len(r.Teams) > 0
+}
+
+func (r CarnageReport) ManifestItemIDs() []int64 {
+	if len(r.Entries) == 0 {
+		return nil
+	}
+	hashes := set.NewOrdered[int64]()
+	for _, entry := range r.Entries {
+		if entry.EmblemHash != 0 {
+			hashes.Add(entry.EmblemHash)
+		}
+		for _, w := range entry.Weapons {
+			if w.ReferenceID != 0 {
+				hashes.Add(w.ReferenceID)
+			}
+		}
+	}
+	return hashes.ToSlice()
+}
+
+func (r CarnageReport) MembershipLookupIDs() []string {
+	if len(r.Entries) == 0 {
+		return nil
+	}
+	ids := set.NewOrdered[string]()
+	for _, entry := range r.Entries {
+		if id := strings.TrimSpace(entry.MembershipID); id != "" {
+			ids.Add(id)
+		}
+		if id := strings.TrimSpace(entry.BungieNetMembershipID); id != "" {
+			ids.Add(id)
+		}
+	}
+	return ids.ToSlice()
+}
+
+func (e CarnageEntry) ResolvedStanding() int32 {
+	if !e.HasStanding && e.PlayerStats.Standing.Present {
+		return int32(e.PlayerStats.Standing.Value)
+	}
+	return e.Standing
+}
+
+func (e CarnageEntry) TeamID(hasTeams bool) string {
+	teamStat := e.PlayerStats.Team
+	if !hasTeams || !teamStat.Present || teamStat.Value < 0 {
+		return ""
+	}
+	return strconv.FormatInt(int64(teamStat.Value), 10)
+}
+
+func (e CarnageEntry) FireteamID() string {
+	ftStat := e.PlayerStats.FireteamID
+	if !ftStat.Present {
+		return ""
+	}
+	// Prefer DisplayValue to avoid float64 precision loss on 64-bit Bungie fireteam IDs.
+	trimmed := strings.TrimSpace(ftStat.DisplayValue)
+	if trimmed != "" && trimmed != "0" {
+		return trimmed
+	}
+	if ftStat.Value != 0 {
+		return strconv.FormatInt(int64(ftStat.Value), 10)
+	}
+	return ""
+}
+
+func (e CarnageEntry) BuildPerformance(itemDefs map[int64]ItemManifest, storedPerf *Performance) Performance {
+	weapons := make(map[string]WeaponMetrics, len(e.Weapons))
+	for _, w := range e.Weapons {
+		if w.ReferenceID == 0 {
+			continue
+		}
+		key := strconv.FormatInt(w.ReferenceID, 10)
+		wm := WeaponMetrics{
+			ReferenceID: w.ReferenceID,
+			Stats:       w.Stats,
+		}
+		if def, ok := itemDefs[w.ReferenceID]; ok {
+			wm = wm.WithManifest(def)
+		}
+		if storedPerf != nil {
+			if storedWeapon, ok := storedPerf.Weapons[key]; ok {
+				wm = wm.WithStoredProperties(storedWeapon)
+			}
+		}
+		weapons[key] = wm
+	}
+	return Performance{
+		PlayerStats: e.PlayerStats,
+		Weapons:     weapons,
+		Extra:       e.ExtraStats,
+	}
+}
+
+func (p Participant) ComparePerformanceDesc(other Participant) int {
+	if p.Completed != other.Completed {
+		if p.Completed {
+			return -1
+		}
+		return 1
+	}
+	if c := cmp.Compare(other.Score.Value, p.Score.Value); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(other.Performance.PlayerStats.Kills.Value, p.Performance.PlayerStats.Kills.Value); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(other.Performance.PlayerStats.KDA.Value, p.Performance.PlayerStats.KDA.Value); c != 0 {
+		return c
+	}
+	return cmp.Compare(p.CharacterID, other.CharacterID)
 }

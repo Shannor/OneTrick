@@ -318,6 +318,9 @@ func toCorePlayerStatsFromBungie(vals map[string]bungie.HistoricalStatsValue) co
 func toCoreUniqueStatsFromBungie(vals map[string]bungie.HistoricalStatsValue) map[string]coreactivity.UniqueStatValue {
 	out := make(map[string]coreactivity.UniqueStatValue, len(vals))
 	for key, val := range vals {
+		if val.Basic == nil {
+			continue
+		}
 		uv := coreactivity.UniqueStatValue{
 			Name:       ptr.Deref(val.StatId),
 			Basic:      toCoreBungieStatPair(val.Basic),
