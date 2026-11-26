@@ -79,10 +79,12 @@ This server powers the One Trick Destiny 2 Application
   - Use `clog.Go` for detached background goroutines and `clog.LoopRollup` for batch loops.
   - All `clog.Fields` keys must be `camelCase` with the `Id` suffix (e.g., `"userId"`, `"sessionId"`, `"snapshotId"`, `"characterId"`). Never log PII.
 
-## GitHub Issues & Project Tracking
+## Issue & Project Tracking (YouTrack)
 
-- Both `Shannor/OneTrick` and `Shannor/OneTrickUI` track work on the shared **One Trick** GitHub Project (`https://github.com/users/Shannor/projects/1`).
-- Whenever creating a GitHub issue via `gh issue create`, always attach it to the project with `--project "One Trick"` (e.g., `gh issue create --repo Shannor/OneTrick --project "One Trick" ...`) and set its initial `Status` to `Backlog` (or `Ready` when actionable) if not handled by the project's Auto-add workflow.
+- `Shannor/OneTrick`, `Shannor/OneTrickUI`, and `Shannor/OneTrick-Scripts` track all work in **YouTrack** under the **One Trick (`OT`)** Kanban board (`https://gruntt.youtrack.cloud/agiles/218-1/current`) — do **not** create new GitHub Issues.
+- Use the `youtrack` CLI (`/opt/homebrew/bin/youtrack`, see the `youtrack-cli` skill) to read, create, and transition tickets:
+  - Set `Subsystem` to `Backend` (for `OneTrick`), `UI` (for `OneTrickUI`), `Full-Stack` (cross-repo), or `Scripts` (for `OneTrick-Scripts`).
+  - Set initial `Stage` to `Backlog` (or `Ready` when actionable): `youtrack issue create --project OT --summary "..." --custom-fields '{"Stage":"Backlog","Subsystem":"Backend"}' --description-file -`.
 
 ## Notable Libraries
 
