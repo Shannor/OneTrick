@@ -203,18 +203,23 @@ func (a *service) GetPerformances(ctx context.Context, activityID string, charac
 	data := resp.JSON200.PostGameCarnageReportData
 
 	performances := make(map[string]api.InstancePerformance)
-	characterSet := set.FromSlice(characterIDs)
+	var characterSet *set.Set[string]
+	if len(characterIDs) > 0 {
+		characterSet = set.FromSlice(characterIDs)
+	}
 	items := buildItemsSet(ctx, data, characterSet, a)
-	for _, entry := range *data.Entries {
-		if entry.CharacterId == nil {
-			continue
-		}
-		if characterSet.Contains(*entry.CharacterId) {
-			p := CarnageEntryToInstancePerformance(&entry, items)
-			if p == nil {
+	if data.Entries != nil {
+		for _, entry := range *data.Entries {
+			if entry.CharacterId == nil {
 				continue
 			}
-			performances[*entry.CharacterId] = *p
+			if characterSet == nil || characterSet.Contains(*entry.CharacterId) {
+				p := CarnageEntryToInstancePerformance(&entry, items)
+				if p == nil {
+					continue
+				}
+				performances[*entry.CharacterId] = *p
+			}
 		}
 	}
 
@@ -302,7 +307,7 @@ func buildItemsSet(ctx context.Context, data *bungie.PostGameCarnageReportData, 
 	}
 	var itemIDs []int64
 	for _, entry := range *data.Entries {
-		if entry.CharacterId == nil || !characterSet.Contains(*entry.CharacterId) {
+		if entry.CharacterId == nil || (characterSet != nil && !characterSet.Contains(*entry.CharacterId)) {
 			continue
 		}
 		if entry.Extended != nil && entry.Extended.Weapons != nil {

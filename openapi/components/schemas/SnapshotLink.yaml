@@ -39,3 +39,25 @@ properties:
     format: date-time
     x-oapi-codegen-extra-tags:
       firestore: createdAt
+  userId:
+    x-go-name: UserID
+    description: Owner user ID stamped at write time for zero-read participant resolution
+    x-oapi-codegen-extra-tags:
+      firestore: "userId,omitempty"
+    type: string
+  displayName:
+    description: Owner display name stamped at write time
+    x-oapi-codegen-extra-tags:
+      firestore: "displayName,omitempty"
+    type: string
+  characterClass:
+    description: Character class name stamped at write time
+    x-oapi-codegen-extra-tags:
+      firestore: "characterClass,omitempty"
+    type: string
+  emblemUrl:
+    x-go-name: EmblemURL
+    description: Character emblem URL stamped at write time
+    x-oapi-codegen-extra-tags:
+      firestore: "emblemUrl,omitempty"
+    type: string

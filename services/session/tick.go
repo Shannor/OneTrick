@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/services/snapshot"
+	"oneTrick/services/user"
 	"oneTrick/set"
 	"oneTrick/utils"
 	"slices"
@@ -45,19 +46,31 @@ func (c TickCandidate) activityGraceCutoff() time.Time {
 	return c.Session.StartedAt.Add(-activityStartGracePeriod)
 }
 
+type tickParticipant struct {
+	userID         string
+	displayName    string
+	characterClass string
+	emblemURL      string
+}
+
 type tickMembership struct {
 	id             string
 	membershipType int64
+	participant    tickParticipant
 }
 
 type tickRunner struct {
-	svc                 service
-	opts                TickOptions
-	now                 time.Time
-	resp                *api.SessionTickResponse
-	compQueue           *set.OrderedSet[string]
-	loadoutsThrottled   int
-	aggregatesRefreshed int
+	svc                   service
+	opts                  TickOptions
+	now                   time.Time
+	resp                  *api.SessionTickResponse
+	compQueue             *set.OrderedSet[string]
+	usersByID             map[string]*user.User
+	pgcrCache             map[string]map[string]api.InstancePerformance
+	candidateCharacterIDs []string
+	loadoutsThrottled     int
+	aggregatesRefreshed   int
+	pgcrCacheHits         int
 }
 
 func newTickRunner(svc service, opts TickOptions) *tickRunner {
@@ -67,6 +80,8 @@ func newTickRunner(svc service, opts TickOptions) *tickRunner {
 		now:       svc.now(),
 		resp:      &api.SessionTickResponse{DryRun: opts.DryRun},
 		compQueue: set.NewOrdered[string](),
+		usersByID: make(map[string]*user.User),
+		pgcrCache: make(map[string]map[string]api.InstancePerformance),
 	}
 }
 
@@ -99,6 +114,7 @@ func (r *tickRunner) recordSummary(ctx context.Context, tickStart time.Time) {
 		"activitiesFoundTotal":    r.resp.ActivitiesFoundTotal,
 		"aggregatesAddedTotal":    r.resp.AggregatesAddedTotal,
 		"aggregatesRefreshed":     r.aggregatesRefreshed,
+		"pgcrCacheHits":           r.pgcrCacheHits,
 		"compFinalizedCount":      r.resp.CompFinalizedCount,
 		"emptySessionsCleaned":    r.resp.EmptySessionsCleaned,
 		"errorsTotal":             r.resp.ErrorsTotal,
@@ -112,6 +128,7 @@ func (r *tickRunner) run(ctx context.Context) (*api.SessionTickResponse, error) 
 		return nil, fmt.Errorf("failed to get sessions: %w", err)
 	}
 	r.resp.TotalSessions = len(candidates)
+	r.candidateCharacterIDs = collectCandidateCharacterIDs(candidates)
 
 	r.processCandidates(ctx, candidates)
 	r.finalizeCompSessions(ctx)
@@ -181,7 +198,7 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand Tic
 
 	r.resp.ActivitiesFoundTotal += len(histories)
 
-	linkRes, err := r.linkActivities(iterCtx, cand.Session, histories)
+	linkRes, err := r.linkActivities(iterCtx, cand.Session, membership.participant, histories)
 	if err != nil {
 		return err
 	}
@@ -230,18 +247,38 @@ func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bo
 	return true, nil
 }
 
+func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, error) {
+	if cached, ok := r.usersByID[userID]; ok {
+		return cached, nil
+	}
+	u, err := r.svc.userService.GetUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil {
+		return nil, user.NotFound
+	}
+	r.usersByID[userID] = u
+	return u, nil
+}
+
 func (r *tickRunner) resolveMembership(ctx context.Context, ses api.Session) (tickMembership, error) {
 	if r.svc.userService == nil || r.svc.d2Service == nil {
 		return tickMembership{}, r.failSession(fmt.Errorf("session tick dependencies not configured"))
 	}
 
-	pmID, membershipType, err := r.svc.userService.GetPrimaryMembership(ctx, ses.UserID)
+	u, err := r.getUser(ctx, ses.UserID)
+	if err != nil {
+		return tickMembership{}, r.failSession(fmt.Errorf("failed to fetch user for session %s: %w", ses.ID, err))
+	}
+	pmID, membershipType, err := u.PrimaryMembership()
 	if err != nil {
 		return tickMembership{}, r.failSession(fmt.Errorf("failed to fetch membership type for session %s: %w", ses.ID, err))
 	}
 	return tickMembership{
 		id:             strconv.FormatInt(pmID, 10),
 		membershipType: membershipType,
+		participant:    buildTickParticipant(ses.UserID, ses.CharacterID, u),
 	}, nil
 }
 
@@ -324,7 +361,7 @@ type activityLinkOutcome struct {
 	pendingRetry bool
 }
 
-func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, histories []api.ActivityHistory) (linkActivitiesResult, error) {
+func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, participant tickParticipant, histories []api.ActivityHistory) (linkActivitiesResult, error) {
 	if r.svc.aggregateService == nil {
 		return linkActivitiesResult{}, r.failSession(fmt.Errorf("aggregate service not configured for session %s", ses.ID))
 	}
@@ -354,7 +391,7 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, hi
 			}
 		}()
 
-		outcome, err := r.linkSingleActivity(actCtx, ses, history, existingByActivity[history.InstanceID])
+		outcome, err := r.linkSingleActivity(actCtx, ses, participant, history, existingByActivity[history.InstanceID])
 		if err != nil {
 			r.resp.ErrorsTotal++
 			res.hasPendingRetry = true
@@ -375,7 +412,20 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, hi
 	return res, nil
 }
 
-func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session, history api.ActivityHistory, existing *api.Aggregate) (activityLinkOutcome, error) {
+func (r *tickRunner) getPerformances(ctx context.Context, activityID string) (map[string]api.InstancePerformance, error) {
+	if cached, ok := r.pgcrCache[activityID]; ok {
+		r.pgcrCacheHits++
+		return cached, nil
+	}
+	performances, err := r.svc.d2Service.GetPerformances(ctx, activityID, r.candidateCharacterIDs)
+	if err != nil {
+		return nil, err
+	}
+	r.pgcrCache[activityID] = performances
+	return performances, nil
+}
+
+func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session, participant tickParticipant, history api.ActivityHistory, existing *api.Aggregate) (activityLinkOutcome, error) {
 	clog.WithGroupField(actCtx, "activity", "activityId", history.InstanceID)
 
 	refreshing := false
@@ -386,7 +436,7 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		refreshing = true
 	}
 
-	performances, err := r.svc.d2Service.GetPerformances(actCtx, history.InstanceID, []string{ses.CharacterID})
+	performances, err := r.getPerformances(actCtx, history.InstanceID)
 	if err != nil {
 		return activityLinkOutcome{}, fmt.Errorf("failed to fetch performances for activity %s: %w", history.InstanceID, err)
 	}
@@ -440,10 +490,9 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		return activityLinkOutcome{}, fmt.Errorf("failed to enrich performance instance for activity %s: %w", history.InstanceID, err)
 	}
 
-	sessionID := ses.ID
-	link.SessionID = &sessionID
+	stampedLink := stampParticipantMetadata(*link, ses.ID, participant)
 
-	agg, err := r.svc.aggregateService.UpsertSessionActivity(actCtx, ses.CharacterID, history, *link, *enrichedPerformance)
+	agg, err := r.svc.aggregateService.UpsertSessionActivity(actCtx, ses.CharacterID, history, stampedLink, *enrichedPerformance)
 	if err != nil {
 		return activityLinkOutcome{}, fmt.Errorf("failed to add data to aggregate for activity %s: %w", history.InstanceID, err)
 	}
@@ -451,7 +500,7 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		clog.WithGroupFields(actCtx, "activity", clog.Fields{
 			"refreshed":       true,
 			"aggregateId":     agg.ID,
-			"confidenceLevel": string(link.ConfidenceLevel),
+			"confidenceLevel": string(stampedLink.ConfidenceLevel),
 		})
 	}
 	return activityLinkOutcome{
@@ -460,6 +509,56 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		refreshed:    refreshing,
 		pendingRetry: incomplete,
 	}, nil
+}
+
+func collectCandidateCharacterIDs(candidates []TickCandidate) []string {
+	charIDs := set.NewOrdered[string]()
+	for _, cand := range candidates {
+		if cand.Session.CharacterID != "" {
+			charIDs.Add(cand.Session.CharacterID)
+		}
+	}
+	return charIDs.ToSlice()
+}
+
+func buildTickParticipant(sessionUserID, characterID string, u *user.User) tickParticipant {
+	p := tickParticipant{
+		userID: sessionUserID,
+	}
+	if u == nil {
+		return p
+	}
+	if u.ID != "" {
+		p.userID = u.ID
+	}
+	p.displayName = u.DisplayName
+	for _, ch := range u.Characters {
+		if ch.Id == characterID {
+			p.characterClass = ch.Class
+			p.emblemURL = ch.EmblemURL
+			break
+		}
+	}
+	return p
+}
+
+func stampParticipantMetadata(link api.SnapshotLink, sessionID string, p tickParticipant) api.SnapshotLink {
+	if sessionID != "" {
+		link.SessionID = new(sessionID)
+	}
+	if p.userID != "" {
+		link.UserID = new(p.userID)
+	}
+	if p.displayName != "" {
+		link.DisplayName = new(p.displayName)
+	}
+	if p.characterClass != "" {
+		link.CharacterClass = new(p.characterClass)
+	}
+	if p.emblemURL != "" {
+		link.EmblemURL = new(p.emblemURL)
+	}
+	return link
 }
 
 func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickCandidate, latestID string, linkRes linkActivitiesResult) error {
