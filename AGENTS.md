@@ -86,6 +86,15 @@ This server powers the One Trick Destiny 2 Application
   - Set `Subsystem` to `Backend` (for `OneTrick`), `UI` (for `OneTrickUI`), `Full-Stack` (cross-repo), or `Scripts` (for `OneTrick-Scripts`).
   - Set initial `Stage` to `Backlog` (or `Ready` when actionable): `youtrack issue create --project OT --summary "..." --custom-fields '{"Stage":"Backlog","Subsystem":"Backend"}' --description-file -`.
 
+### Branching, Commits & Automatic Stage Sync
+
+- **Branch naming**: Always include the YouTrack ticket ID in branches using `<type>/ot-<id>-<short-slug>` (or `<type>/ot-<id>`), where `<type>` is `feat`, `fix`, `refactor`, `perf`, `chore`, or `docs` (e.g., `feat/ot-12-fireteam-overview`, `fix/ot-16-mid-session-comp`).
+- **Commits & Pull Requests**: Include `OT-<id>` in commit subjects (e.g., `feat(session): ... (OT-12)`) and PR titles/descriptions so YouTrack's GitHub VCS integration attaches commits and PR status events to the ticket.
+- **Automated Kanban transitions** (via the `One Trick GitHub Stage Sync` workflow attached to project `OT`):
+  - First pushed commit referencing `OT-<id>` moves `Backlog` / `Ready` -> **`In Progress`**.
+  - Opening a PR referencing `OT-<id>` moves `Stage` -> **`In Review`** (unless already `Done`).
+  - Merging the PR moves `Stage` -> **`Done`** (closing/declining an `In Review` PR moves it back to **`In Progress`**).
+
 ## Notable Libraries
 
 - Firebase
