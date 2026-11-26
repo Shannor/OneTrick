@@ -29,14 +29,14 @@ type lastSnapshotRecord struct {
 }
 
 type memorySessionStore struct {
-	mu                       sync.Mutex
-	docs                     map[string]*api.Session
-	updatedAt                map[string]time.Time
-	lastSnapshots            map[string]lastSnapshotRecord
-	seq                      int
-	getDocCalls              atomic.Int32
-	getActiveByUserIDsCalls  atomic.Int32
-	getActiveByUserIDsErr    error
+	mu                           sync.Mutex
+	docs                         map[string]*api.Session
+	updatedAt                    map[string]time.Time
+	lastSnapshots                map[string]lastSnapshotRecord
+	seq                          int
+	getDocCalls                  atomic.Int32
+	getActiveByUserIDsCalls      atomic.Int32
+	getActiveByUserIDsErr        error
 	writes                       atomic.Int32
 	lastCompletedWindowCount     atomic.Int32
 	lastSnapshotWriteHasDeadline atomic.Bool
@@ -393,9 +393,31 @@ type fakeSessionUserService struct {
 	user.Service
 	u                       *user.User
 	users                   map[string]*user.User
+	getUserErr              error
 	getPrimaryMembershipErr error
 	getPrimaryMembershipFn  func(ctx context.Context, userID string) (int64, int64, error)
 	membershipCalls         atomic.Int32
+	userCalls               atomic.Int32
+}
+
+func (f *fakeSessionUserService) GetUser(_ context.Context, userID string) (*user.User, error) {
+	f.userCalls.Add(1)
+	if f.getUserErr != nil {
+		return nil, f.getUserErr
+	}
+	if f.getPrimaryMembershipErr != nil {
+		return nil, f.getPrimaryMembershipErr
+	}
+	if f.users != nil {
+		if u, ok := f.users[userID]; ok && u != nil {
+			return u, nil
+		}
+		return nil, user.NotFound
+	}
+	if f.u == nil {
+		return nil, user.NotFound
+	}
+	return f.u, nil
 }
 
 func (f *fakeSessionUserService) GetPrimaryMembership(ctx context.Context, userID string) (int64, int64, error) {
@@ -420,14 +442,17 @@ func (f *fakeSessionUserService) GetPrimaryMembership(ctx context.Context, userI
 
 type fakeSessionD2Service struct {
 	destiny.Service
-	snapshots       []*api.CompRankSnapshot
-	calls           atomic.Int32
-	perfCalls       atomic.Int32
-	getCompRankFn   func(ctx context.Context, pmID, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
-	activitiesByChr map[string][]api.ActivityHistory
-	activityErrByCh map[string]error
-	perfsByAct      map[string]map[string]api.InstancePerformance
-	perfErrByAct    map[string]error
+	mu               sync.Mutex
+	snapshots        []*api.CompRankSnapshot
+	calls            atomic.Int32
+	perfCalls        atomic.Int32
+	perfCallsByAct   map[string]int
+	perfCharIDsByAct map[string][]string
+	getCompRankFn    func(ctx context.Context, pmID, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
+	activitiesByChr  map[string][]api.ActivityHistory
+	activityErrByCh  map[string]error
+	perfsByAct       map[string]map[string]api.InstancePerformance
+	perfErrByAct     map[string]error
 }
 
 func (f *fakeSessionD2Service) GetCompetitiveRank(ctx context.Context, pmID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error) {
@@ -451,12 +476,33 @@ func (f *fakeSessionD2Service) GetAllPVPActivity(_ context.Context, _ string, _ 
 	return f.activitiesByChr[characterID], nil
 }
 
-func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID string, _ []string) (map[string]api.InstancePerformance, error) {
+func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error) {
 	f.perfCalls.Add(1)
+	f.mu.Lock()
+	if f.perfCallsByAct == nil {
+		f.perfCallsByAct = make(map[string]int)
+	}
+	f.perfCallsByAct[activityID]++
+	if f.perfCharIDsByAct == nil {
+		f.perfCharIDsByAct = make(map[string][]string)
+	}
+	f.perfCharIDsByAct[activityID] = append([]string(nil), characterIDs...)
+	f.mu.Unlock()
+
 	if err, ok := f.perfErrByAct[activityID]; ok && err != nil {
 		return nil, err
 	}
-	return f.perfsByAct[activityID], nil
+	all := f.perfsByAct[activityID]
+	if len(characterIDs) == 0 {
+		return all, nil
+	}
+	filtered := make(map[string]api.InstancePerformance, len(characterIDs))
+	for _, cid := range characterIDs {
+		if perf, ok := all[cid]; ok {
+			filtered[cid] = perf
+		}
+	}
+	return filtered, nil
 }
 
 type fakeSessionSnapshotService struct {
@@ -594,6 +640,9 @@ func (f *fakeSessionAggregateService) UpsertSessionActivity(_ context.Context, c
 		}
 		if link.SnapshotID != nil && *link.SnapshotID != "" && !slices.Contains(existing.SnapshotIds, *link.SnapshotID) {
 			existing.SnapshotIds = append(existing.SnapshotIds, *link.SnapshotID)
+		}
+		if characterID != "" && !slices.Contains(existing.CharacterIds, characterID) {
+			existing.CharacterIds = append(existing.CharacterIds, characterID)
 		}
 		cp := *existing
 		return &cp, nil
@@ -2063,7 +2112,6 @@ func TestCleanupEmptyCompleted_SymmetricGuard(t *testing.T) {
 	}
 }
 
-
 func TestGetActiveByUserIDs(t *testing.T) {
 	t1 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
@@ -2660,10 +2708,10 @@ func TestRunTick_PendingRetryUpdatesLastSeenAndPreventsPrematureExpiry(t *testin
 	t0 := time.Date(2026, 11, 23, 5, 30, 0, 0, time.UTC)
 
 	tests := []struct {
-		name              string
-		setupSession      func(store *memorySessionStore, aggSvc *fakeSessionAggregateService)
-		wantHeldActivity  *string
-		activities        []api.ActivityHistory
+		name             string
+		setupSession     func(store *memorySessionStore, aggSvc *fakeSessionAggregateService)
+		wantHeldActivity *string
+		activities       []api.ActivityHistory
 	}{
 		{
 			name: "inactive session near cutoff does not expire after partial PGCR",
@@ -3752,6 +3800,514 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 		}
 		if gotRemaining <= 50*time.Millisecond {
 			t.Fatalf("expected comp-only membership lookup to use finalCompTimeout (~250ms), got remaining=%v", gotRemaining)
+		}
+	})
+}
+
+func TestRunTick_FireteamSharedActivityDeduplicatesPGCRAndStampsParticipantMetadata(t *testing.T) {
+	now := time.Date(2026, 6, 1, 18, 0, 0, 0, time.UTC)
+	matchTime := now.Add(-5 * time.Minute)
+	soloTime := now.Add(-10 * time.Minute)
+
+	store := newMemorySessionStore()
+	store.docs["ses-1"] = &api.Session{
+		ID:          "ses-1",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		StartedAt:   now.Add(-30 * time.Minute),
+		Status:      new(api.SessionPending),
+	}
+	store.docs["ses-2"] = &api.Session{
+		ID:          "ses-2",
+		UserID:      "user-2",
+		CharacterID: "char-2",
+		StartedAt:   now.Add(-30 * time.Minute),
+		Status:      new(api.SessionPending),
+	}
+	store.docs["ses-3"] = &api.Session{
+		ID:          "ses-3",
+		UserID:      "user-3",
+		CharacterID: "char-3",
+		StartedAt:   now.Add(-30 * time.Minute),
+		Status:      new(api.SessionPending),
+	}
+
+	uSvc := &fakeSessionUserService{
+		users: map[string]*user.User{
+			"user-1": {
+				ID:                  "user-1",
+				DisplayName:         "Weegee",
+				PrimaryMembershipID: "10001",
+				Memberships:         []user.Membership{{ID: "10001", Type: 3}},
+				Characters: []api.Character{
+					{Id: "char-1", Class: "Hunter", EmblemURL: "https://www.bungie.net/emblem-1.jpg"},
+				},
+			},
+			"user-2": {
+				ID:                  "user-2",
+				DisplayName:         "Maverick",
+				PrimaryMembershipID: "10002",
+				Memberships:         []user.Membership{{ID: "10002", Type: 3}},
+				Characters: []api.Character{
+					{Id: "char-2", Class: "Titan", EmblemURL: "https://www.bungie.net/emblem-2.jpg"},
+				},
+			},
+			"user-3": {
+				ID:                  "user-3",
+				DisplayName:         "Nova",
+				PrimaryMembershipID: "10003",
+				Memberships:         []user.Membership{{ID: "10003", Type: 2}},
+				Characters: []api.Character{
+					{Id: "char-3", Class: "Warlock", EmblemURL: "https://www.bungie.net/emblem-3.jpg"},
+				},
+			},
+		},
+	}
+
+	sharedActivity := api.ActivityHistory{
+		InstanceID: "act-shared",
+		Activity:   "Trials of Osiris",
+		Mode:       new("Trials of Osiris"),
+		Period:     matchTime,
+	}
+	soloActivity := api.ActivityHistory{
+		InstanceID: "act-solo-1",
+		Activity:   "Control",
+		Mode:       new("Control"),
+		Period:     soloTime,
+	}
+
+	makePerf := func(kills float64) api.InstancePerformance {
+		return api.InstancePerformance{
+			PlayerStats: api.PlayerStats{
+				Standing:   statVal(0),
+				Kills:      statVal(kills),
+				Deaths:     statVal(4),
+				Team:       statVal(17),
+				FireTeamID: statVal(424242),
+			},
+			Weapons: map[string]api.WeaponInstanceMetrics{
+				"1001": weaponMetrics(1001, kills, "Rose", "/img/rose.png"),
+			},
+		}
+	}
+
+	d2Svc := &fakeSessionD2Service{
+		activitiesByChr: map[string][]api.ActivityHistory{
+			"char-1": {sharedActivity, soloActivity},
+			"char-2": {sharedActivity},
+			"char-3": {sharedActivity},
+		},
+		perfsByAct: map[string]map[string]api.InstancePerformance{
+			"act-shared": {
+				"char-1": makePerf(12),
+				"char-2": makePerf(9),
+				"char-3": makePerf(7),
+			},
+			"act-solo-1": {
+				"char-1": makePerf(15),
+			},
+		},
+	}
+	aggSvc := newFakeSessionAggregateService()
+	snapSvc := &fakeSessionSnapshotService{}
+
+	svc := &service{
+		store:            store,
+		aggregateService: aggSvc,
+		userService:      uSvc,
+		d2Service:        d2Svc,
+		snapshotService:  snapSvc,
+		manifestService:  &fakeSessionManifestService{},
+		nowFn:            func() time.Time { return now },
+	}
+
+	ctx := clog.NewContext(context.Background())
+	resp, err := svc.RunTick(ctx, TickOptions{SkipSave: true})
+	if err != nil {
+		t.Fatalf("RunTick failed: %v", err)
+	}
+
+	if resp.SessionsProcessed != 3 || resp.ErrorsTotal != 0 {
+		t.Fatalf("expected 3 sessions processed with 0 errors, got %+v", resp)
+	}
+	if d2Svc.perfCallsByAct["act-shared"] != 1 {
+		t.Fatalf("expected act-shared PGCR to be fetched once across 3 fireteam sessions, got %d", d2Svc.perfCallsByAct["act-shared"])
+	}
+	if d2Svc.perfCallsByAct["act-solo-1"] != 1 || d2Svc.perfCalls.Load() != 2 {
+		t.Fatalf("expected 1 fetch for act-solo-1 and 2 total PGCR fetches, got solo=%d total=%d", d2Svc.perfCallsByAct["act-solo-1"], d2Svc.perfCalls.Load())
+	}
+	for _, wantChar := range []string{"char-1", "char-2", "char-3"} {
+		if !slices.Contains(d2Svc.perfCharIDsByAct["act-shared"], wantChar) {
+			t.Fatalf("expected GetPerformances for act-shared to request %s, got %v", wantChar, d2Svc.perfCharIDsByAct["act-shared"])
+		}
+	}
+	if uSvc.userCalls.Load() != 3 || uSvc.membershipCalls.Load() != 0 {
+		t.Fatalf("expected 3 GetUser calls (1 per user) and 0 GetPrimaryMembership calls, got userCalls=%d membershipCalls=%d",
+			uSvc.userCalls.Load(), uSvc.membershipCalls.Load())
+	}
+
+	if hits, ok := findIntAttr(clog.BagFromContext(ctx).Attrs(), "pgcrCacheHits"); !ok || hits != 2 {
+		t.Fatalf("expected pgcrCacheHits=2 in canonical log, got %d (found=%v)", hits, ok)
+	}
+
+	sharedAgg, ok := aggSvc.byActivity["act-shared"]
+	if !ok {
+		t.Fatal("expected aggregate to be written for act-shared")
+	}
+	if len(sharedAgg.SnapshotLinks) != 3 {
+		t.Fatalf("expected 3 SnapshotLinks on shared aggregate, got %d", len(sharedAgg.SnapshotLinks))
+	}
+
+	type wantMeta struct {
+		sessionID   string
+		userID      string
+		displayName string
+		class       string
+		emblemURL   string
+	}
+	expected := map[string]wantMeta{
+		"char-1": {sessionID: "ses-1", userID: "user-1", displayName: "Weegee", class: "Hunter", emblemURL: "https://www.bungie.net/emblem-1.jpg"},
+		"char-2": {sessionID: "ses-2", userID: "user-2", displayName: "Maverick", class: "Titan", emblemURL: "https://www.bungie.net/emblem-2.jpg"},
+		"char-3": {sessionID: "ses-3", userID: "user-3", displayName: "Nova", class: "Warlock", emblemURL: "https://www.bungie.net/emblem-3.jpg"},
+	}
+
+	for charID, want := range expected {
+		link, exists := sharedAgg.SnapshotLinks[charID]
+		if !exists {
+			t.Fatalf("missing SnapshotLink for %s", charID)
+		}
+		if link.SessionID == nil || *link.SessionID != want.sessionID {
+			t.Errorf("%s: expected SessionID=%q, got %v", charID, want.sessionID, link.SessionID)
+		}
+		if link.UserID == nil || *link.UserID != want.userID {
+			t.Errorf("%s: expected UserID=%q, got %v", charID, want.userID, link.UserID)
+		}
+		if link.DisplayName == nil || *link.DisplayName != want.displayName {
+			t.Errorf("%s: expected DisplayName=%q, got %v", charID, want.displayName, link.DisplayName)
+		}
+		if link.CharacterClass == nil || *link.CharacterClass != want.class {
+			t.Errorf("%s: expected CharacterClass=%q, got %v", charID, want.class, link.CharacterClass)
+		}
+		if link.EmblemURL == nil || *link.EmblemURL != want.emblemURL {
+			t.Errorf("%s: expected EmblemURL=%q, got %v", charID, want.emblemURL, link.EmblemURL)
+		}
+	}
+}
+
+func TestRunTick_ParticipantMetadataOmitsEmptyFieldsAndReusesUserReadWithinTick(t *testing.T) {
+	now := time.Date(2026, 6, 1, 19, 0, 0, 0, time.UTC)
+	completedAt := now.Add(-5 * time.Minute)
+
+	store := newMemorySessionStore()
+	store.docs["ses-a"] = &api.Session{
+		ID:          "ses-a",
+		UserID:      "user-swap",
+		CharacterID: "char-hunter",
+		StartedAt:   now.Add(-30 * time.Minute),
+		CompletedAt: &completedAt,
+		Status:      new(api.SessionComplete),
+	}
+	store.docs["ses-b"] = &api.Session{
+		ID:          "ses-b",
+		UserID:      "user-swap",
+		CharacterID: "char-unlisted",
+		StartedAt:   now.Add(-15 * time.Minute),
+		Status:      new(api.SessionPending),
+	}
+
+	uSvc := &fakeSessionUserService{
+		users: map[string]*user.User{
+			"user-swap": {
+				ID:                  "user-swap",
+				DisplayName:         "Switcher",
+				PrimaryMembershipID: "20001",
+				Memberships:         []user.Membership{{ID: "20001", Type: 3}},
+				Characters: []api.Character{
+					{Id: "char-hunter", Class: "Hunter", EmblemURL: "https://www.bungie.net/hunter.jpg"},
+				},
+			},
+		},
+	}
+
+	d2Svc := &fakeSessionD2Service{
+		activitiesByChr: map[string][]api.ActivityHistory{
+			"char-hunter": {
+				{InstanceID: "act-a", Activity: "Control", Mode: new("Control"), Period: now.Add(-10 * time.Minute)},
+			},
+			"char-unlisted": {
+				{InstanceID: "act-b", Activity: "Control", Mode: new("Control"), Period: now.Add(-2 * time.Minute)},
+			},
+		},
+		perfsByAct: map[string]map[string]api.InstancePerformance{
+			"act-a": {
+				"char-hunter": {
+					PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(10), Deaths: statVal(5)},
+					Weapons:     map[string]api.WeaponInstanceMetrics{"1001": weaponMetrics(1001, 10, "Rose", "/img/rose.png")},
+				},
+			},
+			"act-b": {
+				"char-unlisted": {
+					PlayerStats: api.PlayerStats{Standing: statVal(1), Kills: statVal(8), Deaths: statVal(8)},
+					Weapons:     map[string]api.WeaponInstanceMetrics{"1001": weaponMetrics(1001, 8, "Rose", "/img/rose.png")},
+				},
+			},
+		},
+	}
+
+	aggSvc := newFakeSessionAggregateService()
+	svc := &service{
+		store:            store,
+		aggregateService: aggSvc,
+		userService:      uSvc,
+		d2Service:        d2Svc,
+		snapshotService:  &fakeSessionSnapshotService{},
+		manifestService:  &fakeSessionManifestService{},
+		nowFn:            func() time.Time { return now },
+	}
+
+	if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {
+		t.Fatalf("RunTick failed: %v", err)
+	}
+
+	if uSvc.userCalls.Load() != 1 {
+		t.Fatalf("expected GetUser to be memoized to 1 call for same user across 2 sessions in one tick, got %d", uSvc.userCalls.Load())
+	}
+
+	linkA := aggSvc.byActivity["act-a"].SnapshotLinks["char-hunter"]
+	if linkA.UserID == nil || *linkA.UserID != "user-swap" ||
+		linkA.DisplayName == nil || *linkA.DisplayName != "Switcher" ||
+		linkA.CharacterClass == nil || *linkA.CharacterClass != "Hunter" ||
+		linkA.EmblemURL == nil || *linkA.EmblemURL != "https://www.bungie.net/hunter.jpg" {
+		t.Fatalf("unexpected stamped metadata for char-hunter: %+v", linkA)
+	}
+
+	linkB := aggSvc.byActivity["act-b"].SnapshotLinks["char-unlisted"]
+	if linkB.UserID == nil || *linkB.UserID != "user-swap" || linkB.DisplayName == nil || *linkB.DisplayName != "Switcher" {
+		t.Fatalf("expected userId and displayName stamped for char-unlisted, got %+v", linkB)
+	}
+	if linkB.CharacterClass != nil || linkB.EmblemURL != nil {
+		t.Fatalf("expected nil CharacterClass and EmblemURL when character missing from user doc, got class=%v emblem=%v", linkB.CharacterClass, linkB.EmblemURL)
+	}
+}
+
+func TestRunTick_PGCRCacheScopedPerTick(t *testing.T) {
+	now := time.Date(2026, 6, 1, 20, 0, 0, 0, time.UTC)
+
+	store := newMemorySessionStore()
+	store.docs["ses-retry"] = &api.Session{
+		ID:          "ses-retry",
+		UserID:      "user-1",
+		CharacterID: "char-1",
+		StartedAt:   now.Add(-20 * time.Minute),
+		Status:      new(api.SessionPending),
+	}
+
+	uSvc := &fakeSessionUserService{
+		u: &user.User{
+			ID:                  "user-1",
+			DisplayName:         "Weegee",
+			PrimaryMembershipID: "10001",
+			Memberships:         []user.Membership{{ID: "10001", Type: 3}},
+			Characters: []api.Character{
+				{Id: "char-1", Class: "Hunter", EmblemURL: "https://www.bungie.net/emblem-1.jpg"},
+			},
+		},
+	}
+
+	d2Svc := &fakeSessionD2Service{
+		activitiesByChr: map[string][]api.ActivityHistory{
+			"char-1": {
+				{InstanceID: "act-retry", Activity: "Control", Mode: new("Control"), Period: now.Add(-5 * time.Minute)},
+			},
+		},
+		perfsByAct: map[string]map[string]api.InstancePerformance{
+			"act-retry": {
+				"char-1": {PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(11), Deaths: statVal(5)}},
+			},
+		},
+	}
+
+	aggSvc := newFakeSessionAggregateService()
+	aggSvc.nowFn = func() time.Time { return now }
+	snapSvc := &fakeSessionSnapshotService{
+		findBestFitFn: func(_, characterID string, _ time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error) {
+			if len(weapons) == 0 {
+				return nil, &api.SnapshotLink{
+					CharacterID:      characterID,
+					ConfidenceLevel:  api.NoMatchConfidenceLevel,
+					ConfidenceSource: api.SystemConfidenceSource,
+					CreatedAt:        now,
+				}, nil
+			}
+			snapID := "snap-1"
+			return &api.CharacterSnapshot{ID: snapID}, &api.SnapshotLink{
+				CharacterID:      characterID,
+				SnapshotID:       &snapID,
+				ConfidenceLevel:  api.HighConfidenceLevel,
+				ConfidenceSource: api.SystemConfidenceSource,
+				CreatedAt:        now,
+			}, nil
+		},
+	}
+
+	svc := &service{
+		store:            store,
+		aggregateService: aggSvc,
+		userService:      uSvc,
+		d2Service:        d2Svc,
+		snapshotService:  snapSvc,
+		manifestService:  &fakeSessionManifestService{},
+		nowFn:            func() time.Time { return now },
+	}
+
+	if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {
+		t.Fatalf("Tick 1 failed: %v", err)
+	}
+	if d2Svc.perfCalls.Load() != 1 {
+		t.Fatalf("expected 1 PGCR call on Tick 1, got %d", d2Svc.perfCalls.Load())
+	}
+
+	// Simulate Bungie populating extended weapon stats before Tick 2.
+	d2Svc.perfsByAct["act-retry"]["char-1"] = api.InstancePerformance{
+		PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(11), Deaths: statVal(5)},
+		Weapons:     map[string]api.WeaponInstanceMetrics{"1001": weaponMetrics(1001, 11, "Rose", "/img/rose.png")},
+	}
+	now = now.Add(5 * time.Minute)
+
+	if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {
+		t.Fatalf("Tick 2 failed: %v", err)
+	}
+	if d2Svc.perfCalls.Load() != 2 {
+		t.Fatalf("expected Tick 2 to fetch fresh PGCR (not reuse Tick 1 cache), got %d calls", d2Svc.perfCalls.Load())
+	}
+	refreshedLink := aggSvc.byActivity["act-retry"].SnapshotLinks["char-1"]
+	if refreshedLink.SnapshotID == nil || *refreshedLink.SnapshotID != "snap-1" {
+		t.Fatalf("expected refreshed SnapshotID=snap-1, got %+v", refreshedLink)
+	}
+	if refreshedLink.UserID == nil || *refreshedLink.UserID != "user-1" ||
+		refreshedLink.DisplayName == nil || *refreshedLink.DisplayName != "Weegee" ||
+		refreshedLink.CharacterClass == nil || *refreshedLink.CharacterClass != "Hunter" ||
+		refreshedLink.EmblemURL == nil || *refreshedLink.EmblemURL != "https://www.bungie.net/emblem-1.jpg" {
+		t.Fatalf("expected refreshed link to retain stamped participant metadata, got %+v", refreshedLink)
+	}
+}
+
+func TestRunTick_CandidateCharacterIDsExcludesExpiredAndGetUserGuardsAndAliases(t *testing.T) {
+	now := time.Date(2026, 6, 1, 21, 0, 0, 0, time.UTC)
+	staleLastSeen := now.Add(-CutOffDuration - 10*time.Minute)
+	completedAt := now.Add(-5 * time.Minute)
+
+	t.Run("excludes stale and inactive candidates from GetPerformances filter", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-active"] = &api.Session{
+			ID:          "ses-active",
+			UserID:      "user-1",
+			CharacterID: "char-active",
+			StartedAt:   now.Add(-20 * time.Minute),
+			Status:      new(api.SessionPending),
+		}
+		store.docs["ses-completed-recent"] = &api.Session{
+			ID:          "ses-completed-recent",
+			UserID:      "user-2",
+			CharacterID: "char-completed",
+			StartedAt:   now.Add(-25 * time.Minute),
+			CompletedAt: &completedAt,
+			Status:      new(api.SessionComplete),
+		}
+		store.docs["ses-stale"] = &api.Session{
+			ID:                "ses-stale",
+			UserID:            "user-3",
+			CharacterID:       "char-stale",
+			StartedAt:         now.Add(-3 * time.Hour),
+			LastSeenTimestamp: &staleLastSeen,
+			Status:            new(api.SessionPending),
+		}
+		store.docs["ses-inactive"] = &api.Session{
+			ID:          "ses-inactive",
+			UserID:      "user-4",
+			CharacterID: "char-inactive",
+			StartedAt:   now.Add(-CutOffDuration - 5*time.Minute),
+			Status:      new(api.SessionPending),
+		}
+
+		uSvc := &fakeSessionUserService{
+			users: map[string]*user.User{
+				"user-1": {ID: "user-1", DisplayName: "One", PrimaryMembershipID: "1001", Memberships: []user.Membership{{ID: "1001", Type: 3}}},
+				"user-2": {ID: "user-2", DisplayName: "Two", PrimaryMembershipID: "1002", Memberships: []user.Membership{{ID: "1002", Type: 3}}},
+			},
+		}
+		d2Svc := &fakeSessionD2Service{
+			activitiesByChr: map[string][]api.ActivityHistory{
+				"char-active": {
+					{InstanceID: "act-1", Activity: "Control", Mode: new("Control"), Period: now.Add(-5 * time.Minute)},
+				},
+			},
+			perfsByAct: map[string]map[string]api.InstancePerformance{
+				"act-1": {
+					"char-active": {
+						PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(10), Deaths: statVal(5)},
+						Weapons:     map[string]api.WeaponInstanceMetrics{"1001": weaponMetrics(1001, 10, "Rose", "/img/rose.png")},
+					},
+				},
+			},
+		}
+
+		svc := &service{
+			store:            store,
+			aggregateService: newFakeSessionAggregateService(),
+			userService:      uSvc,
+			d2Service:        d2Svc,
+			snapshotService:  &fakeSessionSnapshotService{},
+			manifestService:  &fakeSessionManifestService{},
+			nowFn:            func() time.Time { return now },
+		}
+
+		if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {
+			t.Fatalf("RunTick failed: %v", err)
+		}
+
+		requested := d2Svc.perfCharIDsByAct["act-1"]
+		if !slices.Contains(requested, "char-active") || !slices.Contains(requested, "char-completed") {
+			t.Fatalf("expected active and recent completed characters in filter, got %v", requested)
+		}
+		if slices.Contains(requested, "char-stale") || slices.Contains(requested, "char-inactive") {
+			t.Fatalf("expected stale and inactive characters excluded from filter, got %v", requested)
+		}
+	})
+
+	t.Run("getUser short-circuits empty userID and caches canonical u.ID", func(t *testing.T) {
+		canonicalUser := &user.User{
+			ID:                  "doc-user-1",
+			PrimaryMembershipID: "4611686018400001",
+			DisplayName:         "Weegee",
+			Memberships:         []user.Membership{{ID: "4611686018400001", Type: 3}},
+		}
+		uSvc := &fakeSessionUserService{
+			users: map[string]*user.User{
+				"4611686018400001": canonicalUser,
+				"doc-user-1":       canonicalUser,
+			},
+		}
+		runner := newTickRunner(service{userService: uSvc, nowFn: func() time.Time { return now }}, TickOptions{})
+
+		if _, err := runner.getUser(context.Background(), ""); !errors.Is(err, user.NotFound) {
+			t.Fatalf("expected user.NotFound for empty userID, got %v", err)
+		}
+		if uSvc.userCalls.Load() != 0 {
+			t.Fatalf("expected 0 GetUser calls for empty userID, got %d", uSvc.userCalls.Load())
+		}
+
+		first, err := runner.getUser(context.Background(), "4611686018400001")
+		if err != nil || first == nil || first.ID != "doc-user-1" {
+			t.Fatalf("unexpected first lookup result: user=%+v err=%v", first, err)
+		}
+		second, err := runner.getUser(context.Background(), "doc-user-1")
+		if err != nil || second != first {
+			t.Fatalf("expected canonical ID cache hit, got user=%+v err=%v", second, err)
+		}
+		if uSvc.userCalls.Load() != 1 {
+			t.Fatalf("expected 1 GetUser call across lookup alias + canonical ID, got %d", uSvc.userCalls.Load())
 		}
 	})
 }

@@ -805,3 +805,226 @@ func TestBuildLoadout_DegradesGracefullyWhenEquipableItemSetsFails(t *testing.T)
 		t.Fatalf("expected itemSetsError recorded in buildLoadout, got %#v", buildGroup["itemSetsError"])
 	}
 }
+
+func TestToPlayerStats_TeamAndFireTeamID(t *testing.T) {
+	if got := ToPlayerStats(nil); got != nil {
+		t.Fatalf("expected nil for nil input, got %+v", got)
+	}
+
+	makeVal := func(v float64, display string) bungie.HistoricalStatsValue {
+		return bungie.HistoricalStatsValue{
+			Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{
+				Value:        new(v),
+				DisplayValue: new(display),
+			},
+		}
+	}
+
+	values := map[string]bungie.HistoricalStatsValue{
+		"kills":              makeVal(18, "18"),
+		"assists":            makeVal(6, "6"),
+		"deaths":             makeVal(9, "9"),
+		"killsDeathsRatio":   makeVal(2.0, "2.00"),
+		"killsDeathsAssists": makeVal(2.33, "2.33"),
+		"standing":           makeVal(0, "Victory"),
+		"team":               makeVal(18, "18"),
+		"fireteamId":         makeVal(1234567890, "1234567890"),
+		"timePlayedSeconds":  makeVal(480, "8m 0s"),
+	}
+
+	got := ToPlayerStats(&values)
+	if got == nil {
+		t.Fatal("expected non-nil PlayerStats")
+	}
+
+	assertPair := func(name string, pair *api.StatsValuePair, wantVal float64, wantDisplay string) {
+		t.Helper()
+		if pair == nil {
+			t.Fatalf("expected %s to be non-nil", name)
+		}
+		if pair.Value == nil || *pair.Value != wantVal {
+			t.Fatalf("expected %s.Value=%v, got %v", name, wantVal, pair.Value)
+		}
+		if pair.DisplayValue == nil || *pair.DisplayValue != wantDisplay {
+			t.Fatalf("expected %s.DisplayValue=%q, got %v", name, wantDisplay, pair.DisplayValue)
+		}
+	}
+
+	assertPair("Team", got.Team, 18, "18")
+	assertPair("FireTeamID", got.FireTeamID, 1234567890, "1234567890")
+	assertPair("Standing", got.Standing, 0, "Victory")
+	assertPair("Kills", got.Kills, 18, "18")
+	assertPair("Assists", got.Assists, 6, "6")
+	assertPair("Deaths", got.Deaths, 9, "9")
+	assertPair("Kd", got.Kd, 2.0, "2.00")
+	assertPair("Kda", got.Kda, 2.33, "2.33")
+	assertPair("TimePlayed", got.TimePlayed, 480, "8m 0s")
+}
+
+type fakePGCRClient struct {
+	bungie.ClientWithResponsesInterface
+	data *bungie.PostGameCarnageReportData
+}
+
+func (f *fakePGCRClient) Destiny2GetPostGameCarnageReportWithResponse(
+	_ context.Context,
+	_ int64,
+	_ ...bungie.RequestEditorFn,
+) (*bungie.Destiny2GetPostGameCarnageReportResponse, error) {
+	return &bungie.Destiny2GetPostGameCarnageReportResponse{
+		JSON200: &bungie.DestinyHistoricalStatsDestinyPostGameCarnageReportData{
+			PostGameCarnageReportData: f.data,
+		},
+	}, nil
+}
+
+type recordingItemsManifest struct {
+	ManifestService
+	requestedIDs []int64
+}
+
+func (m *recordingItemsManifest) GetItemsByIDs(_ context.Context, ids []int64) (map[string]ItemDefinition, error) {
+	m.requestedIDs = append(m.requestedIDs, ids...)
+	out := make(map[string]ItemDefinition, len(ids))
+	for _, id := range ids {
+		out[strconv.FormatInt(id, 10)] = ItemDefinition{
+			Hash:              id,
+			DisplayProperties: ItemDisplayProperties{Name: "Weapon " + strconv.FormatInt(id, 10)},
+		}
+	}
+	return out, nil
+}
+
+func (m *recordingItemsManifest) GetActivity(_ context.Context, hash int64) (*ActivityDefinition, error) {
+	return &ActivityDefinition{
+		Hash:                   int(hash),
+		DirectActivityModeHash: 100,
+		DisplayProperties:      ActivityDisplayProperties{Name: "Control"},
+	}, nil
+}
+
+func (m *recordingItemsManifest) GetActivityMode(_ context.Context, hash int64) (*ActivityModeDefinition, error) {
+	return &ActivityModeDefinition{
+		Hash:              hash,
+		DisplayProperties: ModeDisplayProperties{Name: "Control"},
+	}, nil
+}
+
+func TestGetPerformances_CharacterFilteringAndNilFilter(t *testing.T) {
+	makeEntry := func(charID string, team, fireteam float64, weaponHash uint32) bungie.PostGameCarnageReportEntry {
+		vals := map[string]bungie.HistoricalStatsValue{
+			"team":       {Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{Value: new(team), DisplayValue: new(strconv.Itoa(int(team)))}},
+			"fireteamId": {Basic: &bungie.DestinyHistoricalStatsDestinyHistoricalStatsValuePair{Value: new(fireteam), DisplayValue: new(strconv.Itoa(int(fireteam)))}},
+		}
+		weapons := []bungie.HistoricalWeaponStats{{ReferenceId: new(weaponHash)}}
+		return bungie.PostGameCarnageReportEntry{
+			CharacterId: new(charID),
+			Values:      &vals,
+			Extended:    &bungie.PostGameCarnageReportExtendedData{Weapons: &weapons},
+		}
+	}
+
+	entries := []bungie.PostGameCarnageReportEntry{
+		makeEntry("char-1", 17, 999, 1001),
+		makeEntry("char-2", 17, 999, 1002),
+		makeEntry("char-3", 18, 555, 1003),
+	}
+
+	t.Run("filters to requested characterIDs and limits manifest weapon lookups", func(t *testing.T) {
+		manifest := &recordingItemsManifest{}
+		svc := &service{
+			Client:          &fakePGCRClient{data: &bungie.PostGameCarnageReportData{Entries: &entries}},
+			ManifestService: manifest,
+		}
+
+		got, err := svc.GetPerformances(clog.NewContext(context.Background()), "123456789", []string{"char-1", "char-2"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 performances, got %d", len(got))
+		}
+		if _, ok := got["char-3"]; ok {
+			t.Fatal("did not expect non-requested char-3 in filtered performances")
+		}
+		if got["char-1"].PlayerStats.Team == nil || *got["char-1"].PlayerStats.Team.Value != 17 {
+			t.Fatalf("expected char-1 Team=17, got %+v", got["char-1"].PlayerStats.Team)
+		}
+		if got["char-2"].PlayerStats.FireTeamID == nil || *got["char-2"].PlayerStats.FireTeamID.Value != 999 {
+			t.Fatalf("expected char-2 FireTeamID=999, got %+v", got["char-2"].PlayerStats.FireTeamID)
+		}
+		for _, id := range manifest.requestedIDs {
+			if id == 1003 {
+				t.Fatalf("did not expect weapon lookup for filtered-out char-3, got %v", manifest.requestedIDs)
+			}
+		}
+	})
+
+	t.Run("returns all entries when characterIDs is empty", func(t *testing.T) {
+		manifest := &recordingItemsManifest{}
+		svc := &service{
+			Client:          &fakePGCRClient{data: &bungie.PostGameCarnageReportData{Entries: &entries}},
+			ManifestService: manifest,
+		}
+
+		got, err := svc.GetPerformances(clog.NewContext(context.Background()), "123456789", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("expected all 3 performances, got %d", len(got))
+		}
+	})
+
+	t.Run("handles nil Entries without panicking", func(t *testing.T) {
+		svc := &service{
+			Client:          &fakePGCRClient{data: &bungie.PostGameCarnageReportData{Entries: nil}},
+			ManifestService: &recordingItemsManifest{},
+		}
+
+		got, err := svc.GetPerformances(clog.NewContext(context.Background()), "123456789", []string{"char-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected empty map for nil Entries, got %d", len(got))
+		}
+	})
+
+	t.Run("GetEnrichedActivity shares nil-filter and filtered performance extraction", func(t *testing.T) {
+		refID := uint32(1111)
+		dirHash := uint32(2222)
+		instID := "123456789"
+		pgcr := &bungie.PostGameCarnageReportData{
+			ActivityDetails: &bungie.HistoricalStatsActivity{
+				ReferenceId:          &refID,
+				DirectorActivityHash: &dirHash,
+				InstanceId:           &instID,
+			},
+			Entries: &entries,
+		}
+		svc := &service{
+			Client:          &fakePGCRClient{data: pgcr},
+			ManifestService: &recordingItemsManifest{},
+		}
+
+		unfiltered, err := svc.GetEnrichedActivity(clog.NewContext(context.Background()), instID, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(unfiltered.Performances) != 3 {
+			t.Fatalf("expected all 3 performances for nil characterIDs, got %d", len(unfiltered.Performances))
+		}
+
+		filtered, err := svc.GetEnrichedActivity(clog.NewContext(context.Background()), instID, []string{"char-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(filtered.Performances) != 1 {
+			t.Fatalf("expected 1 performance for filtered characterIDs, got %d", len(filtered.Performances))
+		}
+		if _, ok := filtered.Performances["char-1"]; !ok {
+			t.Fatalf("expected char-1 in filtered performances, got %+v", filtered.Performances)
+		}
+	})
+}
