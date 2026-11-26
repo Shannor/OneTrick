@@ -895,6 +895,21 @@ func (m *recordingItemsManifest) GetItemsByIDs(_ context.Context, ids []int64) (
 	return out, nil
 }
 
+func (m *recordingItemsManifest) GetActivity(_ context.Context, hash int64) (*ActivityDefinition, error) {
+	return &ActivityDefinition{
+		Hash:                   int(hash),
+		DirectActivityModeHash: 100,
+		DisplayProperties:      ActivityDisplayProperties{Name: "Control"},
+	}, nil
+}
+
+func (m *recordingItemsManifest) GetActivityMode(_ context.Context, hash int64) (*ActivityModeDefinition, error) {
+	return &ActivityModeDefinition{
+		Hash:              hash,
+		DisplayProperties: ModeDisplayProperties{Name: "Control"},
+	}, nil
+}
+
 func TestGetPerformances_CharacterFilteringAndNilFilter(t *testing.T) {
 	makeEntry := func(charID string, team, fireteam float64, weaponHash uint32) bungie.PostGameCarnageReportEntry {
 		vals := map[string]bungie.HistoricalStatsValue{
@@ -975,5 +990,41 @@ func TestGetPerformances_CharacterFilteringAndNilFilter(t *testing.T) {
 			t.Fatalf("expected empty map for nil Entries, got %d", len(got))
 		}
 	})
-}
 
+	t.Run("GetEnrichedActivity shares nil-filter and filtered performance extraction", func(t *testing.T) {
+		refID := uint32(1111)
+		dirHash := uint32(2222)
+		instID := "123456789"
+		pgcr := &bungie.PostGameCarnageReportData{
+			ActivityDetails: &bungie.HistoricalStatsActivity{
+				ReferenceId:          &refID,
+				DirectorActivityHash: &dirHash,
+				InstanceId:           &instID,
+			},
+			Entries: &entries,
+		}
+		svc := &service{
+			Client:          &fakePGCRClient{data: pgcr},
+			ManifestService: &recordingItemsManifest{},
+		}
+
+		unfiltered, err := svc.GetEnrichedActivity(clog.NewContext(context.Background()), instID, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(unfiltered.Performances) != 3 {
+			t.Fatalf("expected all 3 performances for nil characterIDs, got %d", len(unfiltered.Performances))
+		}
+
+		filtered, err := svc.GetEnrichedActivity(clog.NewContext(context.Background()), instID, []string{"char-1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(filtered.Performances) != 1 {
+			t.Fatalf("expected 1 performance for filtered characterIDs, got %d", len(filtered.Performances))
+		}
+		if _, ok := filtered.Performances["char-1"]; !ok {
+			t.Fatalf("expected char-1 in filtered performances, got %+v", filtered.Performances)
+		}
+	})
+}

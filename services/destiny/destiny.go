@@ -202,29 +202,39 @@ func (a *service) GetPerformances(ctx context.Context, activityID string, charac
 	}
 	data := resp.JSON200.PostGameCarnageReportData
 
-	performances := make(map[string]api.InstancePerformance)
-	var characterSet *set.Set[string]
-	if len(characterIDs) > 0 {
-		characterSet = set.FromSlice(characterIDs)
-	}
-	items := buildItemsSet(ctx, data, characterSet, a)
-	if data.Entries != nil {
-		for _, entry := range *data.Entries {
-			if entry.CharacterId == nil {
-				continue
-			}
-			if characterSet == nil || characterSet.Contains(*entry.CharacterId) {
-				p := CarnageEntryToInstancePerformance(&entry, items)
-				if p == nil {
-					continue
-				}
-				performances[*entry.CharacterId] = *p
-			}
-		}
-	}
+	performances := a.extractPerformances(ctx, data, characterIDs)
 
 	clog.WithGroupField(ctx, "destinyService.getPerformances", "returnedCount", len(performances))
 	return performances, nil
+}
+
+func (a *service) extractPerformances(ctx context.Context, data *bungie.PostGameCarnageReportData, characterIDs []string) map[string]api.InstancePerformance {
+	if data == nil || data.Entries == nil {
+		return make(map[string]api.InstancePerformance)
+	}
+
+	var characterSet *set.Set[string]
+	capHint := len(*data.Entries)
+	if len(characterIDs) > 0 {
+		characterSet = set.FromSlice(characterIDs)
+		capHint = min(len(characterIDs), len(*data.Entries))
+	}
+
+	performances := make(map[string]api.InstancePerformance, capHint)
+	items := buildItemsSet(ctx, data, characterSet, a)
+	for _, entry := range *data.Entries {
+		if entry.CharacterId == nil {
+			continue
+		}
+		if characterSet == nil || characterSet.Contains(*entry.CharacterId) {
+			p := CarnageEntryToInstancePerformance(&entry, items)
+			if p == nil {
+				continue
+			}
+			performances[*entry.CharacterId] = *p
+		}
+	}
+	return performances
 }
 
 func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, characterIDs []string) (*EnrichedActivity, error) {
@@ -247,23 +257,7 @@ func (a *service) GetEnrichedActivity(ctx context.Context, activityID string, ch
 	}
 	data := resp.JSON200.PostGameCarnageReportData
 
-	performances := make(map[string]api.InstancePerformance)
-	characterSet := set.FromSlice(characterIDs)
-	items := buildItemsSet(ctx, data, characterSet, a)
-	if data.Entries != nil {
-		for _, entry := range *data.Entries {
-			if entry.CharacterId == nil {
-				continue
-			}
-			if characterSet.Contains(*entry.CharacterId) {
-				p := CarnageEntryToInstancePerformance(&entry, items)
-				if p == nil {
-					continue
-				}
-				performances[*entry.CharacterId] = *p
-			}
-		}
-	}
+	performances := a.extractPerformances(ctx, data, characterIDs)
 
 	if data.ActivityDetails == nil || data.ActivityDetails.ReferenceId == nil || data.ActivityDetails.DirectorActivityHash == nil {
 		return nil, fmt.Errorf("activity details missing")

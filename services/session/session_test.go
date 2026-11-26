@@ -29,14 +29,14 @@ type lastSnapshotRecord struct {
 }
 
 type memorySessionStore struct {
-	mu                       sync.Mutex
-	docs                     map[string]*api.Session
-	updatedAt                map[string]time.Time
-	lastSnapshots            map[string]lastSnapshotRecord
-	seq                      int
-	getDocCalls              atomic.Int32
-	getActiveByUserIDsCalls  atomic.Int32
-	getActiveByUserIDsErr    error
+	mu                           sync.Mutex
+	docs                         map[string]*api.Session
+	updatedAt                    map[string]time.Time
+	lastSnapshots                map[string]lastSnapshotRecord
+	seq                          int
+	getDocCalls                  atomic.Int32
+	getActiveByUserIDsCalls      atomic.Int32
+	getActiveByUserIDsErr        error
 	writes                       atomic.Int32
 	lastCompletedWindowCount     atomic.Int32
 	lastSnapshotWriteHasDeadline atomic.Bool
@@ -442,17 +442,17 @@ func (f *fakeSessionUserService) GetPrimaryMembership(ctx context.Context, userI
 
 type fakeSessionD2Service struct {
 	destiny.Service
-	mu                  sync.Mutex
-	snapshots           []*api.CompRankSnapshot
-	calls               atomic.Int32
-	perfCalls           atomic.Int32
-	perfCallsByAct      map[string]int
-	perfCharIDsByAct    map[string][]string
-	getCompRankFn       func(ctx context.Context, pmID, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
-	activitiesByChr     map[string][]api.ActivityHistory
-	activityErrByCh     map[string]error
-	perfsByAct          map[string]map[string]api.InstancePerformance
-	perfErrByAct        map[string]error
+	mu               sync.Mutex
+	snapshots        []*api.CompRankSnapshot
+	calls            atomic.Int32
+	perfCalls        atomic.Int32
+	perfCallsByAct   map[string]int
+	perfCharIDsByAct map[string][]string
+	getCompRankFn    func(ctx context.Context, pmID, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
+	activitiesByChr  map[string][]api.ActivityHistory
+	activityErrByCh  map[string]error
+	perfsByAct       map[string]map[string]api.InstancePerformance
+	perfErrByAct     map[string]error
 }
 
 func (f *fakeSessionD2Service) GetCompetitiveRank(ctx context.Context, pmID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error) {
@@ -2112,7 +2112,6 @@ func TestCleanupEmptyCompleted_SymmetricGuard(t *testing.T) {
 	}
 }
 
-
 func TestGetActiveByUserIDs(t *testing.T) {
 	t1 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
@@ -2709,10 +2708,10 @@ func TestRunTick_PendingRetryUpdatesLastSeenAndPreventsPrematureExpiry(t *testin
 	t0 := time.Date(2026, 11, 23, 5, 30, 0, 0, time.UTC)
 
 	tests := []struct {
-		name              string
-		setupSession      func(store *memorySessionStore, aggSvc *fakeSessionAggregateService)
-		wantHeldActivity  *string
-		activities        []api.ActivityHistory
+		name             string
+		setupSession     func(store *memorySessionStore, aggSvc *fakeSessionAggregateService)
+		wantHeldActivity *string
+		activities       []api.ActivityHistory
 	}{
 		{
 			name: "inactive session near cutoff does not expire after partial PGCR",
@@ -4194,3 +4193,121 @@ func TestRunTick_PGCRCacheScopedPerTick(t *testing.T) {
 	}
 }
 
+func TestRunTick_CandidateCharacterIDsExcludesExpiredAndGetUserGuardsAndAliases(t *testing.T) {
+	now := time.Date(2026, 6, 1, 21, 0, 0, 0, time.UTC)
+	staleLastSeen := now.Add(-CutOffDuration - 10*time.Minute)
+	completedAt := now.Add(-5 * time.Minute)
+
+	t.Run("excludes stale and inactive candidates from GetPerformances filter", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-active"] = &api.Session{
+			ID:          "ses-active",
+			UserID:      "user-1",
+			CharacterID: "char-active",
+			StartedAt:   now.Add(-20 * time.Minute),
+			Status:      new(api.SessionPending),
+		}
+		store.docs["ses-completed-recent"] = &api.Session{
+			ID:          "ses-completed-recent",
+			UserID:      "user-2",
+			CharacterID: "char-completed",
+			StartedAt:   now.Add(-25 * time.Minute),
+			CompletedAt: &completedAt,
+			Status:      new(api.SessionComplete),
+		}
+		store.docs["ses-stale"] = &api.Session{
+			ID:                "ses-stale",
+			UserID:            "user-3",
+			CharacterID:       "char-stale",
+			StartedAt:         now.Add(-3 * time.Hour),
+			LastSeenTimestamp: &staleLastSeen,
+			Status:            new(api.SessionPending),
+		}
+		store.docs["ses-inactive"] = &api.Session{
+			ID:          "ses-inactive",
+			UserID:      "user-4",
+			CharacterID: "char-inactive",
+			StartedAt:   now.Add(-CutOffDuration - 5*time.Minute),
+			Status:      new(api.SessionPending),
+		}
+
+		uSvc := &fakeSessionUserService{
+			users: map[string]*user.User{
+				"user-1": {ID: "user-1", DisplayName: "One", PrimaryMembershipID: "1001", Memberships: []user.Membership{{ID: "1001", Type: 3}}},
+				"user-2": {ID: "user-2", DisplayName: "Two", PrimaryMembershipID: "1002", Memberships: []user.Membership{{ID: "1002", Type: 3}}},
+			},
+		}
+		d2Svc := &fakeSessionD2Service{
+			activitiesByChr: map[string][]api.ActivityHistory{
+				"char-active": {
+					{InstanceID: "act-1", Activity: "Control", Mode: new("Control"), Period: now.Add(-5 * time.Minute)},
+				},
+			},
+			perfsByAct: map[string]map[string]api.InstancePerformance{
+				"act-1": {
+					"char-active": {
+						PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(10), Deaths: statVal(5)},
+						Weapons:     map[string]api.WeaponInstanceMetrics{"1001": weaponMetrics(1001, 10, "Rose", "/img/rose.png")},
+					},
+				},
+			},
+		}
+
+		svc := &service{
+			store:            store,
+			aggregateService: newFakeSessionAggregateService(),
+			userService:      uSvc,
+			d2Service:        d2Svc,
+			snapshotService:  &fakeSessionSnapshotService{},
+			manifestService:  &fakeSessionManifestService{},
+			nowFn:            func() time.Time { return now },
+		}
+
+		if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {
+			t.Fatalf("RunTick failed: %v", err)
+		}
+
+		requested := d2Svc.perfCharIDsByAct["act-1"]
+		if !slices.Contains(requested, "char-active") || !slices.Contains(requested, "char-completed") {
+			t.Fatalf("expected active and recent completed characters in filter, got %v", requested)
+		}
+		if slices.Contains(requested, "char-stale") || slices.Contains(requested, "char-inactive") {
+			t.Fatalf("expected stale and inactive characters excluded from filter, got %v", requested)
+		}
+	})
+
+	t.Run("getUser short-circuits empty userID and caches canonical u.ID", func(t *testing.T) {
+		canonicalUser := &user.User{
+			ID:                  "doc-user-1",
+			PrimaryMembershipID: "4611686018400001",
+			DisplayName:         "Weegee",
+			Memberships:         []user.Membership{{ID: "4611686018400001", Type: 3}},
+		}
+		uSvc := &fakeSessionUserService{
+			users: map[string]*user.User{
+				"4611686018400001": canonicalUser,
+				"doc-user-1":       canonicalUser,
+			},
+		}
+		runner := newTickRunner(service{userService: uSvc, nowFn: func() time.Time { return now }}, TickOptions{})
+
+		if _, err := runner.getUser(context.Background(), ""); !errors.Is(err, user.NotFound) {
+			t.Fatalf("expected user.NotFound for empty userID, got %v", err)
+		}
+		if uSvc.userCalls.Load() != 0 {
+			t.Fatalf("expected 0 GetUser calls for empty userID, got %d", uSvc.userCalls.Load())
+		}
+
+		first, err := runner.getUser(context.Background(), "4611686018400001")
+		if err != nil || first == nil || first.ID != "doc-user-1" {
+			t.Fatalf("unexpected first lookup result: user=%+v err=%v", first, err)
+		}
+		second, err := runner.getUser(context.Background(), "doc-user-1")
+		if err != nil || second != first {
+			t.Fatalf("expected canonical ID cache hit, got user=%+v err=%v", second, err)
+		}
+		if uSvc.userCalls.Load() != 1 {
+			t.Fatalf("expected 1 GetUser call across lookup alias + canonical ID, got %d", uSvc.userCalls.Load())
+		}
+	})
+}

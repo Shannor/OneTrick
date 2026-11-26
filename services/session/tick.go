@@ -128,7 +128,7 @@ func (r *tickRunner) run(ctx context.Context) (*api.SessionTickResponse, error) 
 		return nil, fmt.Errorf("failed to get sessions: %w", err)
 	}
 	r.resp.TotalSessions = len(candidates)
-	r.candidateCharacterIDs = collectCandidateCharacterIDs(candidates)
+	r.candidateCharacterIDs = collectCandidateCharacterIDs(candidates, r.now)
 
 	r.processCandidates(ctx, candidates)
 	r.finalizeCompSessions(ctx)
@@ -248,6 +248,9 @@ func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bo
 }
 
 func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, error) {
+	if userID == "" {
+		return nil, user.NotFound
+	}
 	if cached, ok := r.usersByID[userID]; ok {
 		return cached, nil
 	}
@@ -259,6 +262,9 @@ func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, er
 		return nil, user.NotFound
 	}
 	r.usersByID[userID] = u
+	if u.ID != "" {
+		r.usersByID[u.ID] = u
+	}
 	return u, nil
 }
 
@@ -511,9 +517,12 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 	}, nil
 }
 
-func collectCandidateCharacterIDs(candidates []TickCandidate) []string {
+func collectCandidateCharacterIDs(candidates []TickCandidate, now time.Time) []string {
 	charIDs := set.NewOrdered[string]()
 	for _, cand := range candidates {
+		if cand.isStale(now) || cand.isInactive(now) {
+			continue
+		}
 		if cand.Session.CharacterID != "" {
 			charIDs.Add(cand.Session.CharacterID)
 		}
