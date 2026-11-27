@@ -243,6 +243,56 @@ func TestBackfillSessionSummaries(t *testing.T) {
 		if res.SessionsScanned != 1 || res.SessionsUpdated != 1 || res.SessionsFailed != 0 {
 			t.Fatalf("expected ses-A scanned/updated and deleted ses-B skipped, got %+v", res)
 		}
+		if uSvc.findByCharCalls.Load() != 1 {
+			t.Fatalf("expected exactly 1 batched FindByCharacterIDs call even after stamp failure, got %d", uSvc.findByCharCalls.Load())
+		}
+		if store.docs["ses-A"].Summary == nil || store.docs["ses-A"].Summary.Companions == nil || len(*store.docs["ses-A"].Summary.Companions) != 1 {
+			t.Fatalf("expected ses-A summary to still resolve companion from pre-resolved metadata, got %+v", store.docs["ses-A"].Summary)
+		}
+	})
+
+	t.Run("does not re-query users in phase 2 when historical character is unresolvable", func(t *testing.T) {
+		store, aggSvc, uSvc := seedHistoricalFireteam()
+		shared := aggSvc.byID["agg-shared"]
+		shared.SnapshotLinks["char-deleted"] = api.SnapshotLink{
+			CharacterID: "char-deleted",
+			SessionID:   new("ses-deleted"),
+		}
+		shared.Performance["char-deleted"] = makeCompanionPerf(0, 17, 777001, "777001")
+		aggSvc.byID["agg-shared"] = shared
+
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		res, err := svc.BackfillSessionSummaries(clog.NewContext(context.Background()), false)
+		if err != nil {
+			t.Fatalf("BackfillSessionSummaries failed: %v", err)
+		}
+		if res.SessionsScanned != 2 || res.SessionsUpdated != 2 {
+			t.Fatalf("unexpected result: %+v", res)
+		}
+		if uSvc.findByCharCalls.Load() != 1 {
+			t.Fatalf("expected strictly 1 upfront FindByCharacterIDs call across all sessions, got %d", uSvc.findByCharCalls.Load())
+		}
+	})
+
+	t.Run("handles legacy session docs missing embedded id field", func(t *testing.T) {
+		store, aggSvc, uSvc := seedHistoricalFireteam()
+		store.docs["ses-A"].ID = ""
+		store.docs["ses-B"].ID = ""
+
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		res, err := svc.BackfillSessionSummaries(clog.NewContext(context.Background()), false)
+		if err != nil {
+			t.Fatalf("BackfillSessionSummaries failed: %v", err)
+		}
+		if res.SessionsScanned != 2 || res.SessionsUpdated != 2 || res.SessionsFailed != 0 {
+			t.Fatalf("unexpected result: %+v", res)
+		}
+		if store.docs["ses-A"].Summary == nil || store.docs["ses-A"].Summary.Companions == nil || len(*store.docs["ses-A"].Summary.Companions) != 1 {
+			t.Fatalf("expected ses-A summary persisted under ses-A with 1 companion, got %+v", store.docs["ses-A"].Summary)
+		}
+		if _, leakedEmpty := store.docs[""]; leakedEmpty {
+			t.Fatalf("expected no write to empty session ID")
+		}
 	})
 
 	t.Run("fails fast when user lookup errors instead of persisting partial state", func(t *testing.T) {

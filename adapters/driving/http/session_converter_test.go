@@ -74,3 +74,21 @@ func TestToAPIBackfillSessionSummariesResponse(t *testing.T) {
 		t.Fatalf("unexpected backfill DTO: %+v", resp)
 	}
 }
+
+func TestToAPIBackfillSessionSummariesErrors(t *testing.T) {
+	unauth, ok := ToAPIBackfillSessionSummariesUnauthorized().(api.BackfillSessionSummaries401JSONResponse)
+	if !ok {
+		t.Fatalf("expected 401 JSON response")
+	}
+	if unauth.Message != "unauthorized" || unauth.Status != api.ErrUnknownError {
+		t.Fatalf("unexpected 401 payload: %+v", unauth)
+	}
+
+	serverErr, ok := ToAPIBackfillSessionSummariesError(errors.New("boom")).(api.BackfillSessionSummaries500JSONResponse)
+	if !ok {
+		t.Fatalf("expected 500 JSON response")
+	}
+	if serverErr.Message != "boom" || serverErr.Status != api.ErrInternalSystemDown {
+		t.Fatalf("unexpected 500 payload: %+v", serverErr)
+	}
+}

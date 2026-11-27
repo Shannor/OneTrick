@@ -39,7 +39,7 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 		return nil, fmt.Errorf("failed to fetch aggregates for session %s: %w", ses.ID, err)
 	}
 
-	summary := s.computeSessionSummaryFromAggregates(ctx, ses, aggregates)
+	summary := s.computeSessionSummaryFromAggregates(ctx, ses, aggregates, companionResolveOptions{})
 	clog.WithGroupFields(ctx, "sessionService.computeSummary", clog.Fields{
 		"sessionId":      ses.ID,
 		"totalMatches":   *summary.TotalMatches,
@@ -50,7 +50,17 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 	return summary, nil
 }
 
-func (s service) computeSessionSummaryFromAggregates(ctx context.Context, ses api.Session, aggregates []api.Aggregate) *api.SessionSummary {
+type companionResolveOptions struct {
+	preResolvedMeta map[string]companionParticipantMeta
+	skipUserLookup  bool
+}
+
+func (s service) computeSessionSummaryFromAggregates(
+	ctx context.Context,
+	ses api.Session,
+	aggregates []api.Aggregate,
+	opts companionResolveOptions,
+) *api.SessionSummary {
 	if len(aggregates) == 0 {
 		return emptySessionSummary()
 	}
@@ -62,7 +72,7 @@ func (s service) computeSessionSummaryFromAggregates(ctx context.Context, ses ap
 
 	s.resolveMissingModes(ctx, acc)
 	topWeapons := s.buildTopWeapons(ctx, acc)
-	companions := s.buildCompanions(ctx, ses, acc.companionObs)
+	companions := s.buildCompanions(ctx, ses, acc.companionObs, opts)
 	return acc.buildSummary(topWeapons, companions)
 }
 
@@ -473,36 +483,49 @@ func (s service) resolveParticipantMetadata(
 	return merged
 }
 
-func (s service) buildCompanions(ctx context.Context, ses api.Session, obs []companionObservation) []api.SessionCompanion {
+func (s service) buildCompanions(
+	ctx context.Context,
+	ses api.Session,
+	obs []companionObservation,
+	opts companionResolveOptions,
+) []api.SessionCompanion {
 	if len(obs) == 0 {
 		return make([]api.SessionCompanion, 0)
 	}
 
-	stampedMeta := make(map[string]companionParticipantMeta, len(obs))
+	metaByChar := make(map[string]companionParticipantMeta, len(obs))
 	for _, o := range obs {
 		if o.userID == "" {
 			continue
 		}
-		stampedMeta[o.characterID] = mergeParticipantMeta(stampedMeta[o.characterID], companionParticipantMeta{
+		metaByChar[o.characterID] = mergeParticipantMeta(metaByChar[o.characterID], companionParticipantMeta{
 			userID:         o.userID,
 			displayName:    o.displayName,
 			characterClass: o.characterClass,
 			emblemURL:      o.emblemURL,
 		})
 	}
-
-	missingCharIDs := set.NewOrdered[string]()
-	for _, o := range obs {
-		if o.userID != "" {
-			continue
+	if len(opts.preResolvedMeta) > 0 {
+		for _, o := range obs {
+			if incoming, ok := opts.preResolvedMeta[o.characterID]; ok {
+				metaByChar[o.characterID] = mergeParticipantMeta(metaByChar[o.characterID], incoming)
+			}
 		}
-		if existing, ok := stampedMeta[o.characterID]; ok && existing.userID != "" {
-			continue
-		}
-		missingCharIDs.Add(o.characterID)
 	}
 
-	metaByChar := s.resolveParticipantMetadata(ctx, stampedMeta, missingCharIDs.ToSlice(), "sessionService.computeSummary")
+	if !opts.skipUserLookup {
+		missingCharIDs := set.NewOrdered[string]()
+		for _, o := range obs {
+			if o.userID != "" {
+				continue
+			}
+			if existing, ok := metaByChar[o.characterID]; ok && existing.userID != "" {
+				continue
+			}
+			missingCharIDs.Add(o.characterID)
+		}
+		metaByChar = s.resolveParticipantMetadata(ctx, metaByChar, missingCharIDs.ToSlice(), "sessionService.computeSummary")
+	}
 
 	type matchEntityKey struct {
 		id         string

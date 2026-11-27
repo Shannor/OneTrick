@@ -363,6 +363,64 @@ func TestGetSessionAggregates(t *testing.T) {
 		}
 	})
 
+	t.Run("handles legacy session doc missing embedded id field", func(t *testing.T) {
+		store := newMemorySessionStore()
+		store.docs["ses-legacy"] = &api.Session{
+			ID:           "",
+			UserID:       "user-A",
+			CharacterID:  "char-A",
+			AggregateIDs: []string{"agg-1"},
+		}
+		aggSvc := newFakeSessionAggregateService()
+		aggSvc.seed(api.Aggregate{
+			ID:         "agg-1",
+			ActivityID: "act-1",
+			ActivityDetails: api.ActivityHistory{
+				InstanceID: "act-1",
+				IsPrivate:  new(false),
+			},
+			SnapshotLinks: map[string]api.SnapshotLink{
+				"char-A": {
+					CharacterID: "char-A",
+					SessionID:   new("ses-legacy"),
+					SnapshotID:  new("snap-A"),
+					UserID:      new("user-A"),
+				},
+				"char-same-session": {
+					CharacterID: "char-same-session",
+					SessionID:   new("ses-legacy"),
+					SnapshotID:  new("snap-same"),
+					UserID:      new("user-X"),
+					DisplayName: new("SameSession#0000"),
+				},
+				"char-B": {
+					CharacterID: "char-B",
+					SessionID:   new("ses-B"),
+					SnapshotID:  new("snap-B"),
+					UserID:      new("user-B"),
+					DisplayName: new("Bravo#2222"),
+				},
+			},
+			Performance: map[string]api.InstancePerformance{
+				"char-A":            makeCompanionPerf(0, 17, 12345, "12345"),
+				"char-same-session": makeCompanionPerf(0, 17, 12345, "12345"),
+				"char-B":            makeCompanionPerf(0, 17, 12345, "12345"),
+			},
+		})
+		svc := NewService(store, aggSvc, &fakeSessionUserService{}, nil, &fakeSessionSnapshotService{}, nil)
+
+		res, err := svc.GetSessionAggregates(clog.NewContext(context.Background()), "ses-legacy")
+		if err != nil {
+			t.Fatalf("GetSessionAggregates failed: %v", err)
+		}
+		if len(res.Participants) != 1 {
+			t.Fatalf("expected only char-B participant (same-session link excluded via fallback ses.ID), got %+v", res.Participants)
+		}
+		if _, ok := res.Participants["char-B"]; !ok {
+			t.Fatalf("expected char-B in participants, got %+v", res.Participants)
+		}
+	})
+
 	t.Run("missing session returns ErrNotFound", func(t *testing.T) {
 		store := newMemorySessionStore()
 		svc := NewService(store, newFakeSessionAggregateService(), &fakeSessionUserService{}, nil, &fakeSessionSnapshotService{}, nil)

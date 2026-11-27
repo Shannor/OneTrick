@@ -1137,7 +1137,7 @@ func (s Server) BackfillAggregateData(ctx context.Context, request api.BackfillA
 func (s Server) BackfillSessionSummaries(ctx context.Context, request api.BackfillSessionSummariesRequestObject) (api.BackfillSessionSummariesResponseObject, error) {
 	if request.Params.XInternalAPIKey == nil || *request.Params.XInternalAPIKey == "" || s.InternalAPIKey == "" ||
 		subtle.ConstantTimeCompare([]byte(*request.Params.XInternalAPIKey), []byte(s.InternalAPIKey)) != 1 {
-		return api.BackfillSessionSummaries401JSONResponse{Message: "unauthorized"}, nil
+		return httpadapter.ToAPIBackfillSessionSummariesUnauthorized(), nil
 	}
 
 	dryRun := request.Params.DryRun != nil && *request.Params.DryRun
@@ -1145,10 +1145,7 @@ func (s Server) BackfillSessionSummaries(ctx context.Context, request api.Backfi
 
 	res, err := s.SessionService.BackfillSessionSummaries(ctx, dryRun)
 	if err != nil {
-		return api.BackfillSessionSummaries500JSONResponse{
-			Message: err.Error(),
-			Status:  api.ErrInternalSystemDown,
-		}, nil
+		return httpadapter.ToAPIBackfillSessionSummariesError(err), nil
 	}
 	return httpadapter.ToAPIBackfillSessionSummariesResponse(res), nil
 }

@@ -8,6 +8,8 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type aggregateStore interface {
@@ -228,8 +230,13 @@ func (f *firestoreAggregateStore) stampSnapshotLinkParticipants(ctx context.Cont
 	if len(updates) == 0 {
 		return nil
 	}
-	_, err := f.db.Collection(collection).Doc(aggregateID).Update(ctx, updates)
-	return err
+	if _, err := f.db.Collection(collection).Doc(aggregateID).Update(ctx, updates); err != nil {
+		if status.Code(err) == codes.NotFound {
+			return NotFound
+		}
+		return err
+	}
+	return nil
 }
 
 func (f *firestoreAggregateStore) deleteAggregate(ctx context.Context, aggregateID string) error {

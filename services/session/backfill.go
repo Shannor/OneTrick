@@ -107,10 +107,16 @@ func (s service) BackfillSessionSummaries(ctx context.Context, dryRun bool) (Bac
 				res.SessionsFailed++
 				return err
 			}
+			if ses.ID == "" {
+				ses.ID = sessionID
+			}
 			res.SessionsScanned++
 
 			sessionAggs := collectSessionAggregates(ses.AggregateIDs, aggsByID)
-			summary := s.computeSessionSummaryFromAggregates(iterCtx, *ses, sessionAggs)
+			summary := s.computeSessionSummaryFromAggregates(iterCtx, *ses, sessionAggs, companionResolveOptions{
+				preResolvedMeta: metaByChar,
+				skipUserLookup:  true,
+			})
 			if sessionSummariesEqual(ses.Summary, summary) {
 				return nil
 			}

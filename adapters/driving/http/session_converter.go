@@ -57,3 +57,17 @@ func ToAPIBackfillSessionSummariesResponse(res session.BackfillSessionSummariesR
 		SessionsFailed:    int32(res.SessionsFailed),
 	}
 }
+
+func ToAPIBackfillSessionSummariesUnauthorized() api.BackfillSessionSummariesResponseObject {
+	return api.BackfillSessionSummaries401JSONResponse{
+		Message: "unauthorized",
+		Status:  api.ErrUnknownError,
+	}
+}
+
+func ToAPIBackfillSessionSummariesError(err error) api.BackfillSessionSummariesResponseObject {
+	return api.BackfillSessionSummaries500JSONResponse{
+		Message: err.Error(),
+		Status:  api.ErrInternalSystemDown,
+	}
+}

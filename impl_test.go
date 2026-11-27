@@ -627,8 +627,12 @@ func TestBackfillSessionSummariesHandler(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
-		if _, ok := resp.(api.BackfillSessionSummaries401JSONResponse); !ok {
+		unauthResp, ok := resp.(api.BackfillSessionSummaries401JSONResponse)
+		if !ok {
 			t.Fatalf("expected 401 response, got %T", resp)
+		}
+		if unauthResp.Status != api.ErrUnknownError {
+			t.Fatalf("expected Status=%q on 401 response, got %q", api.ErrUnknownError, unauthResp.Status)
 		}
 		if svcMock.backfillCalled {
 			t.Fatalf("expected service not called when unauthorized")
@@ -680,8 +684,12 @@ func TestBackfillSessionSummariesHandler(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
-		if _, ok := resp.(api.BackfillSessionSummaries500JSONResponse); !ok {
+		errResp, ok := resp.(api.BackfillSessionSummaries500JSONResponse)
+		if !ok {
 			t.Fatalf("expected 500 response, got %T", resp)
+		}
+		if errResp.Status != api.ErrInternalSystemDown {
+			t.Fatalf("expected Status=%q on 500 response, got %q", api.ErrInternalSystemDown, errResp.Status)
 		}
 	})
 }

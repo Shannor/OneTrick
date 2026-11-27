@@ -151,6 +151,9 @@ func (f *FirestoreStore) GetDoc(ctx context.Context, sessionID string) (*api.Ses
 	if err := doc.DataTo(&result); err != nil {
 		return nil, err
 	}
+	if result.ID == "" {
+		result.ID = doc.Ref.ID
+	}
 	return result, nil
 }
 

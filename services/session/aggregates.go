@@ -16,6 +16,9 @@ func (s service) GetSessionAggregates(ctx context.Context, sessionID string) (Se
 	if err != nil {
 		return SessionAggregatesResult{}, err
 	}
+	if ses.ID == "" {
+		ses.ID = sessionID
+	}
 	if len(ses.AggregateIDs) == 0 {
 		clog.WithGroupFields(ctx, "sessionService.getSessionAggregates", clog.Fields{
 			"aggregateCount":   0,
@@ -40,7 +43,7 @@ func (s service) GetSessionAggregates(ctx context.Context, sessionID string) (Se
 	snapshotIDs := set.NewOrdered[string]()
 	companionChars := set.NewOrdered[string]()
 	stampedMeta := make(map[string]companionParticipantMeta)
-	companionSnapIDs := make(map[string]*set.OrderedSet[string])
+	companionSnapIDs := make(map[string][]string)
 
 	for _, agg := range aggregates {
 		if ownerLink, ok := agg.SnapshotLinks[ses.CharacterID]; ok && ownerLink.SnapshotID != nil && *ownerLink.SnapshotID != "" {
@@ -57,12 +60,7 @@ func (s service) GetSessionAggregates(ctx context.Context, sessionID string) (Se
 				stampedMeta[cl.characterID] = mergeParticipantMeta(stampedMeta[cl.characterID], cl.meta)
 			}
 			if cl.snapshotID != "" {
-				snapSet, exists := companionSnapIDs[cl.characterID]
-				if !exists {
-					snapSet = set.NewOrdered[string]()
-					companionSnapIDs[cl.characterID] = snapSet
-				}
-				snapSet.Add(cl.snapshotID)
+				companionSnapIDs[cl.characterID] = append(companionSnapIDs[cl.characterID], cl.snapshotID)
 			}
 		}
 	}
@@ -90,10 +88,8 @@ func (s service) GetSessionAggregates(ctx context.Context, sessionID string) (Se
 			CharacterClass: meta.characterClass,
 			EmblemURL:      meta.emblemURL,
 		}
-		if snapSet, ok := companionSnapIDs[charID]; ok {
-			for _, snapID := range snapSet.ToSlice() {
-				snapshotIDs.Add(snapID)
-			}
+		for _, snapID := range companionSnapIDs[charID] {
+			snapshotIDs.Add(snapID)
 		}
 	}
 
