@@ -76,6 +76,78 @@ paths:
                   failed:
                     type: integer
                     format: int32
+  /admin/backfill-session-summaries:
+    post:
+      operationId: BackfillSessionSummaries
+      description: Backfill SnapshotLink participant metadata on multi-character aggregates and recompute SessionSummary companions on affected sessions
+      parameters:
+        - name: X-Internal-API-Key
+          in: header
+          required: false
+          x-go-name: XInternalAPIKey
+          schema:
+            type: string
+        - name: dryRun
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Computes backfill counts without persisting Firestore writes
+      responses:
+        '200':
+          description: Summary of backfilled aggregates and session summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - dryRun
+                  - aggregatesScanned
+                  - aggregatesUpdated
+                  - aggregatesFailed
+                  - sessionsScanned
+                  - sessionsUpdated
+                  - sessionsFailed
+                properties:
+                  dryRun:
+                    type: boolean
+                  aggregatesScanned:
+                    type: integer
+                    format: int32
+                  aggregatesUpdated:
+                    type: integer
+                    format: int32
+                  aggregatesFailed:
+                    type: integer
+                    format: int32
+                  sessionsScanned:
+                    type: integer
+                    format: int32
+                  sessionsUpdated:
+                    type: integer
+                    format: int32
+                  sessionsFailed:
+                    type: integer
+                    format: int32
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '401':
+          description: Missing or invalid internal API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /search:
     summary: Search for recorded 1 Trick users and Bungie Destiny 2 players
     post:
@@ -1294,6 +1366,7 @@ paths:
                 required:
                   - aggregates
                   - snapshots
+                  - participants
                 properties:
                   aggregates:
                     type: array
@@ -1303,6 +1376,22 @@ paths:
                     type: object
                     additionalProperties:
                       $ref: '#/components/schemas/CharacterSnapshot'
+                  participants:
+                    type: object
+                    additionalProperties:
+                      $ref: '#/components/schemas/SessionParticipant'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OneTrickError'
   /internal/sessions/finalize-comp:
     post:
       operationId: FinalizeSessionsComp
@@ -1538,6 +1627,28 @@ components:
         ping:
           type: string
           example: pong
+    InternalError:
+      type: string
+      enum:
+        - DestinyServerDown
+        - InternalSystemDown
+        - UnknownError
+      x-enum-varnames:
+        - ErrDestinyServerDown
+        - ErrInternalSystemDown
+        - ErrUnknownError
+    OneTrickError:
+      description: Known errors for the one trick API
+      type: object
+      required:
+        - message
+        - status
+      properties:
+        message:
+          type: string
+          description: User friendly description of the error
+        status:
+          $ref: '#/components/schemas/InternalError'
     Color:
       x-oapi-codegen-extra-tags:
         firestore: color
@@ -1705,28 +1816,6 @@ components:
           description: Cached Destiny 2 characters when isRecorded is true.
           items:
             $ref: '#/components/schemas/Character'
-    InternalError:
-      type: string
-      enum:
-        - DestinyServerDown
-        - InternalSystemDown
-        - UnknownError
-      x-enum-varnames:
-        - ErrDestinyServerDown
-        - ErrInternalSystemDown
-        - ErrUnknownError
-    OneTrickError:
-      description: Known errors for the one trick API
-      type: object
-      required:
-        - message
-        - status
-      properties:
-        message:
-          type: string
-          description: User friendly description of the error
-        status:
-          $ref: '#/components/schemas/InternalError'
     FireteamActiveSession:
       type: object
       required:
@@ -3372,6 +3461,26 @@ components:
           x-oapi-codegen-extra-tags:
             firestore: characterIds
           x-go-name: characterIDs
+    SessionParticipant:
+      type: object
+      required:
+        - userId
+        - displayName
+        - characterId
+      properties:
+        userId:
+          type: string
+          x-go-name: UserID
+        displayName:
+          type: string
+        characterId:
+          type: string
+          x-go-name: CharacterID
+        class:
+          type: string
+        emblemUrl:
+          type: string
+          x-go-name: EmblemURL
     SessionTickResponse:
       type: object
       description: Summary counters and runtime metrics from a session tick execution

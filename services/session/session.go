@@ -35,6 +35,8 @@ type Service interface {
 	Delete(ctx context.Context, sessionID string, userID string) error
 	ComputeSessionSummary(ctx context.Context, ses api.Session) (*api.SessionSummary, error)
 	UpdateSessionSummary(ctx context.Context, sessionID string, summary *api.SessionSummary) error
+	GetSessionAggregates(ctx context.Context, sessionID string) (SessionAggregatesResult, error)
+	BackfillSessionSummaries(ctx context.Context, dryRun bool) (BackfillSessionSummariesResult, error)
 	CleanupEmptyCompleted(ctx context.Context, dryRun bool) (int, error)
 	RunTick(ctx context.Context, opts TickOptions) (*api.SessionTickResponse, error)
 }

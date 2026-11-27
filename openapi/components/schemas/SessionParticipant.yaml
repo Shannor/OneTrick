@@ -1,0 +1,19 @@
+type: object
+required:
+  - userId
+  - displayName
+  - characterId
+properties:
+  userId:
+    type: string
+    x-go-name: UserID
+  displayName:
+    type: string
+  characterId:
+    type: string
+    x-go-name: CharacterID
+  class:
+    type: string
+  emblemUrl:
+    type: string
+    x-go-name: EmblemURL

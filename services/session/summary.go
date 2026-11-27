@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"oneTrick/api"
 	"oneTrick/ptr"
 	"oneTrick/services/destiny"
+	"oneTrick/services/user"
 	"oneTrick/set"
 	"slices"
 	"sort"
@@ -37,6 +39,32 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 		return nil, fmt.Errorf("failed to fetch aggregates for session %s: %w", ses.ID, err)
 	}
 
+	summary := s.computeSessionSummaryFromAggregates(ctx, ses, aggregates, companionResolveOptions{})
+	clog.WithGroupFields(ctx, "sessionService.computeSummary", clog.Fields{
+		"sessionId":      ses.ID,
+		"totalMatches":   *summary.TotalMatches,
+		"wins":           *summary.Wins,
+		"losses":         *summary.Losses,
+		"companionCount": len(*summary.Companions),
+	})
+	return summary, nil
+}
+
+type companionResolveOptions struct {
+	preResolvedMeta map[string]companionParticipantMeta
+	skipUserLookup  bool
+}
+
+func (s service) computeSessionSummaryFromAggregates(
+	ctx context.Context,
+	ses api.Session,
+	aggregates []api.Aggregate,
+	opts companionResolveOptions,
+) *api.SessionSummary {
+	if len(aggregates) == 0 {
+		return emptySessionSummary()
+	}
+
 	acc := newSummaryAccumulator(len(aggregates))
 	for i, agg := range aggregates {
 		acc.addAggregate(i, agg, ses)
@@ -44,17 +72,8 @@ func (s service) ComputeSessionSummary(ctx context.Context, ses api.Session) (*a
 
 	s.resolveMissingModes(ctx, acc)
 	topWeapons := s.buildTopWeapons(ctx, acc)
-	companions := s.buildCompanions(ctx, ses, acc.companionObs)
-	summary := acc.buildSummary(topWeapons, companions)
-
-	clog.WithGroupFields(ctx, "sessionService.computeSummary", clog.Fields{
-		"sessionId":      ses.ID,
-		"totalMatches":   *summary.TotalMatches,
-		"wins":           *summary.Wins,
-		"losses":         *summary.Losses,
-		"companionCount": len(companions),
-	})
-	return summary, nil
+	companions := s.buildCompanions(ctx, ses, acc.companionObs, opts)
+	return acc.buildSummary(topWeapons, companions)
 }
 
 func (s service) UpdateSessionSummary(ctx context.Context, sessionID string, summary *api.SessionSummary) error {
@@ -129,11 +148,18 @@ func (a *summaryAccumulator) addAggregate(matchIndex int, agg api.Aggregate, ses
 	a.recordCompanions(matchIndex, agg, ses, perf.PlayerStats)
 }
 
-func (a *summaryAccumulator) recordCompanions(matchIndex int, agg api.Aggregate, ses api.Session, ownerStats api.PlayerStats) {
+type verifiedCompanionLink struct {
+	characterID string
+	sessionID   string
+	snapshotID  string
+	meta        companionParticipantMeta
+}
+
+func verifiedCompanionLinks(agg api.Aggregate, ses api.Session, ownerStats api.PlayerStats) []verifiedCompanionLink {
 	if isPrivateActivity(agg.ActivityDetails) || len(agg.SnapshotLinks) <= 1 {
-		return
+		return nil
 	}
-	ownerWon := isWin(ownerStats)
+	links := make([]verifiedCompanionLink, 0, len(agg.SnapshotLinks)-1)
 	for mapCharID, link := range agg.SnapshotLinks {
 		charID := mapCharID
 		if charID == "" {
@@ -152,14 +178,43 @@ func (a *summaryAccumulator) recordCompanions(matchIndex int, agg api.Aggregate,
 		if !areFireteamCompanions(ownerStats, otherPerf.PlayerStats) {
 			continue
 		}
+		userID := ptr.Deref(link.UserID)
+		if ses.UserID != "" && userID != "" && userID == ses.UserID {
+			continue
+		}
+		links = append(links, verifiedCompanionLink{
+			characterID: charID,
+			sessionID:   *link.SessionID,
+			snapshotID:  ptr.Deref(link.SnapshotID),
+			meta: companionParticipantMeta{
+				userID:         userID,
+				displayName:    ptr.Deref(link.DisplayName),
+				characterClass: ptr.Deref(link.CharacterClass),
+				emblemURL:      ptr.Deref(link.EmblemURL),
+			},
+		})
+	}
+	slices.SortFunc(links, func(a, b verifiedCompanionLink) int {
+		return strings.Compare(a.characterID, b.characterID)
+	})
+	return links
+}
+
+func (a *summaryAccumulator) recordCompanions(matchIndex int, agg api.Aggregate, ses api.Session, ownerStats api.PlayerStats) {
+	links := verifiedCompanionLinks(agg, ses, ownerStats)
+	if len(links) == 0 {
+		return
+	}
+	ownerWon := isWin(ownerStats)
+	for _, cl := range links {
 		a.companionObs = append(a.companionObs, companionObservation{
 			matchIndex:     matchIndex,
-			characterID:    charID,
-			sessionID:      *link.SessionID,
-			userID:         ptr.Deref(link.UserID),
-			displayName:    ptr.Deref(link.DisplayName),
-			characterClass: ptr.Deref(link.CharacterClass),
-			emblemURL:      ptr.Deref(link.EmblemURL),
+			characterID:    cl.characterID,
+			sessionID:      cl.sessionID,
+			userID:         cl.meta.userID,
+			displayName:    cl.meta.displayName,
+			characterClass: cl.meta.characterClass,
+			emblemURL:      cl.meta.emblemURL,
 			won:            ownerWon,
 		})
 	}
@@ -356,7 +411,84 @@ func (s service) buildTopWeapons(ctx context.Context, acc *summaryAccumulator) [
 	return topWeapons
 }
 
-func (s service) buildCompanions(ctx context.Context, ses api.Session, obs []companionObservation) []api.SessionCompanion {
+func mergeParticipantMeta(base, incoming companionParticipantMeta) companionParticipantMeta {
+	if base.userID == "" {
+		base.userID = incoming.userID
+	}
+	if base.displayName == "" {
+		base.displayName = incoming.displayName
+	}
+	if base.characterClass == "" {
+		base.characterClass = incoming.characterClass
+	}
+	if base.emblemURL == "" {
+		base.emblemURL = incoming.emblemURL
+	}
+	return base
+}
+
+func indexUserCharacterMeta(users []user.User) map[string]companionParticipantMeta {
+	byChar := make(map[string]companionParticipantMeta, len(users)*3)
+	for _, u := range users {
+		if u.ID == "" {
+			continue
+		}
+		for _, cid := range u.CharacterIDs {
+			if cid == "" {
+				continue
+			}
+			byChar[cid] = mergeParticipantMeta(byChar[cid], companionParticipantMeta{
+				userID:      u.ID,
+				displayName: u.DisplayName,
+			})
+		}
+		for _, ch := range u.Characters {
+			if ch.Id == "" {
+				continue
+			}
+			byChar[ch.Id] = mergeParticipantMeta(byChar[ch.Id], companionParticipantMeta{
+				userID:         u.ID,
+				displayName:    u.DisplayName,
+				characterClass: ch.Class,
+				emblemURL:      ch.EmblemURL,
+			})
+		}
+	}
+	return byChar
+}
+
+func (s service) resolveParticipantMetadata(
+	ctx context.Context,
+	base map[string]companionParticipantMeta,
+	missingCharIDs []string,
+	logGroup string,
+) map[string]companionParticipantMeta {
+	merged := make(map[string]companionParticipantMeta, len(base)+len(missingCharIDs))
+	maps.Copy(merged, base)
+
+	if len(missingCharIDs) == 0 || s.userService == nil {
+		return merged
+	}
+	resolved, err := s.userService.FindByCharacterIDs(ctx, missingCharIDs)
+	if err != nil {
+		clog.WithGroupFields(ctx, logGroup, clog.Fields{
+			"warning":              "failed to resolve legacy companion users",
+			"companionLookupError": err.Error(),
+		})
+		return merged
+	}
+	for cid, incoming := range indexUserCharacterMeta(resolved) {
+		merged[cid] = mergeParticipantMeta(merged[cid], incoming)
+	}
+	return merged
+}
+
+func (s service) buildCompanions(
+	ctx context.Context,
+	ses api.Session,
+	obs []companionObservation,
+	opts companionResolveOptions,
+) []api.SessionCompanion {
 	if len(obs) == 0 {
 		return make([]api.SessionCompanion, 0)
 	}
@@ -366,78 +498,33 @@ func (s service) buildCompanions(ctx context.Context, ses api.Session, obs []com
 		if o.userID == "" {
 			continue
 		}
-		meta := metaByChar[o.characterID]
-		if meta.userID == "" {
-			meta.userID = o.userID
-		}
-		if meta.displayName == "" {
-			meta.displayName = o.displayName
-		}
-		if meta.characterClass == "" {
-			meta.characterClass = o.characterClass
-		}
-		if meta.emblemURL == "" {
-			meta.emblemURL = o.emblemURL
-		}
-		metaByChar[o.characterID] = meta
+		metaByChar[o.characterID] = mergeParticipantMeta(metaByChar[o.characterID], companionParticipantMeta{
+			userID:         o.userID,
+			displayName:    o.displayName,
+			characterClass: o.characterClass,
+			emblemURL:      o.emblemURL,
+		})
 	}
-
-	missingCharIDs := set.NewOrdered[string]()
-	for _, o := range obs {
-		if o.userID != "" {
-			continue
-		}
-		if existing, ok := metaByChar[o.characterID]; ok && existing.userID != "" {
-			continue
-		}
-		missingCharIDs.Add(o.characterID)
-	}
-
-	if missingCharIDs.Size() > 0 && s.userService != nil {
-		if resolved, err := s.userService.FindByCharacterIDs(ctx, missingCharIDs.ToSlice()); err != nil {
-			clog.WithGroupFields(ctx, "sessionService.computeSummary", clog.Fields{
-				"warning":              "failed to resolve legacy companion users",
-				"companionLookupError": err.Error(),
-			})
-		} else {
-			for _, u := range resolved {
-				if u.ID == "" {
-					continue
-				}
-				for _, cid := range u.CharacterIDs {
-					if cid == "" {
-						continue
-					}
-					meta := metaByChar[cid]
-					if meta.userID == "" {
-						meta.userID = u.ID
-					}
-					if meta.displayName == "" {
-						meta.displayName = u.DisplayName
-					}
-					metaByChar[cid] = meta
-				}
-				for _, ch := range u.Characters {
-					if ch.Id == "" {
-						continue
-					}
-					meta := metaByChar[ch.Id]
-					if meta.userID == "" {
-						meta.userID = u.ID
-					}
-					if meta.displayName == "" {
-						meta.displayName = u.DisplayName
-					}
-					if meta.characterClass == "" {
-						meta.characterClass = ch.Class
-					}
-					if meta.emblemURL == "" {
-						meta.emblemURL = ch.EmblemURL
-					}
-					metaByChar[ch.Id] = meta
-				}
+	if len(opts.preResolvedMeta) > 0 {
+		for _, o := range obs {
+			if incoming, ok := opts.preResolvedMeta[o.characterID]; ok {
+				metaByChar[o.characterID] = mergeParticipantMeta(metaByChar[o.characterID], incoming)
 			}
 		}
+	}
+
+	if !opts.skipUserLookup {
+		missingCharIDs := set.NewOrdered[string]()
+		for _, o := range obs {
+			if o.userID != "" {
+				continue
+			}
+			if existing, ok := metaByChar[o.characterID]; ok && existing.userID != "" {
+				continue
+			}
+			missingCharIDs.Add(o.characterID)
+		}
+		metaByChar = s.resolveParticipantMetadata(ctx, metaByChar, missingCharIDs.ToSlice(), "sessionService.computeSummary")
 	}
 
 	type matchEntityKey struct {

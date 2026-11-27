@@ -1,0 +1,71 @@
+post:
+  operationId: BackfillSessionSummaries
+  description: Backfill SnapshotLink participant metadata on multi-character aggregates and recompute SessionSummary companions on affected sessions
+  parameters:
+    - name: X-Internal-API-Key
+      in: header
+      required: false
+      x-go-name: XInternalAPIKey
+      schema:
+        type: string
+    - name: dryRun
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+      description: Computes backfill counts without persisting Firestore writes
+  responses:
+    '200':
+      description: Summary of backfilled aggregates and session summaries
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - dryRun
+              - aggregatesScanned
+              - aggregatesUpdated
+              - aggregatesFailed
+              - sessionsScanned
+              - sessionsUpdated
+              - sessionsFailed
+            properties:
+              dryRun:
+                type: boolean
+              aggregatesScanned:
+                type: integer
+                format: int32
+              aggregatesUpdated:
+                type: integer
+                format: int32
+              aggregatesFailed:
+                type: integer
+                format: int32
+              sessionsScanned:
+                type: integer
+                format: int32
+              sessionsUpdated:
+                type: integer
+                format: int32
+              sessionsFailed:
+                type: integer
+                format: int32
+    '400':
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '401':
+      description: Missing or invalid internal API key
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '500':
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

@@ -212,6 +212,45 @@ func (m *memAggregateStore) detachSession(_ context.Context, aggregateID string,
 	return nil
 }
 
+func (m *memAggregateStore) listAll(_ context.Context) ([]api.Aggregate, error) {
+	out := make([]api.Aggregate, 0, len(m.docs))
+	for _, doc := range m.docs {
+		out = append(out, cloneAggregate(doc))
+	}
+	return out, nil
+}
+
+func (m *memAggregateStore) stampSnapshotLinkParticipants(_ context.Context, aggregateID string, participants map[string]SnapshotLinkParticipant) error {
+	doc, ok := m.docs[aggregateID]
+	if !ok {
+		return NotFound
+	}
+	if doc.SnapshotLinks == nil {
+		doc.SnapshotLinks = make(map[string]api.SnapshotLink)
+	}
+	for charID, meta := range participants {
+		link, exists := doc.SnapshotLinks[charID]
+		if !exists {
+			continue
+		}
+		if meta.UserID != "" {
+			link.UserID = new(meta.UserID)
+		}
+		if meta.DisplayName != "" {
+			link.DisplayName = new(meta.DisplayName)
+		}
+		if meta.CharacterClass != "" {
+			link.CharacterClass = new(meta.CharacterClass)
+		}
+		if meta.EmblemURL != "" {
+			link.EmblemURL = new(meta.EmblemURL)
+		}
+		doc.SnapshotLinks[charID] = link
+	}
+	m.docs[aggregateID] = doc
+	return nil
+}
+
 func (m *memAggregateStore) deleteAggregate(_ context.Context, aggregateID string) error {
 	delete(m.docs, aggregateID)
 	return nil
@@ -471,4 +510,58 @@ func TestRemoveSession(t *testing.T) {
 			t.Fatalf("expected nil siblings and nil err, got siblings=%v err=%v", siblings, err)
 		}
 	})
+}
+
+func TestStampSnapshotLinkParticipantsAndGetAllAggregates(t *testing.T) {
+	ctx := context.Background()
+	store := newMemAggregateStore()
+	store.docs["agg-1"] = api.Aggregate{
+		ID:         "agg-1",
+		ActivityID: "act-1",
+		SnapshotLinks: map[string]api.SnapshotLink{
+			"char-a": {
+				CharacterID: "char-a",
+				SnapshotID:  new("snap-a"),
+				SessionID:   new("ses-a"),
+			},
+		},
+	}
+	svc := &service{store: store}
+
+	all, err := svc.GetAllAggregates(ctx)
+	if err != nil {
+		t.Fatalf("GetAllAggregates failed: %v", err)
+	}
+	if len(all) != 1 || all[0].ID != "agg-1" {
+		t.Fatalf("unexpected GetAllAggregates result: %+v", all)
+	}
+
+	if err := svc.StampSnapshotLinkParticipants(ctx, "agg-1", map[string]SnapshotLinkParticipant{
+		"char-a": {
+			UserID:         "user-a",
+			DisplayName:    "Alpha#1111",
+			CharacterClass: "Hunter",
+			EmblemURL:      "https://www.bungie.net/emblem.jpg",
+		},
+	}); err != nil {
+		t.Fatalf("StampSnapshotLinkParticipants failed: %v", err)
+	}
+
+	updated := store.docs["agg-1"].SnapshotLinks["char-a"]
+	if updated.SnapshotID == nil || *updated.SnapshotID != "snap-a" {
+		t.Fatalf("expected existing SnapshotID preserved, got %+v", updated)
+	}
+	if updated.UserID == nil || *updated.UserID != "user-a" ||
+		updated.DisplayName == nil || *updated.DisplayName != "Alpha#1111" ||
+		updated.CharacterClass == nil || *updated.CharacterClass != "Hunter" ||
+		updated.EmblemURL == nil || *updated.EmblemURL != "https://www.bungie.net/emblem.jpg" {
+		t.Fatalf("unexpected stamped participant fields: %+v", updated)
+	}
+
+	if err := svc.StampSnapshotLinkParticipants(ctx, "", map[string]SnapshotLinkParticipant{"char-a": {UserID: "u"}}); err != nil {
+		t.Fatalf("expected empty aggregateID to be a no-op, got %v", err)
+	}
+	if err := svc.StampSnapshotLinkParticipants(ctx, "agg-1", nil); err != nil {
+		t.Fatalf("expected empty participants to be a no-op, got %v", err)
+	}
 }

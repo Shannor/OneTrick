@@ -13,7 +13,6 @@ import (
 	"oneTrick/core/fireteam"
 	"oneTrick/core/telemetry"
 	"oneTrick/logger"
-	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
@@ -529,88 +528,170 @@ func TestGetSnapshotsZeroIndexedPageOffset(t *testing.T) {
 	}
 }
 
-type mockSessionGetService struct {
+type mockSessionAggregatesService struct {
 	session.Service
-	ses *api.Session
+	capturedSessionID string
+	aggResult         session.SessionAggregatesResult
+	aggErr            error
+	capturedDryRun    bool
+	backfillCalled    bool
+	backfillResult    session.BackfillSessionSummariesResult
+	backfillErr       error
 }
 
-func (m *mockSessionGetService) Get(ctx context.Context, id string) (*api.Session, error) {
-	return m.ses, nil
-}
-
-type mockAggregateGetService struct {
-	aggregate.Service
-	aggs []api.Aggregate
-}
-
-func (m *mockAggregateGetService) GetAggregates(ctx context.Context, ids []string) ([]api.Aggregate, error) {
-	return m.aggs, nil
-}
-
-type mockSnapshotGetByIDsService struct {
-	snapshot.Service
-	capturedIDs []string
-}
-
-func (m *mockSnapshotGetByIDsService) GetByIDs(ctx context.Context, ids []string) ([]api.CharacterSnapshot, error) {
-	m.capturedIDs = ids
-	res := make([]api.CharacterSnapshot, 0, len(ids))
-	for _, id := range ids {
-		res = append(res, api.CharacterSnapshot{ID: id})
+func (m *mockSessionAggregatesService) GetSessionAggregates(_ context.Context, sessionID string) (session.SessionAggregatesResult, error) {
+	m.capturedSessionID = sessionID
+	if m.aggErr != nil {
+		return session.SessionAggregatesResult{}, m.aggErr
 	}
-	return res, nil
+	return m.aggResult, nil
 }
 
-func TestGetSessionAggregatesDeduplicatesSnapshotIDs(t *testing.T) {
-	const charID = "char-1"
-	aggIDs := make([]string, 35)
-	aggs := make([]api.Aggregate, 35)
-	for i := 0; i < 35; i++ {
-		aggIDs[i] = fmt.Sprintf("agg-%d", i)
-		snapID := "snap-a"
-		if i%2 == 1 {
-			snapID = "snap-b"
-		}
-		aggs[i] = api.Aggregate{
-			ID: aggIDs[i],
-			SnapshotLinks: map[string]api.SnapshotLink{
-				charID: {
-					CharacterID: charID,
-					SnapshotID:  new(snapID),
+func (m *mockSessionAggregatesService) BackfillSessionSummaries(_ context.Context, dryRun bool) (session.BackfillSessionSummariesResult, error) {
+	m.backfillCalled = true
+	m.capturedDryRun = dryRun
+	if m.backfillErr != nil {
+		return session.BackfillSessionSummariesResult{}, m.backfillErr
+	}
+	return m.backfillResult, nil
+}
+
+func TestGetSessionAggregatesHandler(t *testing.T) {
+	t.Run("delegates to SessionService and maps hydrated participants", func(t *testing.T) {
+		svcMock := &mockSessionAggregatesService{
+			aggResult: session.SessionAggregatesResult{
+				Aggregates: []api.Aggregate{{ID: "agg-1"}},
+				Snapshots:  map[string]api.CharacterSnapshot{"snap-a": {ID: "snap-a"}, "snap-b": {ID: "snap-b"}},
+				Participants: map[string]session.SessionParticipant{
+					"char-b": {
+						UserID:         "user-b",
+						DisplayName:    "Bravo#2222",
+						CharacterID:    "char-b",
+						CharacterClass: "Hunter",
+						EmblemURL:      "https://www.bungie.net/emblem.jpg",
+					},
 				},
 			},
 		}
-	}
+		server := Server{SessionService: svcMock}
 
-	snapMock := &mockSnapshotGetByIDsService{}
-	server := Server{
-		SessionService: &mockSessionGetService{
-			ses: &api.Session{
-				ID:           "ses-1",
-				CharacterID:  charID,
-				AggregateIDs: aggIDs,
-			},
-		},
-		AggregateService: &mockAggregateGetService{aggs: aggs},
-		SnapshotService:  snapMock,
-	}
-
-	resp, err := server.GetSessionAggregates(context.Background(), api.GetSessionAggregatesRequestObject{
-		SessionId: "ses-1",
+		resp, err := server.GetSessionAggregates(context.Background(), api.GetSessionAggregatesRequestObject{
+			SessionId: "ses-1",
+		})
+		if err != nil {
+			t.Fatalf("expected GetSessionAggregates to succeed, got: %v", err)
+		}
+		if svcMock.capturedSessionID != "ses-1" {
+			t.Fatalf("expected sessionID ses-1 forwarded, got %q", svcMock.capturedSessionID)
+		}
+		jsonResp, ok := resp.(api.GetSessionAggregates200JSONResponse)
+		if !ok {
+			t.Fatalf("expected GetSessionAggregates200JSONResponse, got: %T", resp)
+		}
+		if len(jsonResp.Aggregates) != 1 || len(jsonResp.Snapshots) != 2 || len(jsonResp.Participants) != 1 {
+			t.Fatalf("unexpected response payload: %+v", jsonResp)
+		}
+		p := jsonResp.Participants["char-b"]
+		if p.UserID != "user-b" || p.DisplayName != "Bravo#2222" || p.Class == nil || *p.Class != "Hunter" {
+			t.Fatalf("unexpected participant DTO: %+v", p)
+		}
 	})
-	if err != nil {
-		t.Fatalf("expected GetSessionAggregates to succeed, got: %v", err)
-	}
-	jsonResp, ok := resp.(api.GetSessionAggregates200JSONResponse)
-	if !ok {
-		t.Fatalf("expected GetSessionAggregates200JSONResponse, got: %T", resp)
-	}
-	if len(snapMock.capturedIDs) != 2 {
-		t.Fatalf("expected 2 deduplicated snapshot IDs passed to GetByIDs, got %d (%v)", len(snapMock.capturedIDs), snapMock.capturedIDs)
-	}
-	if len(jsonResp.Snapshots) != 2 {
-		t.Fatalf("expected 2 snapshots in response map, got %d", len(jsonResp.Snapshots))
-	}
+
+	t.Run("maps ErrNotFound to 404 and unexpected error to 500", func(t *testing.T) {
+		serverNotFound := Server{SessionService: &mockSessionAggregatesService{aggErr: session.ErrNotFound}}
+		resp, err := serverNotFound.GetSessionAggregates(context.Background(), api.GetSessionAggregatesRequestObject{SessionId: "missing"})
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if _, ok := resp.(api.GetSessionAggregates404JSONResponse); !ok {
+			t.Fatalf("expected 404 response, got %T", resp)
+		}
+
+		serverErr := Server{SessionService: &mockSessionAggregatesService{aggErr: errors.New("boom")}}
+		resp, err = serverErr.GetSessionAggregates(context.Background(), api.GetSessionAggregatesRequestObject{SessionId: "ses-err"})
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if _, ok := resp.(api.GetSessionAggregates500JSONResponse); !ok {
+			t.Fatalf("expected 500 response, got %T", resp)
+		}
+	})
+}
+
+func TestBackfillSessionSummariesHandler(t *testing.T) {
+	t.Run("rejects missing or invalid internal API key with 401", func(t *testing.T) {
+		svcMock := &mockSessionAggregatesService{}
+		server := Server{SessionService: svcMock, InternalAPIKey: "secret-key"}
+
+		resp, err := server.BackfillSessionSummaries(context.Background(), api.BackfillSessionSummariesRequestObject{})
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		unauthResp, ok := resp.(api.BackfillSessionSummaries401JSONResponse)
+		if !ok {
+			t.Fatalf("expected 401 response, got %T", resp)
+		}
+		if unauthResp.Status != api.ErrUnknownError {
+			t.Fatalf("expected Status=%q on 401 response, got %q", api.ErrUnknownError, unauthResp.Status)
+		}
+		if svcMock.backfillCalled {
+			t.Fatalf("expected service not called when unauthorized")
+		}
+	})
+
+	t.Run("forwards dryRun and maps summary counts on 200", func(t *testing.T) {
+		svcMock := &mockSessionAggregatesService{
+			backfillResult: session.BackfillSessionSummariesResult{
+				DryRun:            true,
+				AggregatesScanned: 5,
+				AggregatesUpdated: 2,
+				SessionsScanned:   3,
+				SessionsUpdated:   2,
+			},
+		}
+		server := Server{SessionService: svcMock, InternalAPIKey: "secret-key"}
+
+		resp, err := server.BackfillSessionSummaries(context.Background(), api.BackfillSessionSummariesRequestObject{
+			Params: api.BackfillSessionSummariesParams{
+				XInternalAPIKey: new("secret-key"),
+				DryRun:          new(true),
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		okResp, ok := resp.(api.BackfillSessionSummaries200JSONResponse)
+		if !ok {
+			t.Fatalf("expected 200 response, got %T", resp)
+		}
+		if !svcMock.backfillCalled || !svcMock.capturedDryRun {
+			t.Fatalf("expected BackfillSessionSummaries called with dryRun=true")
+		}
+		if !okResp.DryRun || okResp.AggregatesUpdated != 2 || okResp.SessionsUpdated != 2 {
+			t.Fatalf("unexpected backfill response: %+v", okResp)
+		}
+	})
+
+	t.Run("maps service error to 500", func(t *testing.T) {
+		svcMock := &mockSessionAggregatesService{backfillErr: errors.New("firestore down")}
+		server := Server{SessionService: svcMock, InternalAPIKey: "secret-key"}
+
+		resp, err := server.BackfillSessionSummaries(context.Background(), api.BackfillSessionSummariesRequestObject{
+			Params: api.BackfillSessionSummariesParams{
+				XInternalAPIKey: new("secret-key"),
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		errResp, ok := resp.(api.BackfillSessionSummaries500JSONResponse)
+		if !ok {
+			t.Fatalf("expected 500 response, got %T", resp)
+		}
+		if errResp.Status != api.ErrInternalSystemDown {
+			t.Fatalf("expected Status=%q on 500 response, got %q", api.ErrInternalSystemDown, errResp.Status)
+		}
+	})
 }
 
 type mockSnapshotMergeAndGetService struct {
@@ -1078,12 +1159,8 @@ func TestGetUserCharacterRefreshAndFallback(t *testing.T) {
 
 func TestGetSessionAggregatesEmptySession(t *testing.T) {
 	server := Server{
-		SessionService: &mockSessionGetService{
-			ses: &api.Session{
-				ID:           "ses-empty",
-				CharacterID:  "char-1",
-				AggregateIDs: nil,
-			},
+		SessionService: &mockSessionAggregatesService{
+			aggResult: session.SessionAggregatesResult{},
 		},
 	}
 
@@ -1097,8 +1174,9 @@ func TestGetSessionAggregatesEmptySession(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected GetSessionAggregates200JSONResponse, got %T", resp)
 	}
-	if len(okResp.Aggregates) != 0 || len(okResp.Snapshots) != 0 {
-		t.Fatalf("expected empty aggregates and snapshots, got %+v", okResp)
+	if okResp.Aggregates == nil || okResp.Snapshots == nil || okResp.Participants == nil ||
+		len(okResp.Aggregates) != 0 || len(okResp.Snapshots) != 0 || len(okResp.Participants) != 0 {
+		t.Fatalf("expected non-nil empty aggregates, snapshots, and participants, got %+v", okResp)
 	}
 }
 

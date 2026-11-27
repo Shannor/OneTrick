@@ -17,6 +17,7 @@ get:
             required:
               - aggregates
               - snapshots
+              - participants
             properties:
               aggregates:
                 type: array
@@ -26,3 +27,19 @@ get:
                 type: object
                 additionalProperties:
                   $ref: ../components/schemas/CharacterSnapshot.yaml
+              participants:
+                type: object
+                additionalProperties:
+                  $ref: ../components/schemas/SessionParticipant.yaml
+    '404':
+      description: Session not found
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml
+    '500':
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/OneTrickError.yaml

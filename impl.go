@@ -651,48 +651,11 @@ func (s Server) UpdateSession(ctx context.Context, request api.UpdateSessionRequ
 
 func (s Server) GetSessionAggregates(ctx context.Context, request api.GetSessionAggregatesRequestObject) (api.GetSessionAggregatesResponseObject, error) {
 	clog.WithGroupField(ctx, "request", "sessionId", request.SessionId)
-	ses, err := s.SessionService.Get(ctx, request.SessionId)
+	result, err := s.SessionService.GetSessionAggregates(ctx, request.SessionId)
 	if err != nil {
-		return nil, err
+		return httpadapter.ToAPISessionAggregatesError(err), nil
 	}
-	if len(ses.AggregateIDs) == 0 {
-		return api.GetSessionAggregates200JSONResponse{
-			Aggregates: []api.Aggregate{},
-			Snapshots:  map[string]api.CharacterSnapshot{},
-		}, nil
-	}
-	aggregates, err := s.AggregateService.GetAggregates(ctx, ses.AggregateIDs)
-	if err != nil {
-		return nil, err
-	}
-	uniqueIDS := make([]string, 0)
-	seenSnapshotIDs := make(map[string]struct{})
-	for _, a := range aggregates {
-		link, ok := a.SnapshotLinks[ses.CharacterID]
-		if !ok {
-			continue
-		}
-		if link.SnapshotID == nil || *link.SnapshotID == "" {
-			continue
-		}
-		if _, exists := seenSnapshotIDs[*link.SnapshotID]; exists {
-			continue
-		}
-		seenSnapshotIDs[*link.SnapshotID] = struct{}{}
-		uniqueIDS = append(uniqueIDS, *link.SnapshotID)
-	}
-	snapshots, err := s.SnapshotService.GetByIDs(ctx, uniqueIDS)
-	if err != nil {
-		return nil, err
-	}
-	snapshotByID := make(map[string]api.CharacterSnapshot)
-	for _, snap := range snapshots {
-		snapshotByID[snap.ID] = snap
-	}
-	return api.GetSessionAggregates200JSONResponse{
-		Aggregates: aggregates,
-		Snapshots:  snapshotByID,
-	}, nil
+	return httpadapter.ToAPISessionAggregatesResponse(result), nil
 }
 
 func (s Server) GetSnapshot(ctx context.Context, request api.GetSnapshotRequestObject) (api.GetSnapshotResponseObject, error) {
@@ -1169,6 +1132,22 @@ func (s Server) BackfillAggregateData(ctx context.Context, request api.BackfillA
 		Updated: int32(count),
 		Failed:  0,
 	}, nil
+}
+
+func (s Server) BackfillSessionSummaries(ctx context.Context, request api.BackfillSessionSummariesRequestObject) (api.BackfillSessionSummariesResponseObject, error) {
+	if request.Params.XInternalAPIKey == nil || *request.Params.XInternalAPIKey == "" || s.InternalAPIKey == "" ||
+		subtle.ConstantTimeCompare([]byte(*request.Params.XInternalAPIKey), []byte(s.InternalAPIKey)) != 1 {
+		return httpadapter.ToAPIBackfillSessionSummariesUnauthorized(), nil
+	}
+
+	dryRun := request.Params.DryRun != nil && *request.Params.DryRun
+	clog.WithGroupField(ctx, "request", "dryRun", dryRun)
+
+	res, err := s.SessionService.BackfillSessionSummaries(ctx, dryRun)
+	if err != nil {
+		return httpadapter.ToAPIBackfillSessionSummariesError(err), nil
+	}
+	return httpadapter.ToAPIBackfillSessionSummariesResponse(res), nil
 }
 
 func (s Server) GetCharacterTelemetry(ctx context.Context, request api.GetCharacterTelemetryRequestObject) (api.GetCharacterTelemetryResponseObject, error) {
