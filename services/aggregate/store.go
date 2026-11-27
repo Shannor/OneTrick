@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"oneTrick/api"
+	"slices"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
@@ -11,6 +12,7 @@ import (
 
 type aggregateStore interface {
 	getByActivityID(ctx context.Context, activityID string) (*api.Aggregate, error)
+	listAll(ctx context.Context) ([]api.Aggregate, error)
 	listBySessionID(ctx context.Context, sessionID string) ([]api.Aggregate, error)
 	mergeSessionActivity(
 		ctx context.Context,
@@ -22,6 +24,7 @@ type aggregateStore interface {
 		estimatedGameMode *api.GameMode,
 	) error
 	createAggregate(ctx context.Context, agg api.Aggregate) (api.Aggregate, error)
+	stampSnapshotLinkParticipants(ctx context.Context, aggregateID string, participants map[string]SnapshotLinkParticipant) error
 	detachSession(ctx context.Context, aggregateID string, sessionID string, clearSessionCharIDs, removeCharIDs []string) error
 	deleteAggregate(ctx context.Context, aggregateID string) error
 }
@@ -158,6 +161,72 @@ func (f *firestoreAggregateStore) detachSession(ctx context.Context, aggregateID
 				},
 			)
 		}
+	}
+	_, err := f.db.Collection(collection).Doc(aggregateID).Update(ctx, updates)
+	return err
+}
+
+func (f *firestoreAggregateStore) listAll(ctx context.Context) ([]api.Aggregate, error) {
+	docs, err := f.db.Collection(collection).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	aggs := make([]api.Aggregate, 0, len(docs))
+	for _, doc := range docs {
+		var agg api.Aggregate
+		if err := doc.DataTo(&agg); err != nil {
+			return nil, err
+		}
+		if agg.ID == "" {
+			agg.ID = doc.Ref.ID
+		}
+		aggs = append(aggs, agg)
+	}
+	return aggs, nil
+}
+
+func (f *firestoreAggregateStore) stampSnapshotLinkParticipants(ctx context.Context, aggregateID string, participants map[string]SnapshotLinkParticipant) error {
+	if aggregateID == "" || len(participants) == 0 {
+		return nil
+	}
+	charIDs := make([]string, 0, len(participants))
+	for charID := range participants {
+		if charID != "" {
+			charIDs = append(charIDs, charID)
+		}
+	}
+	slices.Sort(charIDs)
+
+	updates := make([]firestore.Update, 0, len(charIDs)*4)
+	for _, charID := range charIDs {
+		meta := participants[charID]
+		if meta.UserID != "" {
+			updates = append(updates, firestore.Update{
+				FieldPath: firestore.FieldPath{"snapshotLinks", charID, "userId"},
+				Value:     meta.UserID,
+			})
+		}
+		if meta.DisplayName != "" {
+			updates = append(updates, firestore.Update{
+				FieldPath: firestore.FieldPath{"snapshotLinks", charID, "displayName"},
+				Value:     meta.DisplayName,
+			})
+		}
+		if meta.CharacterClass != "" {
+			updates = append(updates, firestore.Update{
+				FieldPath: firestore.FieldPath{"snapshotLinks", charID, "characterClass"},
+				Value:     meta.CharacterClass,
+			})
+		}
+		if meta.EmblemURL != "" {
+			updates = append(updates, firestore.Update{
+				FieldPath: firestore.FieldPath{"snapshotLinks", charID, "emblemUrl"},
+				Value:     meta.EmblemURL,
+			})
+		}
+	}
+	if len(updates) == 0 {
+		return nil
 	}
 	_, err := f.db.Collection(collection).Doc(aggregateID).Update(ctx, updates)
 	return err

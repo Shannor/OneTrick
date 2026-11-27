@@ -576,13 +576,39 @@ func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID str
 
 type fakeSessionSnapshotService struct {
 	snapshot.Service
+	mu            sync.Mutex
 	writes        atomic.Int32
 	saveCalls     atomic.Int32
+	getByIDsCalls atomic.Int32
+	capturedIDs   []string
+	byID          map[string]api.CharacterSnapshot
+	getByIDsErr   error
 	saveErrByChar map[string]error
 	checkInFn     func(userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error)
 	checkInCtxFn  func(ctx context.Context, userID, membershipID, characterID string, opts snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error)
 	findBestFitFn func(userID, characterID string, period time.Time, weapons map[string]api.WeaponInstanceMetrics) (*api.CharacterSnapshot, *api.SnapshotLink, error)
 	enrichFn      func(snap *api.CharacterSnapshot, perf api.InstancePerformance) (*api.InstancePerformance, error)
+}
+
+func (f *fakeSessionSnapshotService) GetByIDs(_ context.Context, snapshotIDs []string) ([]api.CharacterSnapshot, error) {
+	f.getByIDsCalls.Add(1)
+	f.mu.Lock()
+	f.capturedIDs = append([]string(nil), snapshotIDs...)
+	f.mu.Unlock()
+	if f.getByIDsErr != nil {
+		return nil, f.getByIDsErr
+	}
+	out := make([]api.CharacterSnapshot, 0, len(snapshotIDs))
+	for _, id := range snapshotIDs {
+		if f.byID != nil {
+			if snap, ok := f.byID[id]; ok {
+				out = append(out, snap)
+				continue
+			}
+		}
+		out = append(out, api.CharacterSnapshot{ID: id})
+	}
+	return out, nil
 }
 
 func (f *fakeSessionSnapshotService) Save(_ context.Context, _, _, characterID string) (*api.CharacterSnapshot, error) {
@@ -644,12 +670,15 @@ func (f *fakeSessionSnapshotService) EnrichInstancePerformance(snap *api.Charact
 
 type fakeSessionAggregateService struct {
 	aggregate.Service
-	mu         sync.Mutex
-	writes     atomic.Int32
-	byID       map[string]*api.Aggregate
-	byActivity map[string]*api.Aggregate
-	seq        int
-	nowFn      func() time.Time
+	mu            sync.Mutex
+	writes        atomic.Int32
+	getCalls      atomic.Int32
+	stampCalls    atomic.Int32
+	stampErrByAgg map[string]error
+	byID          map[string]*api.Aggregate
+	byActivity    map[string]*api.Aggregate
+	seq           int
+	nowFn         func() time.Time
 }
 
 func newFakeSessionAggregateService() *fakeSessionAggregateService {
@@ -668,6 +697,7 @@ func (f *fakeSessionAggregateService) seed(agg api.Aggregate) {
 }
 
 func (f *fakeSessionAggregateService) GetAggregates(_ context.Context, IDs []string) ([]api.Aggregate, error) {
+	f.getCalls.Add(1)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]api.Aggregate, 0, len(IDs))
@@ -677,6 +707,55 @@ func (f *fakeSessionAggregateService) GetAggregates(_ context.Context, IDs []str
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeSessionAggregateService) GetAllAggregates(_ context.Context) ([]api.Aggregate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]api.Aggregate, 0, len(f.byID))
+	for _, agg := range f.byID {
+		out = append(out, *agg)
+	}
+	return out, nil
+}
+
+func (f *fakeSessionAggregateService) StampSnapshotLinkParticipants(_ context.Context, aggregateID string, participants map[string]aggregate.SnapshotLinkParticipant) error {
+	f.stampCalls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err, ok := f.stampErrByAgg[aggregateID]; ok && err != nil {
+		return err
+	}
+	agg, ok := f.byID[aggregateID]
+	if !ok {
+		return aggregate.NotFound
+	}
+	f.writes.Add(1)
+	updatedLinks := make(map[string]api.SnapshotLink, len(agg.SnapshotLinks))
+	for k, v := range agg.SnapshotLinks {
+		updatedLinks[k] = v
+	}
+	for charID, patch := range participants {
+		link, exists := updatedLinks[charID]
+		if !exists {
+			continue
+		}
+		if patch.UserID != "" {
+			link.UserID = new(patch.UserID)
+		}
+		if patch.DisplayName != "" {
+			link.DisplayName = new(patch.DisplayName)
+		}
+		if patch.CharacterClass != "" {
+			link.CharacterClass = new(patch.CharacterClass)
+		}
+		if patch.EmblemURL != "" {
+			link.EmblemURL = new(patch.EmblemURL)
+		}
+		updatedLinks[charID] = link
+	}
+	agg.SnapshotLinks = updatedLinks
+	return nil
 }
 
 func (f *fakeSessionAggregateService) GetAggregatesByActivity(_ context.Context, IDs []string) ([]api.Aggregate, error) {

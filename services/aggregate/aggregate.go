@@ -52,6 +52,13 @@ type Service interface {
 	// and returns deduplicated surviving sibling session IDs from modified aggregates.
 	RemoveSession(ctx context.Context, sessionID string) ([]string, error)
 
+	// GetAllAggregates returns all aggregate documents. Used for admin backfills.
+	GetAllAggregates(ctx context.Context) ([]api.Aggregate, error)
+
+	// StampSnapshotLinkParticipants patches participant metadata fields on existing SnapshotLinks
+	// without overwriting unrelated snapshot or performance fields.
+	StampSnapshotLinkParticipants(ctx context.Context, aggregateID string, participants map[string]SnapshotLinkParticipant) error
+
 	// RemoveSnapshot removes all references to snapshotID from aggregates and deletes orphaned aggregates.
 	RemoveSnapshot(ctx context.Context, snapshotID string) error
 }
@@ -329,18 +336,26 @@ func (s *service) GetAggregates(ctx context.Context, IDs []string) ([]api.Aggreg
 }
 
 func (s *service) GetAllAggregates(ctx context.Context) ([]api.Aggregate, error) {
-	docs, err := s.DB.
-		Collection(collection).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
-	}
-	results, err := utils.GetAllToStructs[api.Aggregate](docs)
+	results, err := s.store.listAll(ctx)
 	if err != nil {
 		return nil, err
 	}
 	clog.WithGroupField(ctx, "aggregateService.getAllAggregates", "returnedCount", len(results))
 	return results, nil
+}
+
+func (s *service) StampSnapshotLinkParticipants(ctx context.Context, aggregateID string, participants map[string]SnapshotLinkParticipant) error {
+	if aggregateID == "" || len(participants) == 0 {
+		return nil
+	}
+	if err := s.store.stampSnapshotLinkParticipants(ctx, aggregateID, participants); err != nil {
+		return fmt.Errorf("failed to stamp snapshot link participants on aggregate %s: %w", aggregateID, err)
+	}
+	clog.WithGroupFields(ctx, "aggregateService.stampSnapshotLinkParticipants", clog.Fields{
+		"aggregateId":      aggregateID,
+		"participantCount": len(participants),
+	})
+	return nil
 }
 
 func (s *service) UpdateAllAggregates(ctx context.Context) (int, error) {
