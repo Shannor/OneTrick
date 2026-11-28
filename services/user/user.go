@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
 	"oneTrick/services/destiny"
 	"oneTrick/utils"
@@ -222,7 +223,7 @@ func (s *userService) GetAll(ctx context.Context) ([]User, error) {
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[User](docs)
+	results, err := fsutil.GetAllToStructs[User](docs)
 	if err != nil {
 		return nil, err
 	}

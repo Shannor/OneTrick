@@ -3,7 +3,7 @@ package stats
 import (
 	"cmp"
 	"oneTrick/api"
-	"oneTrick/services/destiny"
+	"oneTrick/core/inventory"
 	"oneTrick/services/snapshot"
 	"oneTrick/set"
 	"slices"
@@ -30,17 +30,6 @@ const (
 	legendaryTierTyp int32 = 5
 	powerStatHash          = "1935470627"
 )
-
-var armorBucketKeys = []string{
-	strconv.FormatUint(uint64(destiny.HelmetArmor), 10),
-	strconv.FormatUint(uint64(destiny.GauntletsArmor), 10),
-	strconv.FormatUint(uint64(destiny.ChestArmor), 10),
-	strconv.FormatUint(uint64(destiny.LegArmor), 10),
-	strconv.FormatUint(uint64(destiny.ClassArmor), 10),
-}
-
-var classArmorBucketKey = strconv.FormatUint(uint64(destiny.ClassArmor), 10)
-var powerBucketKey = strconv.Itoa(destiny.Power)
 
 // ComputeSimilarCounts groups all active (non-archived) snapshots by their BaseIdentityKey
 // ("{kineticInstanceId}:{energyInstanceId}:{subclassItemHash}") and returns a map of
@@ -135,7 +124,7 @@ func resolveInlineItemTierType(item api.ItemSnapshot) int32 {
 }
 
 func findInlineExoticArmor(loadout api.Loadout) (string, api.ItemSnapshot, bool) {
-	for _, bucketKey := range armorBucketKeys {
+	for _, bucketKey := range inventory.ArmorBucketKeys() {
 		item, ok := loadout[bucketKey]
 		if !ok {
 			continue
@@ -156,7 +145,7 @@ func collectMissingArmorTierHashes(target *api.CharacterSnapshot, allSnapshots [
 		if _, _, ok := findInlineExoticArmor(loadout); ok {
 			return
 		}
-		for _, bucketKey := range armorBucketKeys {
+		for _, bucketKey := range inventory.ArmorBucketKeys() {
 			item, ok := loadout[bucketKey]
 			if !ok || item.ItemHash == 0 {
 				continue
@@ -192,7 +181,7 @@ func findEquippedExoticArmor(loadout api.Loadout, tierLookup func(int64) int32) 
 	if tierLookup == nil {
 		return "", api.ItemSnapshot{}, false
 	}
-	for _, bucketKey := range armorBucketKeys {
+	for _, bucketKey := range inventory.ArmorBucketKeys() {
 		item, ok := loadout[bucketKey]
 		if !ok || item.ItemHash == 0 {
 			continue
@@ -217,7 +206,7 @@ func exoticArmorMatches(target, candidate api.Loadout, tierLookup func(int64) in
 
 	// Prismatic Exotic Class Items (Relativism, Stoicism, Solipsism) share a single ItemHash per class
 	// while rolling random pairs of exotic perks, so require matching instance ID (or active perks fallback).
-	if tBucket == classArmorBucketKey {
+	if tBucket == inventory.ClassArmorKey {
 		if tItem.ItemHash != 0 && cItem.ItemHash != 0 && tItem.ItemHash != cItem.ItemHash {
 			return false
 		}
@@ -262,10 +251,10 @@ func powerWeaponMatches(target, candidate api.Loadout) bool {
 	var tPow, cPow api.ItemSnapshot
 	var tOK, cOK bool
 	if target != nil {
-		tPow, tOK = target[powerBucketKey]
+		tPow, tOK = target[inventory.PowerKey]
 	}
 	if candidate != nil {
-		cPow, cOK = candidate[powerBucketKey]
+		cPow, cOK = candidate[inventory.PowerKey]
 	}
 	if !tOK && !cOK {
 		return true

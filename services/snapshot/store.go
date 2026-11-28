@@ -3,8 +3,8 @@ package snapshot
 import (
 	"context"
 	"fmt"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
-	"oneTrick/utils"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -154,7 +154,7 @@ func (f *firestoreStore) listByCharacter(ctx context.Context, userID, characterI
 	if err != nil {
 		return nil, fmt.Errorf("failed to query snapshots: %w", err)
 	}
-	snapshots, err := utils.GetAllToStructs[api.CharacterSnapshot](docs)
+	snapshots, err := fsutil.GetAllToStructs[api.CharacterSnapshot](docs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse snapshots: %w", err)
 	}
@@ -166,7 +166,7 @@ func (f *firestoreStore) listAll(ctx context.Context) ([]api.CharacterSnapshot, 
 	if err != nil {
 		return nil, err
 	}
-	return utils.GetAllToStructs[api.CharacterSnapshot](data)
+	return fsutil.GetAllToStructs[api.CharacterSnapshot](data)
 }
 
 func (f *firestoreStore) listByIDs(ctx context.Context, uniqueIDs []string) ([]api.CharacterSnapshot, error) {
@@ -183,7 +183,7 @@ func (f *firestoreStore) listByIDs(ctx context.Context, uniqueIDs []string) ([]a
 		if err != nil {
 			return nil, err
 		}
-		results, err := utils.GetAllToStructs[api.CharacterSnapshot](data)
+		results, err := fsutil.GetAllToStructs[api.CharacterSnapshot](data)
 		if err != nil {
 			return nil, err
 		}
@@ -221,7 +221,7 @@ func (f *firestoreStore) listHistoriesInWindow(ctx context.Context, userID, char
 	if len(docs) == 0 {
 		return nil, nil
 	}
-	return utils.GetAllToStructs[History](docs)
+	return fsutil.GetAllToStructs[History](docs)
 }
 
 func (f *firestoreStore) archiveSource(ctx context.Context, sourceID, targetID string, mergedAt time.Time) error {

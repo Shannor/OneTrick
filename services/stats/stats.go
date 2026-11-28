@@ -3,11 +3,12 @@ package stats
 import (
 	"context"
 	"fmt"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
+	"oneTrick/core/inventory"
 	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
-	"oneTrick/utils"
 	"slices"
 	"strconv"
 	"strings"
@@ -200,7 +201,7 @@ func (s *service) GetAggregatesForSnapshot(ctx context.Context, snapshotID strin
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[api.Aggregate](docs)
+	results, err := fsutil.GetAllToStructs[api.Aggregate](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +702,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 		if err != nil {
 			clog.WithGroupField(ctx, "statsService.getFeaturedLoadouts", "warning", "failed fetching aggregates for featured loadouts")
 		} else if len(aggDocs) > 0 {
-			aggs, err := utils.GetAllToStructs[api.Aggregate](aggDocs)
+			aggs, err := fsutil.GetAllToStructs[api.Aggregate](aggDocs)
 			if err == nil {
 				for _, agg := range aggs {
 					for charID, link := range agg.SnapshotLinks {
@@ -779,7 +780,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 
 		subclassName := ""
 		if snap.Loadout != nil {
-			subClassKey := strconv.FormatInt(destiny.SubClass, 10)
+			subClassKey := inventory.SubClassKey
 			if item, ok := snap.Loadout[subClassKey]; ok {
 				subclassName = item.ItemProperties.BaseInfo.Name
 			}
@@ -831,7 +832,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 
 			subclassName := ""
 			if snap.Loadout != nil {
-				subClassKey := strconv.FormatInt(destiny.SubClass, 10)
+				subClassKey := inventory.SubClassKey
 				if item, ok := snap.Loadout[subClassKey]; ok {
 					subclassName = item.ItemProperties.BaseInfo.Name
 				}
@@ -947,7 +948,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 			Limit(count * 5).
 			Documents(ctx).GetAll()
 		if err == nil {
-			recentSnaps, err := utils.GetAllToStructs[api.CharacterSnapshot](recentDocs)
+			recentSnaps, err := fsutil.GetAllToStructs[api.CharacterSnapshot](recentDocs)
 			if err == nil {
 				if len(recentSnaps) > count {
 					offset := daySeed % len(recentSnaps)
@@ -988,7 +989,7 @@ func (s *service) GetFeaturedLoadouts(ctx context.Context, count int, gameMode *
 	for i := range featured {
 		classType := "PvP"
 		if featured[i].Snapshot.Loadout != nil {
-			subClassKey := strconv.FormatInt(destiny.SubClass, 10)
+			subClassKey := inventory.SubClassKey
 			if item, ok := featured[i].Snapshot.Loadout[subClassKey]; ok {
 				if item.ItemProperties.BaseInfo.Name != "" {
 					classType = item.ItemProperties.BaseInfo.Name

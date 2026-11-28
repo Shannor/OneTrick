@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"oneTrick/core/inventory"
 	"slices"
 	"testing"
 	"time"
@@ -306,7 +307,7 @@ func TestGetActivity_TeamMatchFullRosterAndTrackingMetadata(t *testing.T) {
 				HasIcon:                    true,
 				ItemTypeDisplayName:        "Hand Cannon",
 				ItemTypeAndTierDisplayName: "Legendary Hand Cannon",
-				BucketHash:                 1498876634,
+				BucketHash:                 inventory.Kinetic,
 			},
 			2001: {
 				Hash:                       2001,
@@ -315,7 +316,7 @@ func TestGetActivity_TeamMatchFullRosterAndTrackingMetadata(t *testing.T) {
 				HasIcon:                    true,
 				ItemTypeDisplayName:        "Shotgun",
 				ItemTypeAndTierDisplayName: "Legendary Shotgun",
-				BucketHash:                 2465295065,
+				BucketHash:                 inventory.Energy,
 			},
 			3001: {
 				Hash:                       3001,
@@ -324,7 +325,7 @@ func TestGetActivity_TeamMatchFullRosterAndTrackingMetadata(t *testing.T) {
 				HasIcon:                    true,
 				ItemTypeDisplayName:        "Grenade Launcher",
 				ItemTypeAndTierDisplayName: "Legendary Grenade Launcher",
-				BucketHash:                 953998645,
+				BucketHash:                 inventory.Power,
 			},
 			9001: {Hash: 9001, IconURL: "https://www.bungie.net/img/emblem1.png", HasIcon: true},
 			9002: {Hash: 9002, IconURL: "https://www.bungie.net/img/emblem2.png", HasIcon: true},
@@ -338,7 +339,7 @@ func TestGetActivity_TeamMatchFullRosterAndTrackingMetadata(t *testing.T) {
 			Name:                "Rose",
 			ItemHash:            1001,
 			InstanceID:          "inst-rose-1",
-			BucketHash:          1498876634,
+			BucketHash:          inventory.Kinetic,
 			ItemTypeDisplayName: "Hand Cannon",
 		},
 		Perks: []Perk{{Name: "Slideshot", Hash: 55}},
@@ -454,14 +455,14 @@ func TestGetActivity_TeamMatchFullRosterAndTrackingMetadata(t *testing.T) {
 		t.Fatalf("expected fireteamId 5550001, got %q", snapP.FireteamID)
 	}
 	rose := snapP.Performance.Weapons["1001"]
-	if rose.BucketHash != 1498876634 || rose.ItemTypeDisplayName != "Hand Cannon" || rose.Display.Name != "Rose" {
+	if rose.BucketHash != inventory.Kinetic || rose.ItemTypeDisplayName != "Hand Cannon" || rose.Display.Name != "Rose" {
 		t.Fatalf("expected Manifest-hydrated Rose weapon metadata, got %+v", rose)
 	}
 	if rose.Properties == nil || rose.Properties.BaseInfo.InstanceID != "inst-rose-1" {
 		t.Fatalf("expected snapshot-enriched weapon properties preserved on Rose, got %+v", rose.Properties)
 	}
 	matador := snapP.Performance.Weapons["2001"]
-	if matador.BucketHash != 2465295065 || matador.ItemTypeDisplayName != "Shotgun" || matador.Properties != nil {
+	if matador.BucketHash != inventory.Energy || matador.ItemTypeDisplayName != "Shotgun" || matador.Properties != nil {
 		t.Fatalf("expected Manifest-hydrated non-enriched Matador metadata, got %+v", matador)
 	}
 

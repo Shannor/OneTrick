@@ -4,6 +4,7 @@ import (
 	"errors"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/core/inventory"
 	"time"
 )
 
@@ -565,9 +566,9 @@ type Configuration struct {
 type WeaponBucket = uint32
 
 const (
-	KineticBucket WeaponBucket = 1498876634
-	EnergyBucket  WeaponBucket = 2465295065
-	PowerBucket   WeaponBucket = 953998645
+	KineticBucket WeaponBucket = inventory.Kinetic
+	EnergyBucket  WeaponBucket = inventory.Energy
+	PowerBucket   WeaponBucket = inventory.Power
 )
 
 const (
@@ -579,19 +580,21 @@ const (
 	LocalManifestLocation   = "./manifest.json"
 )
 
-const Kinetic = 1498876634
-const Energy = 2465295065
-const Power = 953998645
-const SubClass = 3284755031
+const (
+	Kinetic  = inventory.Kinetic
+	Energy   = inventory.Energy
+	Power    = inventory.Power
+	SubClass = inventory.SubClass
+)
 
 type ArmorBucket = uint32
 
 const (
-	HelmetArmor    ArmorBucket = 3448274439
-	GauntletsArmor ArmorBucket = 3551918588
-	ChestArmor     ArmorBucket = 14239492
-	LegArmor       ArmorBucket = 20886954
-	ClassArmor     ArmorBucket = 1585787867
+	HelmetArmor    ArmorBucket = inventory.HelmetArmor
+	GauntletsArmor ArmorBucket = inventory.GauntletsArmor
+	ChestArmor     ArmorBucket = inventory.ChestArmor
+	LegArmor       ArmorBucket = inventory.LegArmor
+	ClassArmor     ArmorBucket = inventory.ClassArmor
 )
 
 type ProgressionStepDefinition struct {

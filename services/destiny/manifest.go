@@ -3,6 +3,7 @@ package destiny
 import (
 	"context"
 	"fmt"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/utils"
 	"strconv"
 
@@ -140,7 +141,7 @@ func (m *manifestService) GetPlaces(ctx context.Context) (map[string]PlaceDefini
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[PlaceDefinition](docs)
+	results, err := fsutil.GetAllToStructs[PlaceDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +156,7 @@ func (m *manifestService) GetActivities(ctx context.Context) (map[string]Activit
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[ActivityDefinition](docs)
+	results, err := fsutil.GetAllToStructs[ActivityDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +171,7 @@ func (m *manifestService) GetClasses(ctx context.Context) (map[string]ClassDefin
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[ClassDefinition](docs)
+	results, err := fsutil.GetAllToStructs[ClassDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +186,7 @@ func (m *manifestService) GetInventoryBuckets(ctx context.Context) (map[string]I
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[InventoryBucketDefinition](docs)
+	results, err := fsutil.GetAllToStructs[InventoryBucketDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +201,7 @@ func (m *manifestService) GetRaces(ctx context.Context) (map[string]RaceDefiniti
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[RaceDefinition](docs)
+	results, err := fsutil.GetAllToStructs[RaceDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +216,7 @@ func (m *manifestService) GetItemCategories(ctx context.Context) (map[string]Ite
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[ItemCategory](docs)
+	results, err := fsutil.GetAllToStructs[ItemCategory](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +231,7 @@ func (m *manifestService) GetDamageTypes(ctx context.Context) (map[string]Damage
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[DamageType](docs)
+	results, err := fsutil.GetAllToStructs[DamageType](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +246,7 @@ func (m *manifestService) GetActivityModes(ctx context.Context) (map[string]Acti
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[ActivityModeDefinition](docs)
+	results, err := fsutil.GetAllToStructs[ActivityModeDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +261,7 @@ func (m *manifestService) GetStats(ctx context.Context) (map[string]StatDefiniti
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[StatDefinition](docs)
+	results, err := fsutil.GetAllToStructs[StatDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +276,7 @@ func (m *manifestService) GetItems(ctx context.Context) (map[string]ItemDefiniti
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[ItemDefinition](docs)
+	results, err := fsutil.GetAllToStructs[ItemDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +291,7 @@ func (m *manifestService) GetPerks(ctx context.Context) (map[string]PerkDefiniti
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[PerkDefinition](docs)
+	results, err := fsutil.GetAllToStructs[PerkDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +306,7 @@ func (m *manifestService) GetRecords(ctx context.Context) (map[string]RecordDefi
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[RecordDefinition](docs)
+	results, err := fsutil.GetAllToStructs[RecordDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +321,7 @@ func (m *manifestService) GetProgressions(ctx context.Context) (map[string]Progr
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[ProgressionDefinition](docs)
+	results, err := fsutil.GetAllToStructs[ProgressionDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +336,7 @@ func (m *manifestService) GetEquipableItemSets(ctx context.Context) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[EquipableItemSetDefinition](docs)
+	results, err := fsutil.GetAllToStructs[EquipableItemSetDefinition](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -490,7 +491,7 @@ func batchedFetch[T any](
 				missingCount++
 			}
 		}
-		chunkResults, err := utils.GetAllToStructs[T](docs)
+		chunkResults, err := fsutil.GetAllToStructs[T](docs)
 		if err != nil {
 			return nil, err
 		}

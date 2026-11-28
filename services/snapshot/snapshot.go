@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/core/inventory"
 	"oneTrick/generator"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
@@ -168,7 +169,7 @@ func BaseIdentityKey(snap *api.CharacterSnapshot) (string, bool) {
 	if snap == nil || snap.Loadout == nil {
 		return "", false
 	}
-	kin, ok := snap.Loadout[strconv.Itoa(destiny.Kinetic)]
+	kin, ok := snap.Loadout[inventory.KineticKey]
 	if !ok {
 		return "", false
 	}
@@ -177,7 +178,7 @@ func BaseIdentityKey(snap *api.CharacterSnapshot) (string, bool) {
 		return "", false
 	}
 
-	en, ok := snap.Loadout[strconv.Itoa(destiny.Energy)]
+	en, ok := snap.Loadout[inventory.EnergyKey]
 	if !ok {
 		return "", false
 	}
@@ -186,7 +187,7 @@ func BaseIdentityKey(snap *api.CharacterSnapshot) (string, bool) {
 		return "", false
 	}
 
-	sub, ok := snap.Loadout[strconv.Itoa(destiny.SubClass)]
+	sub, ok := snap.Loadout[inventory.SubClassKey]
 	if !ok || sub.ItemHash == 0 {
 		return "", false
 	}
@@ -327,9 +328,9 @@ func (s *service) createHistoryEntry(ctx context.Context, og api.CharacterSnapsh
 		CharacterID: og.CharacterID,
 		Timestamp:   now,
 		Meta: MetaData{
-			KineticID: strconv.FormatInt(og.Loadout[strconv.Itoa(destiny.Kinetic)].ItemHash, 10),
-			EnergyID:  strconv.FormatInt(og.Loadout[strconv.Itoa(destiny.Energy)].ItemHash, 10),
-			PowerID:   strconv.FormatInt(og.Loadout[strconv.Itoa(destiny.Power)].ItemHash, 10),
+			KineticID: strconv.FormatInt(og.Loadout[inventory.KineticKey].ItemHash, 10),
+			EnergyID:  strconv.FormatInt(og.Loadout[inventory.EnergyKey].ItemHash, 10),
+			PowerID:   strconv.FormatInt(og.Loadout[inventory.PowerKey].ItemHash, 10),
 		},
 	}
 	historyID, err := s.store.createHistory(ctx, history, now)
