@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"oneTrick/api"
 	"oneTrick/services/aggregate"
 	"oneTrick/services/destiny"
@@ -511,17 +512,19 @@ func (f *fakeSessionUserService) GetPrimaryMembership(ctx context.Context, userI
 
 type fakeSessionD2Service struct {
 	destiny.Service
-	mu               sync.Mutex
-	snapshots        []*api.CompRankSnapshot
-	calls            atomic.Int32
-	perfCalls        atomic.Int32
-	perfCallsByAct   map[string]int
-	perfCharIDsByAct map[string][]string
-	getCompRankFn    func(ctx context.Context, pmID, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
-	activitiesByChr  map[string][]api.ActivityHistory
-	activityErrByCh  map[string]error
-	perfsByAct       map[string]map[string]api.InstancePerformance
-	perfErrByAct     map[string]error
+	mu                sync.Mutex
+	snapshots         []*api.CompRankSnapshot
+	calls             atomic.Int32
+	perfCalls         atomic.Int32
+	perfCallsByAct    map[string]int
+	perfCharIDsByAct  map[string][]string
+	getCompRankFn     func(ctx context.Context, pmID, membershipType int64, characterID string) (*api.CompRankSnapshot, error)
+	getActivityFn     func(ctx context.Context, membershipID string, membershipType int64, characterID string) ([]api.ActivityHistory, error)
+	getPerformancesFn func(ctx context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error)
+	activitiesByChr   map[string][]api.ActivityHistory
+	activityErrByCh   map[string]error
+	perfsByAct        map[string]map[string]api.InstancePerformance
+	perfErrByAct      map[string]error
 }
 
 func (f *fakeSessionD2Service) GetCompetitiveRank(ctx context.Context, pmID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error) {
@@ -538,14 +541,17 @@ func (f *fakeSessionD2Service) GetCompetitiveRank(ctx context.Context, pmID int6
 	return nil, fmt.Errorf("no snapshot configured")
 }
 
-func (f *fakeSessionD2Service) GetAllPVPActivity(_ context.Context, _ string, _ int64, characterID string, _ int64, _ int64) ([]api.ActivityHistory, error) {
+func (f *fakeSessionD2Service) GetAllPVPActivity(ctx context.Context, membershipID string, membershipType int64, characterID string, _ int64, _ int64) ([]api.ActivityHistory, error) {
+	if f.getActivityFn != nil {
+		return f.getActivityFn(ctx, membershipID, membershipType, characterID)
+	}
 	if err, ok := f.activityErrByCh[characterID]; ok && err != nil {
 		return nil, err
 	}
 	return f.activitiesByChr[characterID], nil
 }
 
-func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error) {
+func (f *fakeSessionD2Service) GetPerformances(ctx context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error) {
 	f.perfCalls.Add(1)
 	f.mu.Lock()
 	if f.perfCallsByAct == nil {
@@ -558,12 +564,15 @@ func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID str
 	f.perfCharIDsByAct[activityID] = append([]string(nil), characterIDs...)
 	f.mu.Unlock()
 
+	if f.getPerformancesFn != nil {
+		return f.getPerformancesFn(ctx, activityID, characterIDs)
+	}
 	if err, ok := f.perfErrByAct[activityID]; ok && err != nil {
 		return nil, err
 	}
 	all := f.perfsByAct[activityID]
 	if len(characterIDs) == 0 {
-		return all, nil
+		return maps.Clone(all), nil
 	}
 	filtered := make(map[string]api.InstancePerformance, len(characterIDs))
 	for _, cid := range characterIDs {
@@ -688,10 +697,20 @@ func newFakeSessionAggregateService() *fakeSessionAggregateService {
 	}
 }
 
+func cloneAggregate(agg *api.Aggregate) api.Aggregate {
+	cp := *agg
+	cp.CharacterIds = slices.Clone(agg.CharacterIds)
+	cp.SessionIds = slices.Clone(agg.SessionIds)
+	cp.SnapshotIds = slices.Clone(agg.SnapshotIds)
+	cp.SnapshotLinks = maps.Clone(agg.SnapshotLinks)
+	cp.Performance = maps.Clone(agg.Performance)
+	return cp
+}
+
 func (f *fakeSessionAggregateService) seed(agg api.Aggregate) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cp := agg
+	cp := cloneAggregate(&agg)
 	f.byID[agg.ID] = &cp
 	f.byActivity[agg.ActivityID] = &cp
 }
@@ -703,7 +722,7 @@ func (f *fakeSessionAggregateService) GetAggregates(_ context.Context, IDs []str
 	out := make([]api.Aggregate, 0, len(IDs))
 	for _, id := range IDs {
 		if agg, ok := f.byID[id]; ok {
-			out = append(out, *agg)
+			out = append(out, cloneAggregate(agg))
 		}
 	}
 	return out, nil
@@ -714,7 +733,7 @@ func (f *fakeSessionAggregateService) GetAllAggregates(_ context.Context) ([]api
 	defer f.mu.Unlock()
 	out := make([]api.Aggregate, 0, len(f.byID))
 	for _, agg := range f.byID {
-		out = append(out, *agg)
+		out = append(out, cloneAggregate(agg))
 	}
 	return out, nil
 }
@@ -764,7 +783,7 @@ func (f *fakeSessionAggregateService) GetAggregatesByActivity(_ context.Context,
 	out := make([]api.Aggregate, 0, len(IDs))
 	for _, id := range IDs {
 		if agg, ok := f.byActivity[id]; ok {
-			out = append(out, *agg)
+			out = append(out, cloneAggregate(agg))
 		}
 	}
 	return out, nil
@@ -792,7 +811,7 @@ func (f *fakeSessionAggregateService) UpsertSessionActivity(_ context.Context, c
 		if characterID != "" && !slices.Contains(existing.CharacterIds, characterID) {
 			existing.CharacterIds = append(existing.CharacterIds, characterID)
 		}
-		cp := *existing
+		cp := cloneAggregate(existing)
 		return &cp, nil
 	}
 
@@ -823,7 +842,7 @@ func (f *fakeSessionAggregateService) UpsertSessionActivity(_ context.Context, c
 	}
 	f.byID[id] = agg
 	f.byActivity[activityHistory.InstanceID] = agg
-	cp := *agg
+	cp := cloneAggregate(agg)
 	return &cp, nil
 }
 
@@ -4512,3 +4531,397 @@ func TestRunTick_CandidateCharacterIDsExcludesExpiredAndGetUserGuardsAndAliases(
 		}
 	})
 }
+
+func TestRunTick_ConcurrentCandidateProcessingBoundedWallClockAndRaceSafety(t *testing.T) {
+	now := time.Date(2026, 6, 2, 18, 0, 0, 0, time.UTC)
+	callLatency := 25 * time.Millisecond
+
+	recordPeak := func(cur, peak *atomic.Int32) func() {
+		n := cur.Add(1)
+		for {
+			prev := peak.Load()
+			if n <= prev || peak.CompareAndSwap(prev, n) {
+				break
+			}
+		}
+		return func() { cur.Add(-1) }
+	}
+
+	t.Run("processes 24 candidate sessions concurrently within default cap and preserves invariants", func(t *testing.T) {
+		store := newMemorySessionStore()
+		aggSvc := newFakeSessionAggregateService()
+		aggSvc.nowFn = func() time.Time { return now }
+
+		aggSvc.seed(api.Aggregate{
+			ID:              "agg-seed-comp",
+			ActivityID:      "act-seed-comp",
+			ActivityDetails: api.ActivityHistory{InstanceID: "act-seed-comp", Activity: "Control", Mode: new("Control"), Period: now.Add(-15 * time.Minute)},
+			CharacterIds:    []string{"char-comp-grace"},
+			SessionIds:      []string{"ses-comp-grace"},
+			Performance: map[string]api.InstancePerformance{
+				"char-comp-grace": {PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(12), Deaths: statVal(6)}},
+			},
+		})
+		aggSvc.seed(api.Aggregate{
+			ID:              "agg-seed-stale",
+			ActivityID:      "act-seed-stale",
+			ActivityDetails: api.ActivityHistory{InstanceID: "act-seed-stale", Activity: "Control", Mode: new("Control"), Period: now.Add(-2 * time.Hour)},
+			CharacterIds:    []string{"char-stale"},
+			SessionIds:      []string{"ses-stale-comp"},
+			Performance: map[string]api.InstancePerformance{
+				"char-stale": {PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(9), Deaths: statVal(7)}},
+			},
+		})
+
+		users := make(map[string]*user.User)
+		activitiesByChr := make(map[string][]api.ActivityHistory)
+		perfsByAct := make(map[string]map[string]api.InstancePerformance)
+
+		addUser := func(uid, pmID, charID string) {
+			if existing, ok := users[uid]; ok {
+				existing.CharacterIDs = append(existing.CharacterIDs, charID)
+				existing.Characters = append(existing.Characters, api.Character{Id: charID, Class: "Hunter"})
+				return
+			}
+			users[uid] = &user.User{
+				ID:                  uid,
+				DisplayName:         "Player-" + uid,
+				PrimaryMembershipID: pmID,
+				Memberships:         []user.Membership{{ID: pmID, Type: 3}},
+				CharacterIDs:        []string{charID},
+				Characters:          []api.Character{{Id: charID, Class: "Hunter"}},
+			}
+		}
+
+		completePerf := func(kills float64) api.InstancePerformance {
+			return api.InstancePerformance{
+				PlayerStats: api.PlayerStats{Standing: statVal(0), Kills: statVal(kills), Assists: statVal(4), Deaths: statVal(5)},
+				Weapons:     map[string]api.WeaponInstanceMetrics{"1001": weaponMetrics(1001, kills, "Rose", "/img/rose.png")},
+			}
+		}
+
+		for i := 1; i <= 14; i++ {
+			sid := fmt.Sprintf("ses-solo-%02d", i)
+			uid := fmt.Sprintf("user-solo-%02d", i)
+			cid := fmt.Sprintf("char-solo-%02d", i)
+			aid := fmt.Sprintf("act-solo-%02d", i)
+			pmID := strconv.Itoa(7000 + i)
+
+			store.docs[sid] = &api.Session{
+				ID:          sid,
+				UserID:      uid,
+				CharacterID: cid,
+				StartedAt:   now.Add(-30 * time.Minute),
+				Status:      new(api.SessionPending),
+			}
+			addUser(uid, pmID, cid)
+			activitiesByChr[cid] = []api.ActivityHistory{
+				{InstanceID: aid, Activity: "Control", Mode: new("Control"), Period: now.Add(-5 * time.Minute)},
+			}
+			perfsByAct[aid] = map[string]api.InstancePerformance{cid: completePerf(float64(10 + i))}
+		}
+
+		perfsByAct["act-fireteam"] = make(map[string]api.InstancePerformance, 3)
+		for i := 1; i <= 3; i++ {
+			sid := fmt.Sprintf("ses-ft-%d", i)
+			uid := fmt.Sprintf("user-ft-%d", i)
+			cid := fmt.Sprintf("char-ft-%d", i)
+			pmID := strconv.Itoa(8000 + i)
+
+			store.docs[sid] = &api.Session{
+				ID:          sid,
+				UserID:      uid,
+				CharacterID: cid,
+				StartedAt:   now.Add(-25 * time.Minute),
+				Status:      new(api.SessionPending),
+			}
+			addUser(uid, pmID, cid)
+			activitiesByChr[cid] = []api.ActivityHistory{
+				{InstanceID: "act-fireteam", Activity: "Trials", Mode: new("TrialsOfOsiris"), Period: now.Add(-4 * time.Minute)},
+			}
+			perfsByAct["act-fireteam"][cid] = completePerf(float64(8 + i))
+		}
+
+		for i := 1; i <= 2; i++ {
+			sid := fmt.Sprintf("ses-multi-%d", i)
+			cid := fmt.Sprintf("char-multi-%d", i)
+			aid := fmt.Sprintf("act-multi-%d", i)
+
+			store.docs[sid] = &api.Session{
+				ID:          sid,
+				UserID:      "user-shared",
+				CharacterID: cid,
+				StartedAt:   now.Add(-20 * time.Minute),
+				Status:      new(api.SessionPending),
+			}
+			addUser("user-shared", "9001", cid)
+			activitiesByChr[cid] = []api.ActivityHistory{
+				{InstanceID: aid, Activity: "Rumble", Mode: new("Rumble"), Period: now.Add(-3 * time.Minute)},
+			}
+			perfsByAct[aid] = map[string]api.InstancePerformance{cid: completePerf(float64(15 + i))}
+		}
+
+		store.docs["ses-warn"] = &api.Session{
+			ID:          "ses-warn",
+			UserID:      "user-warn",
+			CharacterID: "char-warn",
+			StartedAt:   now.Add(-20 * time.Minute),
+			Status:      new(api.SessionPending),
+		}
+		addUser("user-warn", "9101", "char-warn")
+		activitiesByChr["char-warn"] = []api.ActivityHistory{
+			{InstanceID: "act-warn", Activity: "Control", Mode: new("Control"), Period: now.Add(-2 * time.Minute)},
+		}
+		perfsByAct["act-warn"] = map[string]api.InstancePerformance{}
+
+		store.docs["ses-err"] = &api.Session{
+			ID:          "ses-err",
+			UserID:      "user-err",
+			CharacterID: "char-err",
+			StartedAt:   now.Add(-20 * time.Minute),
+			Status:      new(api.SessionPending),
+		}
+		addUser("user-err", "9201", "char-err")
+
+		completedAt := now.Add(-3 * time.Minute)
+		store.docs["ses-comp-grace"] = &api.Session{
+			ID:           "ses-comp-grace",
+			UserID:       "user-comp-grace",
+			CharacterID:  "char-comp-grace",
+			StartedAt:    now.Add(-40 * time.Minute),
+			CompletedAt:  &completedAt,
+			Status:       new(api.SessionComplete),
+			AggregateIDs: []string{"agg-seed-comp"},
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 5000},
+			},
+		}
+		addUser("user-comp-grace", "9301", "char-comp-grace")
+
+		staleSeen := now.Add(-CutOffDuration - 10*time.Minute)
+		store.docs["ses-stale-comp"] = &api.Session{
+			ID:                "ses-stale-comp",
+			UserID:            "user-stale",
+			CharacterID:       "char-stale",
+			StartedAt:         now.Add(-3 * time.Hour),
+			LastSeenTimestamp: &staleSeen,
+			Status:            new(api.SessionPending),
+			AggregateIDs:      []string{"agg-seed-stale"},
+			CompTracking: &api.CompTracking{
+				Enabled: true,
+				Start:   &api.CompRankSnapshot{Points: 4200},
+			},
+		}
+		addUser("user-stale", "9401", "char-stale")
+
+		store.docs["ses-inactive"] = &api.Session{
+			ID:          "ses-inactive",
+			UserID:      "user-inactive",
+			CharacterID: "char-inactive",
+			StartedAt:   now.Add(-CutOffDuration - 5*time.Minute),
+			Status:      new(api.SessionPending),
+		}
+		addUser("user-inactive", "9501", "char-inactive")
+
+		var inFlight, peakInFlight atomic.Int32
+
+		uSvc := &fakeSessionUserService{
+			users: users,
+			getPrimaryMembershipFn: func(_ context.Context, userID string) (int64, int64, error) {
+				u, ok := users[userID]
+				if !ok {
+					return 0, 0, user.NotFound
+				}
+				return u.PrimaryMembership()
+			},
+		}
+
+		snapSvc := &fakeSessionSnapshotService{
+			checkInCtxFn: func(_ context.Context, _, _, characterID string, _ snapshot.SessionCheckInOptions) (snapshot.SessionCheckInResult, error) {
+				done := recordPeak(&inFlight, &peakInFlight)
+				defer done()
+				time.Sleep(callLatency)
+				return snapshot.SessionCheckInResult{
+					SnapshotID:      "snap-" + characterID,
+					SnapshotHash:    "hash-" + characterID,
+					HistoryRecorded: true,
+					RecordedAt:      now,
+				}, nil
+			},
+		}
+
+		d2Svc := &fakeSessionD2Service{
+			getActivityFn: func(_ context.Context, _ string, _ int64, characterID string) ([]api.ActivityHistory, error) {
+				done := recordPeak(&inFlight, &peakInFlight)
+				defer done()
+				time.Sleep(callLatency)
+				if characterID == "char-err" {
+					return nil, errors.New("bungie 503 activity history")
+				}
+				return activitiesByChr[characterID], nil
+			},
+			getPerformancesFn: func(_ context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error) {
+				done := recordPeak(&inFlight, &peakInFlight)
+				defer done()
+				time.Sleep(callLatency)
+				all := perfsByAct[activityID]
+				filtered := make(map[string]api.InstancePerformance, len(characterIDs))
+				for _, cid := range characterIDs {
+					if perf, ok := all[cid]; ok {
+						filtered[cid] = perf
+					}
+				}
+				return filtered, nil
+			},
+			getCompRankFn: func(_ context.Context, _ int64, _ int64, _ string) (*api.CompRankSnapshot, error) {
+				return &api.CompRankSnapshot{Points: 5150}, nil
+			},
+		}
+
+		svc := &service{
+			store:            store,
+			aggregateService: aggSvc,
+			userService:      uSvc,
+			d2Service:        d2Svc,
+			snapshotService:  snapSvc,
+			manifestService:  &fakeSessionManifestService{},
+			nowFn:            func() time.Time { return now },
+		}
+
+		ctx := clog.NewContext(context.Background())
+		start := time.Now()
+		resp, err := svc.RunTick(ctx, TickOptions{})
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("RunTick failed: %v", err)
+		}
+
+		// Sequential minimum across 21 check-ins + 22 activity calls + 18 PGCR calls at 25ms each is >1.5s.
+		if elapsed >= 950*time.Millisecond {
+			t.Fatalf("expected concurrent RunTick to finish well below sequential floor (<950ms), took %v", elapsed)
+		}
+		if gotPeak := peakInFlight.Load(); gotPeak < 2 || gotPeak > defaultTickConcurrency {
+			t.Fatalf("expected peak concurrent workers in [2, %d], got %d", defaultTickConcurrency, gotPeak)
+		}
+
+		if resp.TotalSessions != 24 {
+			t.Fatalf("TotalSessions = %d, want 24", resp.TotalSessions)
+		}
+		if resp.SessionsProcessed != 19 {
+			t.Fatalf("SessionsProcessed = %d, want 19", resp.SessionsProcessed)
+		}
+		if resp.SessionsSkipped != 2 {
+			t.Fatalf("SessionsSkipped = %d, want 2", resp.SessionsSkipped)
+		}
+		if resp.SessionsErrored != 1 || resp.ErrorsTotal != 1 {
+			t.Fatalf("SessionsErrored=%d ErrorsTotal=%d, want 1/1", resp.SessionsErrored, resp.ErrorsTotal)
+		}
+		if resp.SessionsStaleEnded != 1 {
+			t.Fatalf("SessionsStaleEnded = %d, want 1", resp.SessionsStaleEnded)
+		}
+		if resp.SessionsInactiveDeleted != 1 {
+			t.Fatalf("SessionsInactiveDeleted = %d, want 1", resp.SessionsInactiveDeleted)
+		}
+		if resp.LoadoutsSaved != 21 {
+			t.Fatalf("LoadoutsSaved = %d, want 21", resp.LoadoutsSaved)
+		}
+		if resp.ActivitiesFoundTotal != 20 {
+			t.Fatalf("ActivitiesFoundTotal = %d, want 20", resp.ActivitiesFoundTotal)
+		}
+		if resp.AggregatesAddedTotal != 19 {
+			t.Fatalf("AggregatesAddedTotal = %d, want 19", resp.AggregatesAddedTotal)
+		}
+		if resp.CompFinalizedCount != 2 {
+			t.Fatalf("CompFinalizedCount = %d, want 2", resp.CompFinalizedCount)
+		}
+
+		if got := d2Svc.perfCallsByAct["act-fireteam"]; got != 1 {
+			t.Fatalf("expected 1 GetPerformances call for shared fireteam match, got %d", got)
+		}
+		ftAggs, err := aggSvc.GetAggregatesByActivity(context.Background(), []string{"act-fireteam"})
+		if err != nil || len(ftAggs) != 1 {
+			t.Fatalf("expected 1 shared fireteam aggregate, got len=%d err=%v", len(ftAggs), err)
+		}
+		if len(ftAggs[0].SnapshotLinks) != 3 || len(ftAggs[0].SessionIds) != 3 {
+			t.Fatalf("expected all 3 fireteam members persisted without overwrite, got links=%d sessions=%v", len(ftAggs[0].SnapshotLinks), ftAggs[0].SessionIds)
+		}
+
+		if gotUsers := uSvc.userCalls.Load(); gotUsers != 21 {
+			t.Fatalf("expected 21 coalesced GetUser calls across 22 active sessions, got %d", gotUsers)
+		}
+
+		bag := clog.BagFromContext(ctx)
+		if bag == nil {
+			t.Fatal("expected clog FieldBag on context")
+		}
+		if !bag.HasWarning() {
+			t.Fatal("expected child missing_performance warning to roll up and mark parent bag HasWarning()=true")
+		}
+		attrs := bag.Attrs()
+		assertAllWarningsAreStrings(t, attrs)
+
+		if conc, ok := findIntAttr(attrs, "concurrency"); !ok || conc != defaultTickConcurrency {
+			t.Fatalf("expected sessionService.runTick.concurrency=%d, got %d (ok=%v)", defaultTickConcurrency, conc, ok)
+		}
+		if hits, ok := findIntAttr(attrs, "pgcrCacheHits"); !ok || hits != 2 {
+			t.Fatalf("expected pgcrCacheHits=2, got %d (ok=%v)", hits, ok)
+		}
+		if summaries, ok := findIntAttr(attrs, "summariesUpdated"); !ok || summaries != 19 {
+			t.Fatalf("expected summariesUpdated=19, got %d (ok=%v)", summaries, ok)
+		}
+		if _, ok := findIntAttr(attrs, "wallDurationMs"); !ok {
+			t.Fatal("expected wallDurationMs recorded by concurrent LoopRollupWithOptions")
+		}
+	})
+
+	t.Run("honors custom MaxConcurrency cap", func(t *testing.T) {
+		store := newMemorySessionStore()
+		users := make(map[string]*user.User, 10)
+		for i := 1; i <= 10; i++ {
+			sid := fmt.Sprintf("ses-cap-%02d", i)
+			uid := fmt.Sprintf("user-cap-%02d", i)
+			cid := fmt.Sprintf("char-cap-%02d", i)
+			pmID := strconv.Itoa(6000 + i)
+			store.docs[sid] = &api.Session{
+				ID:          sid,
+				UserID:      uid,
+				CharacterID: cid,
+				StartedAt:   now.Add(-15 * time.Minute),
+				Status:      new(api.SessionPending),
+			}
+			users[uid] = &user.User{
+				ID:                  uid,
+				PrimaryMembershipID: pmID,
+				Memberships:         []user.Membership{{ID: pmID, Type: 3}},
+			}
+		}
+
+		var inFlight, peakInFlight atomic.Int32
+		d2Svc := &fakeSessionD2Service{
+			getActivityFn: func(_ context.Context, _ string, _ int64, _ string) ([]api.ActivityHistory, error) {
+				done := recordPeak(&inFlight, &peakInFlight)
+				defer done()
+				time.Sleep(20 * time.Millisecond)
+				return nil, nil
+			},
+		}
+		svc := &service{
+			store:            store,
+			aggregateService: newFakeSessionAggregateService(),
+			userService:      &fakeSessionUserService{users: users},
+			d2Service:        d2Svc,
+			snapshotService:  &fakeSessionSnapshotService{},
+			manifestService:  &fakeSessionManifestService{},
+			nowFn:            func() time.Time { return now },
+		}
+
+		if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true, MaxConcurrency: 3}); err != nil {
+			t.Fatalf("RunTick failed: %v", err)
+		}
+		if gotPeak := peakInFlight.Load(); gotPeak < 2 || gotPeak > 3 {
+			t.Fatalf("expected peak concurrent workers in [2, 3], got %d", gotPeak)
+		}
+	})
+}
+

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"oneTrick/api"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
@@ -12,14 +13,27 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	clog "github.com/Shannor/canonical-logger"
+	"golang.org/x/sync/singleflight"
 )
 
+const defaultTickConcurrency = 8
+
 type TickOptions struct {
-	DryRun   bool
-	SkipSave bool
+	DryRun         bool
+	SkipSave       bool
+	MaxConcurrency int
+}
+
+func (o TickOptions) concurrency() int {
+	if o.MaxConcurrency > 0 {
+		return o.MaxConcurrency
+	}
+	return defaultTickConcurrency
 }
 
 func (c TickCandidate) isCompleted() bool {
@@ -59,6 +73,27 @@ type tickMembership struct {
 	participant    tickParticipant
 }
 
+type sessionTickOutcome struct {
+	queueCompSessionID  string
+	deletedSessionID    string
+	updatedSession      *api.Session
+	persistSessionMap   bool
+	dirtySessionIDs     []string
+	sessionsProcessed   int
+	sessionsSkipped     int
+	staleEnded          int
+	staleDeleted        int
+	inactiveDeleted     int
+	sessionsErrored     int
+	loadoutsSaved       int
+	loadoutsThrottled   int
+	loadoutsFailed      int
+	activitiesFound     int
+	aggregatesAdded     int
+	aggregatesRefreshed int
+	errorsTotal         int
+}
+
 type tickRunner struct {
 	svc                   service
 	opts                  TickOptions
@@ -68,12 +103,17 @@ type tickRunner struct {
 	dirtySessionIDs       *set.OrderedSet[string]
 	deletedSessionIDs     *set.Set[string]
 	sessionsByID          map[string]api.Session
+	userMu                sync.RWMutex
+	userFlight            singleflight.Group
 	usersByID             map[string]*user.User
+	pgcrMu                sync.RWMutex
+	pgcrFlight            singleflight.Group
 	pgcrCache             map[string]map[string]api.InstancePerformance
+	charLocks             [64]sync.Mutex
 	candidateCharacterIDs []string
 	loadoutsThrottled     int
 	aggregatesRefreshed   int
-	pgcrCacheHits         int
+	pgcrCacheHits         atomic.Int64
 	summariesUpdated      int
 }
 
@@ -92,13 +132,22 @@ func newTickRunner(svc service, opts TickOptions) *tickRunner {
 	}
 }
 
+func lockStripe(locks *[64]sync.Mutex, key string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	mu := &locks[h.Sum32()%uint32(len(locks))]
+	mu.Lock()
+	return mu
+}
+
 func (s service) RunTick(ctx context.Context, opts TickOptions) (*api.SessionTickResponse, error) {
 	tickStart := time.Now()
 	runner := newTickRunner(s, opts)
 
 	clog.WithGroupFields(ctx, "sessionService.runTick", clog.Fields{
-		"dryRun":   opts.DryRun,
-		"skipSave": opts.SkipSave,
+		"dryRun":      opts.DryRun,
+		"skipSave":    opts.SkipSave,
+		"concurrency": opts.concurrency(),
 	})
 	defer runner.recordSummary(ctx, tickStart)
 
@@ -121,7 +170,7 @@ func (r *tickRunner) recordSummary(ctx context.Context, tickStart time.Time) {
 		"activitiesFoundTotal":    r.resp.ActivitiesFoundTotal,
 		"aggregatesAddedTotal":    r.resp.AggregatesAddedTotal,
 		"aggregatesRefreshed":     r.aggregatesRefreshed,
-		"pgcrCacheHits":           r.pgcrCacheHits,
+		"pgcrCacheHits":           int(r.pgcrCacheHits.Load()),
 		"summariesUpdated":        r.summariesUpdated,
 		"compFinalizedCount":      r.resp.CompFinalizedCount,
 		"emptySessionsCleaned":    r.resp.EmptySessionsCleaned,
@@ -145,9 +194,7 @@ func (r *tickRunner) run(ctx context.Context) (*api.SessionTickResponse, error) 
 		}
 	}
 
-	// Phase 1: link activities across all candidates and collect dirty session IDs.
 	r.processCandidates(ctx, candidates)
-	// Phase 2: recompute summaries once per dirty session after all links are in place.
 	r.recomputeDirtySummaries(ctx)
 	r.finalizeCompSessions(ctx)
 	r.cleanupEmptyCompleted(ctx)
@@ -155,30 +202,63 @@ func (r *tickRunner) run(ctx context.Context) (*api.SessionTickResponse, error) 
 	return r.resp, nil
 }
 
-func (r *tickRunner) queueCompFinalize(ses api.Session) {
-	if ShouldFinalizeComp(ses) {
-		r.compQueue.Add(ses.ID)
+func (r *tickRunner) processCandidates(tickCtx context.Context, candidates []TickCandidate) {
+	if len(candidates) == 0 {
+		return
+	}
+	outcomes := make([]sessionTickOutcome, len(candidates))
+
+	_ = clog.LoopRollupWithOptions(tickCtx, "sessionService.processSession", candidates, clog.LoopOptions{
+		Concurrency: r.opts.concurrency(),
+	}, func(iterCtx context.Context, idx int, cand TickCandidate) error {
+		out, err := r.processSession(tickCtx, iterCtx, cand)
+		outcomes[idx] = out
+		return err
+	})
+
+	r.applyCandidateOutcomes(outcomes)
+}
+
+func (r *tickRunner) applyCandidateOutcomes(outcomes []sessionTickOutcome) {
+	for _, out := range outcomes {
+		r.resp.SessionsProcessed += out.sessionsProcessed
+		r.resp.SessionsSkipped += out.sessionsSkipped
+		r.resp.SessionsStaleEnded += out.staleEnded
+		r.resp.SessionsStaleDeleted += out.staleDeleted
+		r.resp.SessionsInactiveDeleted += out.inactiveDeleted
+		r.resp.SessionsErrored += out.sessionsErrored
+		r.resp.LoadoutsSaved += out.loadoutsSaved
+		r.loadoutsThrottled += out.loadoutsThrottled
+		r.resp.LoadoutsFailed += out.loadoutsFailed
+		r.resp.ActivitiesFoundTotal += out.activitiesFound
+		r.resp.AggregatesAddedTotal += out.aggregatesAdded
+		r.aggregatesRefreshed += out.aggregatesRefreshed
+		r.resp.ErrorsTotal += out.errorsTotal
+
+		if out.deletedSessionID != "" {
+			delete(r.sessionsByID, out.deletedSessionID)
+			r.deletedSessionIDs.Add(out.deletedSessionID)
+		}
+		if out.persistSessionMap && out.updatedSession != nil && out.updatedSession.ID != "" {
+			r.sessionsByID[out.updatedSession.ID] = *out.updatedSession
+		}
+		for _, dirtyID := range out.dirtySessionIDs {
+			if dirtyID != "" {
+				r.dirtySessionIDs.Add(dirtyID)
+			}
+		}
+		if out.queueCompSessionID != "" {
+			r.compQueue.Add(out.queueCompSessionID)
+		}
 	}
 }
 
-func (r *tickRunner) failSession(err error) error {
-	r.resp.SessionsErrored++
-	r.resp.ErrorsTotal++
-	return err
-}
-
-func (r *tickRunner) processCandidates(ctx context.Context, candidates []TickCandidate) {
-	_ = clog.LoopRollup(ctx, "sessionService.processSession", candidates, func(iterCtx context.Context, _ int, cand TickCandidate) error {
-		return r.processSession(iterCtx, ctx, cand)
-	})
-}
-
-func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand TickCandidate) error {
-	defer func() {
-		if bag := clog.BagFromContext(iterCtx); bag != nil && bag.HasWarning() {
-			clog.WithGroupField(parentCtx, "sessionService.processSession", "warning", "one or more sessions recorded a warning")
-		}
-	}()
+func (r *tickRunner) processSession(tickCtx, iterCtx context.Context, cand TickCandidate) (out sessionTickOutcome, err error) {
+	// Serialize rare overlapping pending + recently-completed grace sessions on the same character.
+	if cand.Session.CharacterID != "" {
+		mu := lockStripe(&r.charLocks, cand.Session.CharacterID)
+		defer mu.Unlock()
+	}
 
 	clog.WithGroupFields(iterCtx, "session", clog.Fields{
 		"sessionId":   cand.Session.ID,
@@ -188,120 +268,177 @@ func (r *tickRunner) processSession(iterCtx, parentCtx context.Context, cand Tic
 
 	if cand.isCompleted() {
 		defer func() {
-			r.queueCompFinalize(cand.Session)
+			ses := cand.Session
+			if out.updatedSession != nil {
+				ses = *out.updatedSession
+			}
+			if ShouldFinalizeComp(ses) {
+				out.queueCompSessionID = ses.ID
+			}
 		}()
 	}
 
-	if handled, err := r.expireIfNeeded(iterCtx, cand); handled || err != nil {
-		return err
+	if handled, expOut, expErr := r.expireIfNeeded(iterCtx, cand); handled || expErr != nil {
+		return expOut, expErr
 	}
 
-	membership, err := r.resolveMembership(iterCtx, cand.Session)
+	membership, err := r.resolveMembership(tickCtx, cand.Session)
 	if err != nil {
-		return err
+		out.sessionsErrored++
+		out.errorsTotal++
+		return out, err
 	}
 
-	if err := r.saveLoadoutIfNeeded(iterCtx, &cand, membership); err != nil {
-		return err
-	}
-
-	latestID, histories, err := r.fetchNewActivities(iterCtx, cand, membership)
+	updatedCand, loadoutOut, err := r.saveLoadoutIfNeeded(iterCtx, cand, membership)
+	out.loadoutsSaved += loadoutOut.loadoutsSaved
+	out.loadoutsThrottled += loadoutOut.loadoutsThrottled
+	out.loadoutsFailed += loadoutOut.loadoutsFailed
+	out.errorsTotal += loadoutOut.errorsTotal
 	if err != nil {
-		return err
+		return out, err
+	}
+
+	latestID, histories, err := r.fetchNewActivities(iterCtx, updatedCand, membership)
+	if err != nil {
+		out.sessionsErrored++
+		out.errorsTotal++
+		return out, err
 	}
 	if len(histories) == 0 {
-		r.resp.SessionsSkipped++
-		return nil
+		out.sessionsSkipped++
+		return out, nil
 	}
 
-	r.resp.ActivitiesFoundTotal += len(histories)
+	out.activitiesFound += len(histories)
 
-	linkRes, err := r.linkActivities(iterCtx, cand.Session, membership.participant, histories)
+	linkRes, fatalLinkErr, err := r.linkActivities(tickCtx, iterCtx, updatedCand.Session, membership.participant, histories)
+	out.errorsTotal += linkRes.activityErrors
 	if err != nil {
-		return err
+		if fatalLinkErr {
+			out.sessionsErrored++
+			out.errorsTotal++
+		}
+		return out, err
 	}
 	if len(linkRes.aggregateIDs) == 0 {
-		if !linkRes.hasPendingRetry && !cand.isCompleted() && !r.opts.DryRun && latestID != "" && !cand.hasSeenActivity(latestID) {
-			if err := r.svc.store.SetLastActivity(iterCtx, cand.Session.ID, latestID, r.svc.now()); err != nil {
-				r.resp.ErrorsTotal++
-				return fmt.Errorf("failed to save last activity for session %s: %w", cand.Session.ID, err)
+		if !linkRes.hasPendingRetry && !updatedCand.isCompleted() && !r.opts.DryRun && latestID != "" && !updatedCand.hasSeenActivity(latestID) {
+			if err := r.svc.store.SetLastActivity(iterCtx, updatedCand.Session.ID, latestID, r.svc.now()); err != nil {
+				out.errorsTotal++
+				return out, fmt.Errorf("failed to save last activity for session %s: %w", updatedCand.Session.ID, err)
 			}
 		}
-		r.resp.SessionsSkipped++
-		return nil
+		out.sessionsSkipped++
+		return out, nil
 	}
 
-	return r.persistSessionProgress(iterCtx, &cand, latestID, linkRes)
+	progressOut, err := r.persistSessionProgress(iterCtx, updatedCand, latestID, linkRes)
+	out.updatedSession = progressOut.updatedSession
+	out.persistSessionMap = progressOut.persistSessionMap
+	out.dirtySessionIDs = progressOut.dirtySessionIDs
+	out.sessionsProcessed += progressOut.sessionsProcessed
+	out.sessionsErrored += progressOut.sessionsErrored
+	out.aggregatesAdded += progressOut.aggregatesAdded
+	out.aggregatesRefreshed += progressOut.aggregatesRefreshed
+	out.errorsTotal += progressOut.errorsTotal
+	return out, err
 }
 
-func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bool, error) {
+func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bool, sessionTickOutcome, error) {
 	var (
-		reason       string
-		emptyCounter *int
+		reason  string
+		isStale bool
 	)
 	switch {
 	case cand.isStale(r.now):
 		reason = "stale"
-		emptyCounter = &r.resp.SessionsStaleDeleted
+		isStale = true
 	case cand.isInactive(r.now):
 		reason = "inactive"
-		emptyCounter = &r.resp.SessionsInactiveDeleted
 	default:
-		return false, nil
+		return false, sessionTickOutcome{}, nil
 	}
 
 	if !r.opts.DryRun {
 		if err := r.svc.endOrDeleteSession(ctx, cand.Session); err != nil {
-			return true, r.failSession(fmt.Errorf("failed to process %s session %s: %w", reason, cand.Session.ID, err))
+			return true, sessionTickOutcome{
+				sessionsErrored: 1,
+				errorsTotal:     1,
+			}, fmt.Errorf("failed to process %s session %s: %w", reason, cand.Session.ID, err)
 		}
 	}
 
+	var out sessionTickOutcome
 	if !cand.hasAggregates() {
-		*emptyCounter++
+		if isStale {
+			out.staleDeleted = 1
+		} else {
+			out.inactiveDeleted = 1
+		}
 		if !r.opts.DryRun && cand.Session.ID != "" {
-			delete(r.sessionsByID, cand.Session.ID)
-			r.deletedSessionIDs.Add(cand.Session.ID)
+			out.deletedSessionID = cand.Session.ID
 		}
 	} else {
-		r.resp.SessionsStaleEnded++
-		r.queueCompFinalize(cand.Session)
+		out.staleEnded = 1
+		if ShouldFinalizeComp(cand.Session) {
+			out.queueCompSessionID = cand.Session.ID
+		}
 	}
-	return true, nil
+	return true, out, nil
 }
 
-func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, error) {
+func (r *tickRunner) getUser(tickCtx context.Context, userID string) (*user.User, error) {
 	if userID == "" {
 		return nil, user.NotFound
 	}
-	if cached, ok := r.usersByID[userID]; ok {
+	r.userMu.RLock()
+	cached, ok := r.usersByID[userID]
+	r.userMu.RUnlock()
+	if ok {
 		return cached, nil
 	}
-	u, err := r.svc.userService.GetUser(ctx, userID)
+
+	val, err, _ := r.userFlight.Do(userID, func() (any, error) {
+		r.userMu.RLock()
+		cached, ok := r.usersByID[userID]
+		r.userMu.RUnlock()
+		if ok {
+			return cached, nil
+		}
+
+		u, err := r.svc.userService.GetUser(clog.NewContext(tickCtx), userID)
+		if err != nil {
+			return nil, err
+		}
+		if u == nil {
+			return nil, user.NotFound
+		}
+
+		r.userMu.Lock()
+		r.usersByID[userID] = u
+		if u.ID != "" {
+			r.usersByID[u.ID] = u
+		}
+		r.userMu.Unlock()
+		return u, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if u == nil {
-		return nil, user.NotFound
-	}
-	r.usersByID[userID] = u
-	if u.ID != "" {
-		r.usersByID[u.ID] = u
-	}
-	return u, nil
+	return val.(*user.User), nil
 }
 
-func (r *tickRunner) resolveMembership(ctx context.Context, ses api.Session) (tickMembership, error) {
+func (r *tickRunner) resolveMembership(tickCtx context.Context, ses api.Session) (tickMembership, error) {
 	if r.svc.userService == nil || r.svc.d2Service == nil {
-		return tickMembership{}, r.failSession(fmt.Errorf("session tick dependencies not configured"))
+		return tickMembership{}, fmt.Errorf("session tick dependencies not configured")
 	}
 
-	u, err := r.getUser(ctx, ses.UserID)
+	u, err := r.getUser(tickCtx, ses.UserID)
 	if err != nil {
-		return tickMembership{}, r.failSession(fmt.Errorf("failed to fetch user for session %s: %w", ses.ID, err))
+		return tickMembership{}, fmt.Errorf("failed to fetch user for session %s: %w", ses.ID, err)
 	}
 	pmID, membershipType, err := u.PrimaryMembership()
 	if err != nil {
-		return tickMembership{}, r.failSession(fmt.Errorf("failed to fetch membership type for session %s: %w", ses.ID, err))
+		return tickMembership{}, fmt.Errorf("failed to fetch membership type for session %s: %w", ses.ID, err)
 	}
 	return tickMembership{
 		id:             strconv.FormatInt(pmID, 10),
@@ -310,14 +447,15 @@ func (r *tickRunner) resolveMembership(ctx context.Context, ses api.Session) (ti
 	}, nil
 }
 
-func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *TickCandidate, membership tickMembership) error {
+func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand TickCandidate, membership tickMembership) (TickCandidate, sessionTickOutcome, error) {
 	if cand.isCompleted() || r.opts.SkipSave || r.opts.DryRun {
-		return nil
+		return cand, sessionTickOutcome{}, nil
 	}
 	if r.svc.snapshotService == nil {
-		r.resp.LoadoutsFailed++
-		r.resp.ErrorsTotal++
-		return fmt.Errorf("snapshot service not configured for session %s", cand.Session.ID)
+		return cand, sessionTickOutcome{
+			loadoutsFailed: 1,
+			errorsTotal:    1,
+		}, fmt.Errorf("snapshot service not configured for session %s", cand.Session.ID)
 	}
 	res, err := r.svc.snapshotService.SaveSessionCheckIn(ctx, cand.Session.UserID, membership.id, cand.Session.CharacterID, snapshot.SessionCheckInOptions{
 		MembershipType:         membership.membershipType,
@@ -327,13 +465,13 @@ func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *TickCandidat
 		HeartbeatInterval:      snapshotHeartbeatPeriod,
 	})
 	if err != nil {
-		r.resp.LoadoutsFailed++
-		r.resp.ErrorsTotal++
-		return fmt.Errorf("failed to save loadout for session %s: %w", cand.Session.ID, err)
+		return cand, sessionTickOutcome{
+			loadoutsFailed: 1,
+			errorsTotal:    1,
+		}, fmt.Errorf("failed to save loadout for session %s: %w", cand.Session.ID, err)
 	}
 	if !res.HistoryRecorded {
-		r.loadoutsThrottled++
-		return nil
+		return cand, sessionTickOutcome{loadoutsThrottled: 1}, nil
 	}
 	if err := r.svc.store.SetLastSnapshot(ctx, cand.Session.ID, res.SnapshotID, res.SnapshotHash, res.RecordedAt); err != nil {
 		clog.WithGroupFields(ctx, "sessionService.saveLoadout", clog.Fields{
@@ -346,14 +484,13 @@ func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *TickCandidat
 		cand.LastSnapshotHash = res.SnapshotHash
 		cand.LastSnapshotRecordedAt = res.RecordedAt
 	}
-	r.resp.LoadoutsSaved++
-	return nil
+	return cand, sessionTickOutcome{loadoutsSaved: 1}, nil
 }
 
 func (r *tickRunner) fetchNewActivities(ctx context.Context, cand TickCandidate, membership tickMembership) (string, []api.ActivityHistory, error) {
 	rawActivities, err := r.svc.d2Service.GetAllPVPActivity(ctx, membership.id, membership.membershipType, cand.Session.CharacterID, 5, 0)
 	if err != nil {
-		return "", nil, r.failSession(fmt.Errorf("failed to get activities for session %s: %w", cand.Session.ID, err))
+		return "", nil, fmt.Errorf("failed to get activities for session %s: %w", cand.Session.ID, err)
 	}
 
 	activityHistories := filterTickActivities(rawActivities)
@@ -380,6 +517,7 @@ type linkActivitiesResult struct {
 	aggregateIDs    []string
 	dirtySessionIDs []string
 	refreshedCount  int
+	activityErrors  int
 	hasPendingRetry bool
 }
 
@@ -391,9 +529,9 @@ type activityLinkOutcome struct {
 	pendingRetry    bool
 }
 
-func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, participant tickParticipant, histories []api.ActivityHistory) (linkActivitiesResult, error) {
+func (r *tickRunner) linkActivities(tickCtx, iterCtx context.Context, ses api.Session, participant tickParticipant, histories []api.ActivityHistory) (linkActivitiesResult, bool, error) {
 	if r.svc.aggregateService == nil {
-		return linkActivitiesResult{}, r.failSession(fmt.Errorf("aggregate service not configured for session %s", ses.ID))
+		return linkActivitiesResult{}, true, fmt.Errorf("aggregate service not configured for session %s", ses.ID)
 	}
 
 	ids := make([]string, len(histories))
@@ -403,7 +541,7 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, pa
 
 	existingAggs, err := r.svc.aggregateService.GetAggregatesByActivity(iterCtx, ids)
 	if err != nil {
-		return linkActivitiesResult{}, r.failSession(fmt.Errorf("failed to fetch aggregates for session %s: %w", ses.ID, err))
+		return linkActivitiesResult{}, true, fmt.Errorf("failed to fetch aggregates for session %s: %w", ses.ID, err)
 	}
 
 	existingByActivity := make(map[string]*api.Aggregate, len(existingAggs))
@@ -416,15 +554,9 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, pa
 	}
 	dirty := set.NewOrdered[string]()
 	_ = clog.LoopRollup(iterCtx, "aggregateService.processActivity", histories, func(actCtx context.Context, _ int, history api.ActivityHistory) error {
-		defer func() {
-			if bag := clog.BagFromContext(actCtx); bag != nil && bag.HasWarning() {
-				clog.WithGroupField(iterCtx, "aggregateService.processActivity", "warning", "one or more activities recorded a warning")
-			}
-		}()
-
-		outcome, err := r.linkSingleActivity(actCtx, ses, participant, history, existingByActivity[history.InstanceID])
+		outcome, err := r.linkSingleActivity(tickCtx, actCtx, ses, participant, history, existingByActivity[history.InstanceID])
 		if err != nil {
-			r.resp.ErrorsTotal++
+			res.activityErrors++
 			res.hasPendingRetry = true
 			return err
 		}
@@ -444,23 +576,48 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, pa
 	})
 	res.dirtySessionIDs = dirty.ToSlice()
 
-	return res, nil
+	return res, false, nil
 }
 
-func (r *tickRunner) getPerformances(ctx context.Context, activityID string) (map[string]api.InstancePerformance, error) {
-	if cached, ok := r.pgcrCache[activityID]; ok {
-		r.pgcrCacheHits++
+func (r *tickRunner) getPerformances(tickCtx context.Context, activityID string) (map[string]api.InstancePerformance, error) {
+	r.pgcrMu.RLock()
+	cached, ok := r.pgcrCache[activityID]
+	r.pgcrMu.RUnlock()
+	if ok {
+		r.pgcrCacheHits.Add(1)
 		return cached, nil
 	}
-	performances, err := r.svc.d2Service.GetPerformances(ctx, activityID, r.candidateCharacterIDs)
+
+	fetchedByCaller := false
+	val, err, _ := r.pgcrFlight.Do(activityID, func() (any, error) {
+		r.pgcrMu.RLock()
+		cached, ok := r.pgcrCache[activityID]
+		r.pgcrMu.RUnlock()
+		if ok {
+			return cached, nil
+		}
+
+		performances, err := r.svc.d2Service.GetPerformances(clog.NewContext(tickCtx), activityID, r.candidateCharacterIDs)
+		if err != nil {
+			return nil, err
+		}
+		fetchedByCaller = true
+
+		r.pgcrMu.Lock()
+		r.pgcrCache[activityID] = performances
+		r.pgcrMu.Unlock()
+		return performances, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	r.pgcrCache[activityID] = performances
-	return performances, nil
+	if !fetchedByCaller {
+		r.pgcrCacheHits.Add(1)
+	}
+	return val.(map[string]api.InstancePerformance), nil
 }
 
-func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session, participant tickParticipant, history api.ActivityHistory, existing *api.Aggregate) (activityLinkOutcome, error) {
+func (r *tickRunner) linkSingleActivity(tickCtx, actCtx context.Context, ses api.Session, participant tickParticipant, history api.ActivityHistory, existing *api.Aggregate) (activityLinkOutcome, error) {
 	clog.WithGroupField(actCtx, "activity", "activityId", history.InstanceID)
 
 	refreshing := false
@@ -471,7 +628,7 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		refreshing = true
 	}
 
-	performances, err := r.getPerformances(actCtx, history.InstanceID)
+	performances, err := r.getPerformances(tickCtx, history.InstanceID)
 	if err != nil {
 		return activityLinkOutcome{}, fmt.Errorf("failed to fetch performances for activity %s: %w", history.InstanceID, err)
 	}
@@ -625,33 +782,39 @@ func stampParticipantMetadata(link api.SnapshotLink, sessionID string, p tickPar
 	return link
 }
 
-func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickCandidate, latestID string, linkRes linkActivitiesResult) error {
-	ses := &cand.Session
+func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand TickCandidate, latestID string, linkRes linkActivitiesResult) (sessionTickOutcome, error) {
+	ses := cand.Session
+	seen := set.FromSlice(ses.AggregateIDs)
 	newAggIDs := make([]string, 0, len(linkRes.aggregateIDs))
 	for _, id := range linkRes.aggregateIDs {
-		if id != "" && !slices.Contains(ses.AggregateIDs, id) && !slices.Contains(newAggIDs, id) {
-			newAggIDs = append(newAggIDs, id)
+		if id == "" || seen.Contains(id) {
+			continue
 		}
+		seen.Add(id)
+		newAggIDs = append(newAggIDs, id)
 	}
 
+	var out sessionTickOutcome
 	if r.opts.DryRun {
-		ses.AggregateIDs = utils.UnionNonZero(ses.AggregateIDs, newAggIDs)
-		r.resp.SessionsProcessed++
-		r.resp.AggregatesAddedTotal += len(newAggIDs)
-		r.aggregatesRefreshed += linkRes.refreshedCount
-		return nil
+		updatedSes := ses
+		updatedSes.AggregateIDs = utils.UnionNonZero(ses.AggregateIDs, newAggIDs)
+		out.updatedSession = &updatedSes
+		out.sessionsProcessed = 1
+		out.aggregatesAdded = len(newAggIDs)
+		out.aggregatesRefreshed = linkRes.refreshedCount
+		return out, nil
 	}
 
 	var postErrs []error
 	if !cand.isCompleted() {
 		if !linkRes.hasPendingRetry {
 			if err := r.svc.store.SetLastActivity(iterCtx, ses.ID, latestID, r.svc.now()); err != nil {
-				r.resp.ErrorsTotal++
+				out.errorsTotal++
 				postErrs = append(postErrs, fmt.Errorf("failed to save last activity for session %s: %w", ses.ID, err))
 			}
 		} else if len(newAggIDs) > 0 {
 			if err := r.svc.store.TouchLastSeen(iterCtx, ses.ID, r.svc.now()); err != nil {
-				r.resp.ErrorsTotal++
+				out.errorsTotal++
 				postErrs = append(postErrs, fmt.Errorf("failed to update last seen timestamp for session %s: %w", ses.ID, err))
 			}
 		}
@@ -659,32 +822,38 @@ func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand *TickC
 
 	if len(newAggIDs) > 0 {
 		if err := r.svc.AddAggregateIDs(iterCtx, ses.ID, newAggIDs); err != nil {
+			dirty := make([]string, 0, len(linkRes.dirtySessionIDs))
 			for _, dirtyID := range linkRes.dirtySessionIDs {
 				if dirtyID != "" && dirtyID != ses.ID {
-					r.dirtySessionIDs.Add(dirtyID)
+					dirty = append(dirty, dirtyID)
 				}
 			}
-			r.resp.SessionsErrored++
-			r.resp.ErrorsTotal++
-			return errors.Join(append(postErrs, fmt.Errorf("failed to add aggregate IDs to session %s: %w", ses.ID, err))...)
+			out.dirtySessionIDs = dirty
+			out.sessionsErrored++
+			out.errorsTotal++
+			return out, errors.Join(append(postErrs, fmt.Errorf("failed to add aggregate IDs to session %s: %w", ses.ID, err))...)
 		}
 	}
 
-	ses.AggregateIDs = utils.UnionNonZero(ses.AggregateIDs, newAggIDs)
-	updatedSes := *ses
-	updatedSes.AggregateIDs = slices.Clone(ses.AggregateIDs)
-	r.sessionsByID[ses.ID] = updatedSes
-	r.dirtySessionIDs.Add(ses.ID)
+	updatedSes := ses
+	updatedSes.AggregateIDs = slices.Clone(utils.UnionNonZero(ses.AggregateIDs, newAggIDs))
+	out.updatedSession = &updatedSes
+	out.persistSessionMap = true
+
+	dirty := make([]string, 0, 1+len(linkRes.dirtySessionIDs))
+	if ses.ID != "" {
+		dirty = append(dirty, ses.ID)
+	}
 	for _, dirtyID := range linkRes.dirtySessionIDs {
 		if dirtyID != "" {
-			r.dirtySessionIDs.Add(dirtyID)
+			dirty = append(dirty, dirtyID)
 		}
 	}
-
-	r.resp.SessionsProcessed++
-	r.resp.AggregatesAddedTotal += len(newAggIDs)
-	r.aggregatesRefreshed += linkRes.refreshedCount
-	return errors.Join(postErrs...)
+	out.dirtySessionIDs = dirty
+	out.sessionsProcessed = 1
+	out.aggregatesAdded = len(newAggIDs)
+	out.aggregatesRefreshed = linkRes.refreshedCount
+	return out, errors.Join(postErrs...)
 }
 
 func (r *tickRunner) recomputeDirtySummaries(ctx context.Context) {

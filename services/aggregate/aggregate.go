@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
 	"oneTrick/set"
 	"oneTrick/utils"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -69,8 +71,9 @@ const (
 )
 
 type service struct {
-	DB    *firestore.Client
-	store aggregateStore
+	DB            *firestore.Client
+	store         aggregateStore
+	activityLocks [64]sync.Mutex
 }
 
 var _ Service = (*service)(nil)
@@ -82,6 +85,14 @@ func NewService(db *firestore.Client) Service {
 	}
 }
 
+func (s *service) lockActivity(activityID string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(activityID))
+	mu := &s.activityLocks[h.Sum32()%uint32(len(s.activityLocks))]
+	mu.Lock()
+	return mu
+}
+
 func (s *service) UpsertSessionActivity(
 	ctx context.Context,
 	characterID string,
@@ -89,6 +100,11 @@ func (s *service) UpsertSessionActivity(
 	snapshotLink api.SnapshotLink,
 	performance api.InstancePerformance,
 ) (*api.Aggregate, error) {
+	if history.InstanceID != "" {
+		mu := s.lockActivity(history.InstanceID)
+		defer mu.Unlock()
+	}
+
 	now := time.Now()
 	sessionIDs := make([]string, 0, 1)
 	snapshotIDs := make([]string, 0, 1)

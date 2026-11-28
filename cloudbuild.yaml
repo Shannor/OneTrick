@@ -22,7 +22,17 @@ steps:
     name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     waitFor: ['push-image', 'deploy-firestore-indexes']
     entrypoint: gcloud
-    args: ['run', 'deploy', 'onetrick', '--image', 'gcr.io/gruntt-destiny/onetrick:$COMMIT_SHA', '--region', 'us-central1']
+    args:
+      - 'run'
+      - 'deploy'
+      - 'onetrick'
+      - '--image=gcr.io/gruntt-destiny/onetrick:$COMMIT_SHA'
+      - '--region=us-central1'
+      - '--cpu=1'
+      - '--memory=1Gi'
+      - '--cpu-throttling'
+      - '--clear-volume-mounts'
+      - '--clear-volumes'
 images: ['gcr.io/gruntt-destiny/onetrick:$COMMIT_SHA']
 options:
   logging: CLOUD_LOGGING_ONLY
