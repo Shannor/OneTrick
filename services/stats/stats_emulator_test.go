@@ -5,13 +5,13 @@ import (
 	"fmt"
 	firestoredriven "oneTrick/adapters/driven/firestore"
 	"oneTrick/api"
+	"oneTrick/core/domain"
+	"oneTrick/core/inventory"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
 	"os"
 	"slices"
-	"strconv"
 	"testing"
 	"time"
 
@@ -19,37 +19,23 @@ import (
 )
 
 type emulatorMockManifestService struct {
-	destiny.ManifestService
-	items              map[int64]*destiny.ItemDefinition
+	items              map[int64]domain.ItemManifest
 	callCount          map[int64]int
 	getItemCalls       int
 	getItemsByIDsCalls int
 	requestedBatches   [][]int64
 }
 
-func (m *emulatorMockManifestService) GetItem(_ context.Context, hash int64) (*destiny.ItemDefinition, error) {
-	m.getItemCalls++
-	if m.callCount != nil {
-		m.callCount[hash]++
-	}
-	if m.items != nil {
-		if def, ok := m.items[hash]; ok {
-			return def, nil
-		}
-	}
-	return nil, fmt.Errorf("item %d not found", hash)
-}
-
-func (m *emulatorMockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map[string]destiny.ItemDefinition, error) {
+func (m *emulatorMockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map[int64]domain.ItemManifest, error) {
 	m.getItemsByIDsCalls++
 	copied := make([]int64, len(ids))
 	copy(copied, ids)
 	m.requestedBatches = append(m.requestedBatches, copied)
-	out := make(map[string]destiny.ItemDefinition, len(ids))
+	out := make(map[int64]domain.ItemManifest, len(ids))
 	for _, id := range ids {
 		if m.items != nil {
-			if def, ok := m.items[id]; ok && def != nil {
-				out[strconv.FormatInt(id, 10)] = *def
+			if def, ok := m.items[id]; ok {
+				out[id] = def
 			}
 		}
 	}
@@ -58,28 +44,28 @@ func (m *emulatorMockManifestService) GetItemsByIDs(_ context.Context, ids []int
 
 func makeEmulatorBaseLoadout(kinID string, enID string, subclassHash int64, powerID string, powerHash int64) api.Loadout {
 	return api.Loadout{
-		strconv.Itoa(destiny.Kinetic): {
+		inventory.KineticKey: {
 			InstanceID: kinID,
 			ItemHash:   1001,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{InstanceId: kinID, TierType: 6},
 			},
 		},
-		strconv.Itoa(destiny.Energy): {
+		inventory.EnergyKey: {
 			InstanceID: enID,
 			ItemHash:   2002,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{InstanceId: enID, TierType: 5},
 			},
 		},
-		strconv.Itoa(destiny.SubClass): {
+		inventory.SubClassKey: {
 			InstanceID: "sub-inst",
 			ItemHash:   subclassHash,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{Name: "Gunslinger"},
 			},
 		},
-		strconv.Itoa(destiny.Power): {
+		inventory.PowerKey: {
 			InstanceID: powerID,
 			ItemHash:   powerHash,
 			ItemProperties: api.ItemProperties{
@@ -105,7 +91,7 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 	userID := "user-" + runID
 	charID := "char-" + runID
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	helmetKey := strconv.FormatUint(uint64(destiny.HelmetArmor), 10)
+	helmetKey := inventory.HelmetArmorKey
 
 	var snapDocIDs []string
 	var aggDocIDs []string
@@ -214,9 +200,9 @@ func TestFirestoreEmulatorSimilarLoadoutsAndFilterSafety(t *testing.T) {
 	seedGames(snapZ, 10, api.GameModeQuickPlay, 30, 5)
 
 	manifestMock := &emulatorMockManifestService{
-		items: map[int64]*destiny.ItemDefinition{
-			888001: {Hash: 888001, Inventory: destiny.Inventory{TierType: 6, TierTypeName: "Exotic"}},
-			888002: {Hash: 888002, Inventory: destiny.Inventory{TierType: 6, TierTypeName: "Exotic"}},
+		items: map[int64]domain.ItemManifest{
+			888001: {Hash: 888001, TierType: 6, TierTypeName: "Exotic"},
+			888002: {Hash: 888002, TierType: 6, TierTypeName: "Exotic"},
 		},
 		callCount: make(map[int64]int),
 	}

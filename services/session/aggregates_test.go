@@ -167,7 +167,7 @@ func TestGetSessionAggregates(t *testing.T) {
 
 		uSvc := &fakeSessionUserService{}
 		snapSvc := &fakeSessionSnapshotService{}
-		svc := NewService(store, aggSvc, uSvc, nil, snapSvc, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, snapSvc, nil)
 
 		res, err := svc.GetSessionAggregates(clog.NewContext(context.Background()), "ses-A")
 		if err != nil {
@@ -273,7 +273,7 @@ func TestGetSessionAggregates(t *testing.T) {
 			},
 		}
 		snapSvc := &fakeSessionSnapshotService{}
-		svc := NewService(store, aggSvc, uSvc, nil, snapSvc, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, snapSvc, nil)
 
 		res, err := svc.GetSessionAggregates(clog.NewContext(context.Background()), "ses-A")
 		if err != nil {
@@ -322,7 +322,7 @@ func TestGetSessionAggregates(t *testing.T) {
 		}
 		snapSvc := &fakeSessionSnapshotService{}
 		uSvc := &fakeSessionUserService{}
-		svc := NewService(store, aggSvc, uSvc, nil, snapSvc, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, snapSvc, nil)
 
 		res, err := svc.GetSessionAggregates(clog.NewContext(context.Background()), "ses-1")
 		if err != nil {
@@ -349,7 +349,7 @@ func TestGetSessionAggregates(t *testing.T) {
 		}
 		aggSvc := newFakeSessionAggregateService()
 		snapSvc := &fakeSessionSnapshotService{}
-		svc := NewService(store, aggSvc, &fakeSessionUserService{}, nil, snapSvc, nil)
+		svc := NewService(store, aggSvc, &fakeSessionUserService{}, nil, nil, nil, snapSvc, nil)
 
 		res, err := svc.GetSessionAggregates(clog.NewContext(context.Background()), "ses-empty")
 		if err != nil {
@@ -407,7 +407,7 @@ func TestGetSessionAggregates(t *testing.T) {
 				"char-B":            makeCompanionPerf(0, 17, 12345, "12345"),
 			},
 		})
-		svc := NewService(store, aggSvc, &fakeSessionUserService{}, nil, &fakeSessionSnapshotService{}, nil)
+		svc := NewService(store, aggSvc, &fakeSessionUserService{}, nil, nil, nil, &fakeSessionSnapshotService{}, nil)
 
 		res, err := svc.GetSessionAggregates(clog.NewContext(context.Background()), "ses-legacy")
 		if err != nil {
@@ -423,7 +423,7 @@ func TestGetSessionAggregates(t *testing.T) {
 
 	t.Run("missing session returns ErrNotFound", func(t *testing.T) {
 		store := newMemorySessionStore()
-		svc := NewService(store, newFakeSessionAggregateService(), &fakeSessionUserService{}, nil, &fakeSessionSnapshotService{}, nil)
+		svc := NewService(store, newFakeSessionAggregateService(), &fakeSessionUserService{}, nil, nil, nil, &fakeSessionSnapshotService{}, nil)
 
 		_, err := svc.GetSessionAggregates(clog.NewContext(context.Background()), "missing-id")
 		if !errors.Is(err, ErrNotFound) {

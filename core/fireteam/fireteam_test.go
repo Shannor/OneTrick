@@ -70,10 +70,10 @@ type fakeSessionStore struct {
 	activeSummaryCalls int
 	capturedSummaryIDs []string
 
-	activeDocs       []Session
-	activeDocsErr    error
-	activeDocsCalls  int
-	capturedDocsIDs  []string
+	activeDocs      []Session
+	activeDocsErr   error
+	activeDocsCalls int
+	capturedDocsIDs []string
 
 	createErr   error
 	createFn    func(ctx context.Context, sessions []Session) ([]CreateSessionResult, error)

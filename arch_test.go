@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -438,5 +443,164 @@ func TestEvaluateCoreArchitectureDetectsViolations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+var allowedBungieClientImporters = map[string]struct{}{
+	"oneTrick":                        {},
+	"oneTrick/clients/bungie":         {},
+	"oneTrick/adapters/driven/bungie": {},
+}
+
+var retiredDestinyPackages = []string{
+	"oneTrick/services/destiny",
+	"github.com/go-resty/resty",
+	"github.com/fatih/structs",
+}
+
+func TestBungieVendorTypesConfinedToBungieAdapter(t *testing.T) {
+	cmd := exec.Command("go", "list", "-test", "-json", "./...")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -test -json ./... failed: %v\n%s", err, string(out))
+	}
+
+	var pkgs []listedPackage
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for {
+		var pkg listedPackage
+		if err := dec.Decode(&pkg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("failed decoding go list JSON output: %v", err)
+		}
+		pkgs = append(pkgs, pkg)
+	}
+
+	violations := evaluateBungieACLConfinement(pkgs)
+
+	rootEntries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("os.ReadDir(.) failed: %v", err)
+	}
+	fset := token.NewFileSet()
+	for _, entry := range rootEntries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || entry.Name() == "main.go" {
+			continue
+		}
+		parsed, err := parser.ParseFile(fset, entry.Name(), nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("failed parsing %s: %v", entry.Name(), err)
+		}
+		for _, imp := range parsed.Imports {
+			impPath, unquoteErr := strconv.Unquote(imp.Path.Value)
+			if unquoteErr != nil {
+				continue
+			}
+			if matchesPackageOrSubpackage(impPath, "oneTrick/clients/bungie") {
+				violations = append(violations, fmt.Sprintf(
+					"root package file %s must not import %s (confine Bungie vendor types to adapters/driven/bungie and main.go)",
+					entry.Name(), impPath,
+				))
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		t.Fatalf("Bungie ACL boundary violations (%d):\n  - %s",
+			len(violations), strings.Join(violations, "\n  - "))
+	}
+}
+
+func evaluateBungieACLConfinement(pkgs []listedPackage) []string {
+	var violations []string
+	seen := make(map[string]struct{})
+	record := func(msg string) {
+		if _, dup := seen[msg]; dup {
+			return
+		}
+		seen[msg] = struct{}{}
+		violations = append(violations, msg)
+	}
+
+	for _, pkg := range pkgs {
+		if strings.HasSuffix(pkg.ImportPath, ".test") {
+			continue
+		}
+		self := pkg.ImportPath
+		if pkg.ForTest != "" {
+			self = pkg.ForTest
+		}
+
+		directImports := make([]string, 0, len(pkg.Imports)+len(pkg.TestImports)+len(pkg.XTestImports))
+		directImports = append(directImports, pkg.Imports...)
+		directImports = append(directImports, pkg.TestImports...)
+		directImports = append(directImports, pkg.XTestImports...)
+
+		for _, rawImp := range directImports {
+			imp := stripTestVariantSuffix(rawImp)
+			if matchesPackageOrSubpackage(imp, "oneTrick/clients/bungie") && !isAllowedBungieImporter(self) {
+				record(fmt.Sprintf(
+					"Bungie ACL violation: %s imports %s (confine oneTrick/clients/bungie to oneTrick/adapters/driven/bungie and main.go)",
+					pkg.ImportPath, imp,
+				))
+			}
+			for _, retired := range retiredDestinyPackages {
+				if matchesPackageOrSubpackage(imp, retired) {
+					record(fmt.Sprintf(
+						"retired package violation: %s imports %s",
+						pkg.ImportPath, imp,
+					))
+				}
+			}
+		}
+	}
+
+	slices.Sort(violations)
+	return violations
+}
+
+func isAllowedBungieImporter(importPath string) bool {
+	if _, ok := allowedBungieClientImporters[importPath]; ok {
+		return true
+	}
+	return strings.HasPrefix(importPath, "oneTrick/adapters/driven/bungie/")
+}
+
+func TestEvaluateBungieACLConfinementDetectsViolations(t *testing.T) {
+	pkgs := []listedPackage{
+		{
+			ImportPath: "oneTrick/adapters/driven/bungie",
+			Imports:    []string{"oneTrick/clients/bungie"},
+		},
+		{
+			ImportPath: "oneTrick",
+			Imports:    []string{"oneTrick/clients/bungie"},
+		},
+		{
+			ImportPath: "oneTrick/services/session",
+			Imports:    []string{"oneTrick/clients/bungie", "oneTrick/services/destiny"},
+		},
+		{
+			ImportPath:  "oneTrick/services/user",
+			TestImports: []string{"github.com/go-resty/resty/v2", "github.com/fatih/structs"},
+		},
+	}
+
+	got := evaluateBungieACLConfinement(pkgs)
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{
+		"Bungie ACL violation: oneTrick/services/session imports oneTrick/clients/bungie",
+		"retired package violation: oneTrick/services/session imports oneTrick/services/destiny",
+		"retired package violation: oneTrick/services/user imports github.com/go-resty/resty/v2",
+		"retired package violation: oneTrick/services/user imports github.com/fatih/structs",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected violation containing %q, got:\n%s", want, joined)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 violations, got %d:\n%s", len(got), joined)
 	}
 }

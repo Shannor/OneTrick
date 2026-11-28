@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/core/domain"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"oneTrick/set"
@@ -291,7 +292,7 @@ func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, er
 }
 
 func (r *tickRunner) resolveMembership(ctx context.Context, ses api.Session) (tickMembership, error) {
-	if r.svc.userService == nil || r.svc.d2Service == nil {
+	if r.svc.userService == nil || r.svc.activityHistory == nil || r.svc.performances == nil {
 		return tickMembership{}, r.failSession(fmt.Errorf("session tick dependencies not configured"))
 	}
 
@@ -351,10 +352,11 @@ func (r *tickRunner) saveLoadoutIfNeeded(ctx context.Context, cand *TickCandidat
 }
 
 func (r *tickRunner) fetchNewActivities(ctx context.Context, cand TickCandidate, membership tickMembership) (string, []api.ActivityHistory, error) {
-	rawActivities, err := r.svc.d2Service.GetAllPVPActivity(ctx, membership.id, membership.membershipType, cand.Session.CharacterID, 5, 0)
+	rawInfos, err := r.svc.activityHistory.GetActivityHistory(ctx, membership.id, membership.membershipType, cand.Session.CharacterID, domain.ActivityQueryAllPvP, 5, 0)
 	if err != nil {
 		return "", nil, r.failSession(fmt.Errorf("failed to get activities for session %s: %w", cand.Session.ID, err))
 	}
+	rawActivities := toAPIActivityHistories(rawInfos)
 
 	activityHistories := filterTickActivities(rawActivities)
 	if len(activityHistories) == 0 {
@@ -452,10 +454,11 @@ func (r *tickRunner) getPerformances(ctx context.Context, activityID string) (ma
 		r.pgcrCacheHits++
 		return cached, nil
 	}
-	performances, err := r.svc.d2Service.GetPerformances(ctx, activityID, r.candidateCharacterIDs)
+	domainPerfs, err := r.svc.performances.GetPerformances(ctx, activityID, r.candidateCharacterIDs)
 	if err != nil {
 		return nil, err
 	}
+	performances := toAPIInstancePerformances(domainPerfs)
 	r.pgcrCache[activityID] = performances
 	return performances, nil
 }

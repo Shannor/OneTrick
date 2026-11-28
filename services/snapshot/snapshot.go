@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/core/domain"
 	"oneTrick/core/inventory"
 	"oneTrick/generator"
+	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"oneTrick/utils"
 	"slices"
@@ -19,6 +20,10 @@ import (
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
 )
+
+type LiveLoadoutReader interface {
+	GetLiveLoadout(ctx context.Context, membershipID int64, membershipType int64, characterID string) (domain.LiveLoadout, error)
+}
 
 // Service defines the interface for working with character snapshots and aggregates.
 type Service interface {
@@ -66,7 +71,7 @@ const (
 type service struct {
 	store            snapshotStore
 	UserService      user.Service
-	D2Service        destiny.Service
+	D2Service        LiveLoadoutReader
 	aggregateService aggregate.Service
 	nowFn            func() time.Time
 }
@@ -80,7 +85,7 @@ func (s *service) now() time.Time {
 	return time.Now()
 }
 
-func NewService(db *firestore.Client, userService user.Service, d2Service destiny.Service, aggregateService aggregate.Service) Service {
+func NewService(db *firestore.Client, userService user.Service, d2Service LiveLoadoutReader, aggregateService aggregate.Service) Service {
 	return &service{
 		store:            &firestoreStore{db: db},
 		UserService:      userService,
@@ -629,14 +634,15 @@ func (s *service) generateSnapshot(ctx context.Context, userID, membershipID, ch
 		return nil, fmt.Errorf("invalid membership id: %w", err)
 	}
 
-	loadout, stats, armorSetBonuses, timestamp, err := s.D2Service.GetLoadout(ctx, memID, membershipType, characterID)
+	live, err := s.D2Service.GetLiveLoadout(ctx, memID, membershipType, characterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profile data: %w", err)
 	}
-	if timestamp == nil {
-		return nil, fmt.Errorf("failed to fetch timestamp for profile data: %w", err)
+	if live.MintedAt == nil {
+		return nil, fmt.Errorf("failed to fetch timestamp for profile data")
 	}
 
+	loadout, stats, armorSetBonuses := toAPILiveLoadout(live)
 	var bonusesPtr *[]api.ArmorSetBonus
 	if len(armorSetBonuses) > 0 {
 		bonusesPtr = &armorSetBonuses
@@ -1010,4 +1016,132 @@ func (s *service) Delete(ctx context.Context, snapshotID string, userID string) 
 
 	clog.WithGroupField(ctx, "snapshotService.delete", "deleted", true)
 	return nil
+}
+
+func toAPILiveLoadout(live domain.LiveLoadout) (api.Loadout, map[string]api.ClassStat, []api.ArmorSetBonus) {
+	loadout := make(api.Loadout, len(live.Loadout))
+	for k, item := range live.Loadout {
+		loadout[k] = api.ItemSnapshot{
+			InstanceID:     item.InstanceID,
+			Name:           item.Name,
+			ItemHash:       item.ItemHash,
+			BucketHash:     item.BucketHash,
+			ItemProperties: toAPIItemProperties(item.Details),
+		}
+	}
+
+	stats := make(map[string]api.ClassStat, len(live.Stats))
+	for k, st := range live.Stats {
+		stats[k] = api.ClassStat{
+			Name:            st.Name,
+			Description:     st.Description,
+			Icon:            st.Icon,
+			HasIcon:         st.HasIcon,
+			StatCategory:    st.StatCategory,
+			AggregationType: st.AggregationType,
+			Value:           st.Value,
+		}
+	}
+
+	var bonuses []api.ArmorSetBonus
+	if len(live.ArmorSetBonuses) > 0 {
+		bonuses = make([]api.ArmorSetBonus, 0, len(live.ArmorSetBonuses))
+		for _, b := range live.ArmorSetBonuses {
+			perks := make([]api.ArmorSetBonusPerk, 0, len(b.ActivePerks))
+			for _, p := range b.ActivePerks {
+				perks = append(perks, api.ArmorSetBonusPerk{
+					RequiredSetCount: p.RequiredSetCount,
+					Hash:             p.Hash,
+					Name:             p.Name,
+					Description:      ptr.NonEmpty(p.Description),
+					IconPath:         ptr.NonEmpty(p.IconPath),
+				})
+			}
+			bonuses = append(bonuses, api.ArmorSetBonus{
+				SetHash:     b.SetHash,
+				SetName:     b.SetName,
+				ActiveCount: b.ActiveCount,
+				ActivePerks: perks,
+			})
+		}
+	}
+
+	return loadout, stats, bonuses
+}
+
+func toAPIItemProperties(p domain.ItemProperties) api.ItemProperties {
+	perks := make([]api.Perk, 0, len(p.Perks))
+	for _, pk := range p.Perks {
+		perks = append(perks, api.Perk{
+			Name:        pk.Name,
+			Description: ptr.NonEmpty(pk.Description),
+			Hash:        pk.Hash,
+			IconPath:    ptr.NonEmpty(pk.IconPath),
+		})
+	}
+	stats := make(api.Stats, len(p.Stats))
+	for k, st := range p.Stats {
+		stats[k] = api.GunStat{
+			Hash:        st.Hash,
+			Value:       st.Value,
+			Name:        st.Name,
+			Description: st.Description,
+		}
+	}
+	out := api.ItemProperties{
+		CharacterId: ptr.NonEmpty(p.CharacterID),
+		BaseInfo:    toAPIBaseItemInfo(p.BaseInfo),
+		Perks:       perks,
+		Stats:       stats,
+	}
+	if p.HasSockets {
+		sockets := make([]api.Socket, 0, len(p.Sockets))
+		for _, sk := range p.Sockets {
+			sockets = append(sockets, api.Socket{
+				PlugHash:                  sk.PlugHash,
+				IsEnabled:                 sk.IsEnabled,
+				IsVisible:                 sk.IsVisible,
+				Name:                      sk.Name,
+				Description:               sk.Description,
+				Icon:                      ptr.NonEmpty(sk.Icon),
+				ItemTypeDisplayName:       ptr.NonEmpty(sk.ItemTypeDisplayName),
+				ItemTypeTieredDisplayName: ptr.NonEmpty(sk.ItemTypeTieredDisplayName),
+			})
+		}
+		out.Sockets = &sockets
+	}
+	return out
+}
+
+func toAPIBaseItemInfo(b domain.BaseItemInfo) api.BaseItemInfo {
+	out := api.BaseItemInfo{
+		Name:                       b.Name,
+		Icon:                       ptr.NonEmpty(b.Icon),
+		ItemHash:                   b.ItemHash,
+		InstanceId:                 b.InstanceID,
+		BucketHash:                 b.BucketHash,
+		ItemTypeAndTierDisplayName: b.ItemTypeAndTierDisplayName,
+		ItemTypeDisplayName:        b.ItemTypeDisplayName,
+		TierTypeName:               b.TierTypeName,
+		TierType:                   b.TierType,
+		EquipableItemSetHash:       b.EquipableItemSetHash,
+	}
+	if b.StyleBasicInfo != nil {
+		style := toAPIBaseItemInfo(*b.StyleBasicInfo)
+		out.StyleBasicInfo = &style
+	}
+	if b.Damage != nil {
+		out.Damage = &api.DamageInfo{
+			DamageType:      b.Damage.DamageType,
+			DamageIcon:      b.Damage.DamageIcon,
+			TransparentIcon: b.Damage.TransparentIcon,
+			Color: api.Color{
+				Red:   b.Damage.Color.Red,
+				Green: b.Damage.Color.Green,
+				Blue:  b.Damage.Color.Blue,
+				Alpha: b.Damage.Color.Alpha,
+			},
+		}
+	}
+	return out
 }

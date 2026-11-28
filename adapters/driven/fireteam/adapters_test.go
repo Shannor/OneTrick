@@ -4,13 +4,9 @@ import (
 	"context"
 	"errors"
 	"oneTrick/api"
-	"oneTrick/clients/bungie"
 	corefireteam "oneTrick/core/fireteam"
-	"oneTrick/services/destiny"
 	"oneTrick/services/user"
-	"reflect"
 	"testing"
-	"time"
 )
 
 type stubUserService struct {
@@ -27,22 +23,6 @@ func (s *stubUserService) GetUser(_ context.Context, _ string) (*user.User, erro
 
 func (s *stubUserService) FindByPartyMembershipIDs(_ context.Context, _ []string) ([]user.User, error) {
 	return s.partyUsers, s.partyErr
-}
-
-type stubDestinyService struct {
-	destiny.Service
-	members  []bungie.PartyMember
-	err      error
-	compSnap *api.CompRankSnapshot
-	compErr  error
-}
-
-func (s *stubDestinyService) GetPartyMembers(_ context.Context, _ int64, _ int64) ([]bungie.PartyMember, error) {
-	return s.members, s.err
-}
-
-func (s *stubDestinyService) GetCompetitiveRank(_ context.Context, _ int64, _ int64, _ string) (*api.CompRankSnapshot, error) {
-	return s.compSnap, s.compErr
 }
 
 func TestUserReaderAdapter(t *testing.T) {
@@ -108,63 +88,4 @@ func TestUserReaderAdapter(t *testing.T) {
 			t.Fatalf("unexpected batch conversion: batch=%+v err=%v", batch, err)
 		}
 	})
-}
-
-func TestPartyReaderAdapter(t *testing.T) {
-	t.Run("maps destiny.ErrDestinyServerDown to corefireteam.ErrDestinyUnavailable", func(t *testing.T) {
-		adapter := NewPartyReader(&stubDestinyService{err: destiny.ErrDestinyServerDown})
-		_, err := adapter.GetPartyMembershipIDs(context.Background(), 123, 3)
-		if !errors.Is(err, corefireteam.ErrDestinyUnavailable) {
-			t.Fatalf("expected ErrDestinyUnavailable, got %v", err)
-		}
-	})
-
-	t.Run("unwraps bungie PartyMember IDs preserving empty placeholders for nil pointers", func(t *testing.T) {
-		adapter := NewPartyReader(&stubDestinyService{
-			members: []bungie.PartyMember{
-				{MembershipId: new("111")},
-				{MembershipId: nil},
-				{MembershipId: new("222")},
-			},
-		})
-		got, err := adapter.GetPartyMembershipIDs(context.Background(), 123, 3)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		want := []string{"111", "", "222"}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("expected %v, got %v", want, got)
-		}
-	})
-}
-
-func TestCompRankReaderAdapter(t *testing.T) {
-	recorded := time.Date(2026, 5, 1, 20, 0, 0, 0, time.UTC)
-	step := 3
-	adapter := NewCompRankReader(&stubDestinyService{
-		compSnap: &api.CompRankSnapshot{
-			Points:       5800,
-			StepIndex:    &step,
-			DivisionName: new("Platinum III"),
-			Icon:         new("/icon/plat.png"),
-			RecordedAt:   &recorded,
-		},
-	})
-	got, ok, err := adapter.GetCompetitiveRank(context.Background(), 123, 3, "char-1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected snapshot ok=true")
-	}
-	want := corefireteam.CompRankSnapshot{
-		Points:       5800,
-		StepIndex:    &step,
-		DivisionName: "Platinum III",
-		Icon:         "/icon/plat.png",
-		RecordedAt:   &recorded,
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("expected %+v, got %+v", want, got)
-	}
 }

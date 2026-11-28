@@ -3,7 +3,7 @@ package activity
 import (
 	"cmp"
 	"context"
-	"errors"
+	"oneTrick/core/domain"
 	"oneTrick/core/gamemode"
 	"oneTrick/set"
 	"strconv"
@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	ErrInvalidActivityID  = errors.New("invalid activity id")
-	ErrActivityNotFound   = errors.New("activity not found")
-	ErrDestinyUnavailable = errors.New("destiny 2 servers unavailable")
+	ErrInvalidActivityID  = domain.ErrInvalidActivityID
+	ErrActivityNotFound   = domain.ErrActivityNotFound
+	ErrDestinyUnavailable = domain.ErrDestinyUnavailable
 )
 
 type ConfidenceLevel string
@@ -34,150 +34,23 @@ const (
 	ConfidenceSourceUser   ConfidenceSource = "user"
 )
 
-type StatValuePair struct {
-	Value        float64
-	DisplayValue string
-	Present      bool
-}
-
-type UniqueStatValue struct {
-	Name       string
-	Basic      StatValuePair
-	PGA        StatValuePair
-	Weighted   StatValuePair
-	ActivityID *int64
-}
-
-type PlayerStats struct {
-	Kills      StatValuePair
-	Assists    StatValuePair
-	Deaths     StatValuePair
-	KD         StatValuePair
-	KDA        StatValuePair
-	Standing   StatValuePair
-	Team       StatValuePair
-	FireteamID StatValuePair
-	TimePlayed StatValuePair
-}
-
-type WeaponDisplay struct {
-	Name        string
-	Description string
-	Icon        string
-	HasIcon     bool
-}
-
-type Color struct {
-	Red   int
-	Green int
-	Blue  int
-	Alpha int
-}
-
-type DamageInfo struct {
-	DamageType      string
-	DamageIcon      string
-	TransparentIcon string
-	Color           Color
-}
-
-type BaseItemInfo struct {
-	Name                       string
-	Icon                       string
-	ItemHash                   int64
-	InstanceID                 string
-	BucketHash                 int64
-	ItemTypeAndTierDisplayName string
-	ItemTypeDisplayName        string
-	TierTypeName               string
-	TierType                   int32
-	StyleBasicInfo             *BaseItemInfo
-	Damage                     *DamageInfo
-	EquipableItemSetHash       *int64
-}
-
-type Perk struct {
-	Name        string
-	Description string
-	Hash        int64
-	IconPath    string
-}
-
-type GunStat struct {
-	Hash        int64
-	Value       int64
-	Name        string
-	Description string
-}
-
-type Socket struct {
-	PlugHash                  int
-	IsEnabled                 *bool
-	IsVisible                 *bool
-	Name                      string
-	Description               string
-	Icon                      string
-	ItemTypeDisplayName       string
-	ItemTypeTieredDisplayName string
-}
-
-type ItemProperties struct {
-	CharacterID string
-	BaseInfo    BaseItemInfo
-	Perks       []Perk
-	Stats       map[string]GunStat
-	Sockets     []Socket
-	HasSockets  bool
-}
-
-type WeaponMetrics struct {
-	ReferenceID         int64
-	Display             WeaponDisplay
-	HasDisplay          bool
-	BucketHash          int64
-	ItemTypeDisplayName string
-	Properties          *ItemProperties
-	Stats               map[string]UniqueStatValue
-}
-
-type Performance struct {
-	PlayerStats PlayerStats
-	Weapons     map[string]WeaponMetrics
-	Extra       map[string]UniqueStatValue
-}
-
-type ItemSnapshot struct {
-	InstanceID string
-	Name       string
-	ItemHash   int64
-	BucketHash *int64
-	Details    ItemProperties
-}
-
-type ClassStat struct {
-	Name            string
-	Description     string
-	Icon            string
-	HasIcon         bool
-	StatCategory    int
-	AggregationType int
-	Value           int32
-}
-
-type ArmorSetBonusPerk struct {
-	RequiredSetCount int
-	Hash             int64
-	Name             string
-	Description      string
-	IconPath         string
-}
-
-type ArmorSetBonus struct {
-	SetHash     int64
-	SetName     string
-	ActiveCount int
-	ActivePerks []ArmorSetBonusPerk
-}
+type StatValuePair = domain.StatValuePair
+type UniqueStatValue = domain.UniqueStatValue
+type PlayerStats = domain.PlayerStats
+type WeaponDisplay = domain.WeaponDisplay
+type Color = domain.Color
+type DamageInfo = domain.DamageInfo
+type BaseItemInfo = domain.BaseItemInfo
+type Perk = domain.Perk
+type GunStat = domain.GunStat
+type Socket = domain.Socket
+type ItemProperties = domain.ItemProperties
+type WeaponMetrics = domain.WeaponMetrics
+type Performance = domain.Performance
+type ItemSnapshot = domain.ItemSnapshot
+type ClassStat = domain.ClassStat
+type ArmorSetBonusPerk = domain.ArmorSetBonusPerk
+type ArmorSetBonus = domain.ArmorSetBonus
 
 type CharacterSnapshot struct {
 	ID              string
@@ -196,28 +69,8 @@ type CharacterSnapshot struct {
 	ArmorSetBonuses []ArmorSetBonus
 }
 
-type ActivityInfo struct {
-	ReferenceID       int64
-	ActivityHash      int64
-	InstanceID        string
-	Location          string
-	Description       string
-	Activity          string
-	ImageURL          string
-	ActivityIcon      string
-	Period            time.Time
-	IsPrivate         bool
-	HasIsPrivate      bool
-	Mode              string
-	EstimatedGameMode string
-}
-
-type Team struct {
-	ID       string
-	Standing string
-	Score    string
-	TeamName string
-}
+type ActivityInfo = domain.ActivityInfo
+type Team = domain.Team
 
 type SnapshotLink struct {
 	CharacterID        string
@@ -245,11 +98,7 @@ type Aggregate struct {
 	CreatedAt       time.Time
 }
 
-type Membership struct {
-	ID          string
-	Type        int64
-	DisplayName string
-}
+type Membership = domain.Membership
 
 type User struct {
 	ID                  string
@@ -336,30 +185,9 @@ type CarnageEntry struct {
 	Weapons               []CarnageWeapon
 }
 
-type ItemManifest struct {
-	Hash                       int64
-	Name                       string
-	Description                string
-	IconURL                    string
-	HasIcon                    bool
-	ItemTypeDisplayName        string
-	ItemTypeAndTierDisplayName string
-	BucketHash                 int64
-}
-
-type ActivityManifest struct {
-	Hash                   int64
-	Name                   string
-	Description            string
-	PgcrImageURL           string
-	DirectActivityModeHash int64
-}
-
-type ActivityModeManifest struct {
-	Hash     int64
-	ModeType int
-	IconURL  string
-}
+type ItemManifest = domain.ItemManifest
+type ActivityManifest = domain.ActivityManifest
+type ActivityModeManifest = domain.ActivityModeManifest
 
 type CarnageReportGateway interface {
 	GetPostGameCarnageReport(ctx context.Context, activityID string) (CarnageReport, error)
@@ -382,17 +210,6 @@ type SnapshotReader interface {
 type UserLookup interface {
 	FindByPartyMembershipIDs(ctx context.Context, membershipIDs []string) ([]User, error)
 	GetByIDs(ctx context.Context, userIDs []string) ([]User, error)
-}
-
-func (t Team) StandingRank() int {
-	switch strings.ToLower(strings.TrimSpace(t.Standing)) {
-	case "victory":
-		return 0
-	case "defeat":
-		return 2
-	default:
-		return 1
-	}
 }
 
 func (l SnapshotLink) ActiveConfidenceLevel(snapshotID string) ConfidenceLevel {
@@ -429,15 +246,6 @@ func (a Aggregate) UniqueSnapshotIDs() []string {
 		}
 	}
 	return ids.ToSlice()
-}
-
-func (m ItemManifest) ToWeaponDisplay() WeaponDisplay {
-	return WeaponDisplay{
-		Name:        m.Name,
-		Description: m.ItemTypeAndTierDisplayName,
-		Icon:        m.IconURL,
-		HasIcon:     m.HasIcon,
-	}
 }
 
 func (w CarnageWeapon) ToMetrics(def ItemManifest, hasDef bool, stored WeaponMetrics, hasStored bool) WeaponMetrics {

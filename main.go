@@ -5,11 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	activitydriven "oneTrick/adapters/driven/activity"
+	bungiedriven "oneTrick/adapters/driven/bungie"
+	cachedriven "oneTrick/adapters/driven/cache"
 	firestoredriven "oneTrick/adapters/driven/firestore"
 	fireteamdriven "oneTrick/adapters/driven/fireteam"
 	telemetrydriven "oneTrick/adapters/driven/telemetry"
 	"oneTrick/api"
-	"oneTrick/clients/bungie"
 	"oneTrick/clients/gcp"
 	"oneTrick/core/activity"
 	"oneTrick/core/fireteam"
@@ -17,7 +18,6 @@ import (
 	"oneTrick/envvars"
 	"oneTrick/logger"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -29,7 +29,6 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/go-resty/resty/v2"
 	"github.com/joho/godotenv"
 	"github.com/oapi-codegen/gin-middleware"
 )
@@ -48,67 +47,81 @@ func main() {
 	slog.Info("Starting Up", "env", string(env.Environment))
 
 	hc := http.Client{}
-	cli, err := bungie.NewClientWithResponses(
-		"https://www.bungie.net/Platform",
-		bungie.WithHTTPClient(&hc),
-		bungie.WithRequestEditorFn(func(ctx context.Context, req *http.Request) error {
-			req.Header.Add("X-API-KEY", env.ApiKey)
-			req.Header.Add("Accept", "application/json")
-			req.Header.Add("Content-Type", "application/json")
-			req.Header.Add("User-Agent", "oneTrick-backend")
-			return nil
-		}),
+	tokenRefresher := bungiedriven.NewTokenRefresher(&hc, env.D2ClientID, env.D2ClientSecret)
+	bungieClient, err := bungiedriven.NewClient(
+		env.ApiKey,
+		&hc,
+		bungiedriven.WithOAuthRefresher(tokenRefresher),
 	)
-	firestore := gcp.CreateFirestore(context.Background())
+	if err != nil {
+		slog.Error("failed to initialize bungie client", "error", err)
+		os.Exit(1)
+	}
 
-	manifestService := destiny.NewCachedManifestService(
-		destiny.NewManifestService(firestore, string(env.Environment)),
-	)
+	firestore := gcp.CreateFirestore(context.Background())
+	defer firestore.Close()
+
+	manifestStore := firestoredriven.NewManifestStore(firestore)
+	manifestCache := cachedriven.NewManifestCache(manifestStore)
+
+	oauthGateway := bungiedriven.NewOAuthGateway(&hc, bungieClient, env.D2ClientID, env.D2ClientSecret)
+	partyGateway := bungiedriven.NewPartyGateway(bungieClient)
+	compRankGateway := bungiedriven.NewCompRankGateway(bungieClient, manifestCache)
+	carnageGateway := bungiedriven.NewCarnageGateway(bungieClient, manifestCache)
+	characterGateway := bungiedriven.NewCharacterGateway(bungieClient, manifestCache)
+	liveLoadoutGateway := bungiedriven.NewLiveLoadoutGateway(bungieClient, manifestCache)
+	userSearchGateway := bungiedriven.NewUserSearchGateway(bungieClient)
+	activityHistoryGateway := bungiedriven.NewActivityHistoryGateway(bungieClient, manifestCache)
 
 	sessionStore := session.NewFirestoreStore(firestore)
-	rClient := resty.New()
-	d2AuthAService := destiny.NewAuthService(rClient, cli, env.D2ClientID, env.D2ClientSecret)
-	destinyService := destiny.NewService(env.ApiKey, firestore, manifestService)
-	userService := user.NewUserService(firestore, destinyService)
+	userService := user.NewUserService(firestore, characterGateway, userSearchGateway)
 	aggregateService := aggregate.NewService(firestore)
-	snapshotService := snapshot.NewService(firestore, userService, destinyService, aggregateService)
-	sessionService := session.NewService(sessionStore, aggregateService, userService, destinyService, snapshotService, manifestService)
+	snapshotService := snapshot.NewService(firestore, userService, liveLoadoutGateway, aggregateService)
+	sessionService := session.NewService(
+		sessionStore,
+		aggregateService,
+		userService,
+		compRankGateway,
+		activityHistoryGateway,
+		carnageGateway,
+		snapshotService,
+		manifestCache,
+	)
 	fireteamService := fireteam.NewService(
 		fireteamdriven.NewUserReader(userService),
-		fireteamdriven.NewPartyReader(destinyService),
+		partyGateway,
 		firestoredriven.NewFireteamSessionStore(firestore),
-		fireteamdriven.NewCompRankReader(destinyService),
+		compRankGateway,
 	)
 	statsStore := firestoredriven.NewStatsStore(firestore)
-	statsService := stats.NewService(firestore, statsStore, snapshotService, userService, manifestService)
+	statsService := stats.NewService(firestore, statsStore, snapshotService, userService, manifestCache)
 	telemetryService := telemetry.NewService(
 		telemetrydriven.NewUserReader(userService),
 		telemetrydriven.NewSnapshotReader(snapshotService),
 		firestoredriven.NewTelemetryMatchStore(firestore),
 	)
 	activityService := activity.NewService(
-		activitydriven.NewCarnageReportGateway(destinyService),
-		activitydriven.NewManifestLookup(manifestService),
+		carnageGateway,
+		manifestCache,
 		activitydriven.NewAggregateReader(aggregateService),
 		activitydriven.NewSnapshotReader(snapshotService),
 		activitydriven.NewUserLookup(userService),
 	)
 	server := NewServer(
-		destinyService,
-		d2AuthAService,
+		characterGateway,
+		activityHistoryGateway,
+		oauthGateway,
 		userService,
 		snapshotService,
 		aggregateService,
 		sessionService,
 		fireteamService,
-		manifestService,
+		manifestCache,
 		statsService,
 		telemetryService,
 		activityService,
 		env.InternalAPIKey,
 	)
-
-	defer firestore.Close()
 
 	if envvars.IsProd(env) {
 		gin.SetMode(gin.ReleaseMode)

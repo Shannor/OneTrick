@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
-	"oneTrick/services/destiny"
+	"oneTrick/core/domain"
+	"oneTrick/core/inventory"
 	"oneTrick/services/snapshot"
 	"slices"
 	"strconv"
@@ -160,8 +161,7 @@ func TestFilterSnapshotsByGameModeAndMinGames(t *testing.T) {
 }
 
 type mockManifestService struct {
-	destiny.ManifestService
-	items              map[int64]*destiny.ItemDefinition
+	items              map[int64]domain.ItemManifest
 	callCount          map[int64]int
 	getItemCalls       int
 	getItemsByIDsCalls int
@@ -169,20 +169,7 @@ type mockManifestService struct {
 	getItemsByIDsErr   error
 }
 
-func (m *mockManifestService) GetItem(_ context.Context, hash int64) (*destiny.ItemDefinition, error) {
-	m.getItemCalls++
-	if m.callCount != nil {
-		m.callCount[hash]++
-	}
-	if m.items != nil {
-		if def, ok := m.items[hash]; ok {
-			return def, nil
-		}
-	}
-	return nil, fmt.Errorf("item %d not found", hash)
-}
-
-func (m *mockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map[string]destiny.ItemDefinition, error) {
+func (m *mockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map[int64]domain.ItemManifest, error) {
 	m.getItemsByIDsCalls++
 	copied := make([]int64, len(ids))
 	copy(copied, ids)
@@ -190,11 +177,11 @@ func (m *mockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map
 	if m.getItemsByIDsErr != nil {
 		return nil, m.getItemsByIDsErr
 	}
-	out := make(map[string]destiny.ItemDefinition, len(ids))
+	out := make(map[int64]domain.ItemManifest, len(ids))
 	for _, id := range ids {
 		if m.items != nil {
-			if def, ok := m.items[id]; ok && def != nil {
-				out[strconv.FormatInt(id, 10)] = *def
+			if def, ok := m.items[id]; ok {
+				out[id] = def
 			}
 		}
 	}
@@ -203,28 +190,28 @@ func (m *mockManifestService) GetItemsByIDs(_ context.Context, ids []int64) (map
 
 func makeBaseTestLoadout(kinID string, enID string, subclassHash int64, powerID string, powerHash int64) api.Loadout {
 	return api.Loadout{
-		strconv.Itoa(destiny.Kinetic): {
+		inventory.KineticKey: {
 			InstanceID: kinID,
 			ItemHash:   1001,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{InstanceId: kinID, TierType: 6},
 			},
 		},
-		strconv.Itoa(destiny.Energy): {
+		inventory.EnergyKey: {
 			InstanceID: enID,
 			ItemHash:   2002,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{InstanceId: enID, TierType: 5},
 			},
 		},
-		strconv.Itoa(destiny.SubClass): {
+		inventory.SubClassKey: {
 			InstanceID: "sub-inst",
 			ItemHash:   subclassHash,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{Name: "Gunslinger"},
 			},
 		},
-		strconv.Itoa(destiny.Power): {
+		inventory.PowerKey: {
 			InstanceID: powerID,
 			ItemHash:   powerHash,
 			ItemProperties: api.ItemProperties{
@@ -235,9 +222,9 @@ func makeBaseTestLoadout(kinID string, enID string, subclassHash int64, powerID 
 }
 
 func TestCompareSimilarLoadoutTiersAndDiffs(t *testing.T) {
-	helmetKey := strconv.FormatUint(uint64(destiny.HelmetArmor), 10)
-	chestKey := strconv.FormatUint(uint64(destiny.ChestArmor), 10)
-	classKey := strconv.FormatUint(uint64(destiny.ClassArmor), 10)
+	helmetKey := inventory.HelmetArmorKey
+	chestKey := inventory.ChestArmorKey
+	classKey := inventory.ClassArmorKey
 
 	t.Run("matching Exotic Helmet marks high similarity and ignores Legendary armor swaps", func(t *testing.T) {
 		targetLoadout := makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-1", 4001)
@@ -442,7 +429,7 @@ func TestCompareSimilarLoadoutTiersAndDiffs(t *testing.T) {
 }
 
 func TestCompareSimilarLoadoutArmorSetBonuses(t *testing.T) {
-	helmetKey := strconv.FormatUint(uint64(destiny.HelmetArmor), 10)
+	helmetKey := inventory.HelmetArmorKey
 	makeSnap := func(exoticHelmHash int64, bonuses []api.ArmorSetBonus) *api.CharacterSnapshot {
 		lo := makeBaseTestLoadout("kin-1", "en-1", 3003, "pow-1", 4001)
 		if exoticHelmHash != 0 {
@@ -1180,8 +1167,8 @@ func TestGetSimilarSnapshotsUsesProjectedStoreAndConcurrentFetch(t *testing.T) {
 
 func TestGetSimilarSnapshotsParamsAndBatchedManifestFallback(t *testing.T) {
 	now := time.Now().UTC()
-	helmetKey := strconv.FormatUint(uint64(destiny.HelmetArmor), 10)
-	chestKey := strconv.FormatUint(uint64(destiny.ChestArmor), 10)
+	helmetKey := inventory.HelmetArmorKey
+	chestKey := inventory.ChestArmorKey
 
 	makeSnapWithHelmet := func(id string, createdAt time.Time, kin, en string, helmetHash int64, tierType int32) api.CharacterSnapshot {
 		lo := makeBaseTestLoadout(kin, en, 3003, "pow-"+id, 4001)
@@ -1361,10 +1348,10 @@ func TestGetSimilarSnapshotsParamsAndBatchedManifestFallback(t *testing.T) {
 		archived.MergedIntoID = new("target")
 
 		manifestMock := &mockManifestService{
-			items: map[int64]*destiny.ItemDefinition{
-				888001: {Hash: 888001, Inventory: destiny.Inventory{TierType: 6, TierTypeName: "Exotic"}},
-				888002: {Hash: 888002, Inventory: destiny.Inventory{TierType: 6, TierTypeName: "Exotic"}},
-				777001: {Hash: 777001, Inventory: destiny.Inventory{TierType: 5, TierTypeName: "Legendary"}},
+			items: map[int64]domain.ItemManifest{
+				888001: {Hash: 888001, TierType: 6, TierTypeName: "Exotic"},
+				888002: {Hash: 888002, TierType: 6, TierTypeName: "Exotic"},
+				777001: {Hash: 777001, TierType: 5, TierTypeName: "Legendary"},
 			},
 			callCount: make(map[int64]int),
 		}

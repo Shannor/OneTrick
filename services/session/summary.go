@@ -7,8 +7,8 @@ import (
 	"maps"
 	"math"
 	"oneTrick/api"
+	"oneTrick/core/domain"
 	"oneTrick/ptr"
-	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"oneTrick/set"
 	"slices"
@@ -327,16 +327,16 @@ func (w *weaponTally) mergeFallbackDisplay(display *api.Display) {
 	}
 }
 
-func (w *weaponTally) toSummary(defs map[string]destiny.ItemDefinition) api.SessionWeaponSummary {
+func (w *weaponTally) toSummary(defs map[int64]domain.ItemManifest) api.SessionWeaponSummary {
 	name := w.fallbackName
 	icon := w.fallbackIcon
 
-	if def, found := defs[strconv.FormatInt(w.hash, 10)]; found {
-		if def.DisplayProperties.Name != "" {
-			name = def.DisplayProperties.Name
+	if def, found := defs[w.hash]; found {
+		if def.Name != "" {
+			name = def.Name
 		}
-		if def.DisplayProperties.Icon != "" {
-			icon = def.DisplayProperties.Icon
+		if def.IconURL != "" {
+			icon = def.IconURL
 		}
 	}
 
@@ -365,11 +365,9 @@ func (s service) resolveMissingModes(ctx context.Context, acc *summaryAccumulato
 	var modeIDs []int64
 	for _, def := range actDefs {
 		if def.DirectActivityModeHash != 0 {
-			modeIDs = append(modeIDs, int64(def.DirectActivityModeHash))
+			modeIDs = append(modeIDs, def.DirectActivityModeHash)
 		}
-		for _, mHash := range def.ActivityModeHashes {
-			modeIDs = append(modeIDs, int64(mHash))
-		}
+		modeIDs = append(modeIDs, def.ActivityModeHashes...)
 	}
 	if len(modeIDs) == 0 {
 		return
@@ -380,12 +378,12 @@ func (s service) resolveMissingModes(ctx context.Context, acc *summaryAccumulato
 		return
 	}
 	for _, mDef := range modeDefs {
-		acc.addMode(mDef.DisplayProperties.Name)
+		acc.addMode(mDef.Name)
 	}
 }
 
 func (s service) buildTopWeapons(ctx context.Context, acc *summaryAccumulator) []api.SessionWeaponSummary {
-	itemDefs := make(map[string]destiny.ItemDefinition)
+	var itemDefs map[int64]domain.ItemManifest
 	if hashes := acc.weaponHashes(); len(hashes) > 0 && s.manifestService != nil {
 		if fetched, err := s.manifestService.GetItemsByIDs(ctx, hashes); err == nil {
 			itemDefs = fetched
