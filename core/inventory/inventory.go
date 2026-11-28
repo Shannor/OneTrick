@@ -65,8 +65,8 @@ func BucketKey[T Hash](bucket T) string {
 }
 
 // ArmorBucketKeys returns the five equipped armor bucket map keys in canonical slot order.
-func ArmorBucketKeys() []string {
-	return []string{
+func ArmorBucketKeys() [5]string {
+	return [5]string{
 		HelmetArmorKey,
 		GauntletsArmorKey,
 		ChestArmorKey,

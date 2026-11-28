@@ -26,7 +26,26 @@ var forbiddenCoreExternalPrefixes = []string{
 	"oneTrick/clients",
 	"oneTrick/services",
 	"cloud.google.com/go/firestore",
+	"google.golang.org/grpc",
+	"google.golang.org/api",
 	"github.com/gin-gonic/gin",
+	"github.com/gin-contrib",
+	"github.com/go-resty/resty",
+	"github.com/oapi-codegen",
+	"github.com/fatih/structs",
+}
+
+var allowedNonCoreInternalPackages = map[string]struct{}{
+	"oneTrick/generator": {},
+	"oneTrick/ptr":       {},
+	"oneTrick/set":       {},
+	"oneTrick/utils":     {},
+}
+
+var allowedPureLeafInternalPackages = map[string]struct{}{
+	"oneTrick/ptr":   {},
+	"oneTrick/set":   {},
+	"oneTrick/utils": {},
 }
 
 var pureLeafCorePackages = map[string]struct{}{
@@ -143,6 +162,16 @@ func evaluateCoreArchitecture(pkgs []listedPackage) []string {
 					))
 				}
 			}
+			if strings.HasPrefix(cleanRef, "oneTrick/") &&
+				!matchesPackageOrSubpackage(cleanRef, "oneTrick/core") &&
+				!strings.HasSuffix(cleanRef, ".test") {
+				if _, allowed := allowedNonCoreInternalPackages[cleanRef]; !allowed {
+					record(fmt.Sprintf(
+						"external boundary violation: %s references non-allowlisted internal package %s",
+						pkg.ImportPath, cleanRef,
+					))
+				}
+			}
 		}
 
 		if strings.HasSuffix(pkg.ImportPath, ".test") {
@@ -168,7 +197,30 @@ func evaluateCoreArchitecture(pkgs []listedPackage) []string {
 
 		for _, ref := range allRefs {
 			cleanRef := stripTestVariantSuffix(ref)
-			if cleanRef == self || !matchesPackageOrSubpackage(cleanRef, "oneTrick/core") {
+			if cleanRef == self {
+				continue
+			}
+
+			if selfTier == tierPureLeaf {
+				if isThirdPartyPackage(cleanRef) {
+					record(fmt.Sprintf(
+						"leaf purity violation: pure value package %s must not import third-party package %s",
+						pkg.ImportPath, cleanRef,
+					))
+					continue
+				}
+				if strings.HasPrefix(cleanRef, "oneTrick/") && !matchesPackageOrSubpackage(cleanRef, "oneTrick/core") {
+					if _, allowed := allowedPureLeafInternalPackages[cleanRef]; !allowed {
+						record(fmt.Sprintf(
+							"leaf purity violation: pure value package %s must not import non-leaf internal package %s",
+							pkg.ImportPath, cleanRef,
+						))
+						continue
+					}
+				}
+			}
+
+			if !matchesPackageOrSubpackage(cleanRef, "oneTrick/core") {
 				continue
 			}
 
@@ -232,6 +284,11 @@ func matchesPackageOrSubpackage(importPath, prefix string) bool {
 	return importPath == prefix || strings.HasPrefix(importPath, prefix+"/")
 }
 
+func isThirdPartyPackage(importPath string) bool {
+	firstSeg, _, _ := strings.Cut(importPath, "/")
+	return strings.Contains(firstSeg, ".")
+}
+
 func classifyCorePackage(importPath string) coreTier {
 	if _, ok := pureLeafCorePackages[importPath]; ok {
 		return tierPureLeaf
@@ -255,17 +312,17 @@ func TestEvaluateCoreArchitectureDetectsViolations(t *testing.T) {
 			name: "valid_dag_across_leaf_service_and_workflow",
 			pkgs: []listedPackage{
 				{
-					ImportPath:  "oneTrick/core/inventory",
-					Imports:     []string{"strconv"},
+					ImportPath:   "oneTrick/core/inventory",
+					Imports:      []string{"strconv"},
 					XTestImports: []string{"oneTrick/core/inventory", "testing"},
 				},
 				{
 					ImportPath: "oneTrick/core/domain",
-					Imports:    []string{"oneTrick/core/inventory", "oneTrick/core/gamemode"},
+					Imports:    []string{"oneTrick/core/inventory", "oneTrick/core/gamemode", "oneTrick/set", "oneTrick/utils"},
 				},
 				{
 					ImportPath: "oneTrick/core/snapshot",
-					Imports:    []string{"oneTrick/core/domain", "oneTrick/core/inventory"},
+					Imports:    []string{"oneTrick/core/domain", "oneTrick/core/inventory", "oneTrick/generator"},
 				},
 				{
 					ImportPath: "oneTrick/core/ticker",
@@ -275,11 +332,18 @@ func TestEvaluateCoreArchitectureDetectsViolations(t *testing.T) {
 			wantSubstrs: nil,
 		},
 		{
-			name: "external_boundary_in_deps_and_test_imports",
+			name: "external_boundary_in_deps_test_imports_and_non_core_internal_packages",
 			pkgs: []listedPackage{
 				{
-					ImportPath:   "oneTrick/core/activity",
-					Deps:         []string{"cloud.google.com/go/firestore"},
+					ImportPath: "oneTrick/core/activity",
+					Imports:    []string{"oneTrick/envvars", "oneTrick/scripts/sync_db"},
+					Deps: []string{
+						"cloud.google.com/go/firestore",
+						"google.golang.org/grpc/codes",
+						"google.golang.org/api/iterator",
+						"github.com/go-resty/resty/v2",
+						"github.com/oapi-codegen/runtime",
+					},
 					TestImports:  []string{"oneTrick/api"},
 					XTestImports: []string{"oneTrick/adapters/driven/firestore"},
 				},
@@ -290,6 +354,12 @@ func TestEvaluateCoreArchitectureDetectsViolations(t *testing.T) {
 			},
 			wantSubstrs: []string{
 				"cloud.google.com/go/firestore",
+				"google.golang.org/grpc/codes",
+				"google.golang.org/api/iterator",
+				"github.com/go-resty/resty/v2",
+				"github.com/oapi-codegen/runtime",
+				"oneTrick/envvars",
+				"oneTrick/scripts/sync_db",
 				"oneTrick/api",
 				"oneTrick/adapters/driven/firestore",
 				"oneTrick/services/user",
@@ -298,14 +368,20 @@ func TestEvaluateCoreArchitectureDetectsViolations(t *testing.T) {
 			},
 		},
 		{
-			name: "leaf_importing_service_is_rejected",
+			name: "leaf_importing_service_third_party_or_generator_is_rejected",
 			pkgs: []listedPackage{
 				{
-					ImportPath: "oneTrick/core/domain",
-					Imports:    []string{"oneTrick/core/snapshot"},
+					ImportPath:  "oneTrick/core/domain",
+					Imports:     []string{"oneTrick/core/snapshot", "github.com/Shannor/canonical-logger", "oneTrick/generator"},
+					TestImports: []string{"golang.org/x/sync/errgroup"},
 				},
 			},
-			wantSubstrs: []string{"leaf violation"},
+			wantSubstrs: []string{
+				"leaf violation: pure value package oneTrick/core/domain must not import non-leaf core package oneTrick/core/snapshot",
+				"leaf purity violation: pure value package oneTrick/core/domain must not import third-party package github.com/Shannor/canonical-logger",
+				"leaf purity violation: pure value package oneTrick/core/domain must not import non-leaf internal package oneTrick/generator",
+				"leaf purity violation: pure value package oneTrick/core/domain must not import third-party package golang.org/x/sync/errgroup",
+			},
 		},
 		{
 			name: "peer_service_importing_peer_service_or_workflow_is_rejected",

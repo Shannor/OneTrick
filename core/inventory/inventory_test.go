@@ -2,7 +2,6 @@ package inventory
 
 import (
 	"math"
-	"slices"
 	"strconv"
 	"testing"
 )
@@ -60,7 +59,7 @@ func TestBucketKeyAcrossIntegerTypes(t *testing.T) {
 }
 
 func TestArmorBucketKeysOrderAndImmutability(t *testing.T) {
-	want := []string{
+	want := [5]string{
 		HelmetArmorKey,
 		GauntletsArmorKey,
 		ChestArmorKey,
@@ -68,13 +67,24 @@ func TestArmorBucketKeysOrderAndImmutability(t *testing.T) {
 		ClassArmorKey,
 	}
 	got := ArmorBucketKeys()
-	if !slices.Equal(got, want) {
+	if got != want {
 		t.Fatalf("ArmorBucketKeys() = %v, want %v", got, want)
 	}
 
 	got[0] = "mutated"
-	if fresh := ArmorBucketKeys(); !slices.Equal(fresh, want) {
-		t.Fatalf("mutating returned slice corrupted subsequent ArmorBucketKeys(): %v", fresh)
+	if fresh := ArmorBucketKeys(); fresh != want {
+		t.Fatalf("mutating returned array corrupted subsequent ArmorBucketKeys(): %v", fresh)
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		for _, k := range ArmorBucketKeys() {
+			if k == "" {
+				t.Fatal("empty key")
+			}
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("expected 0 allocations iterating ArmorBucketKeys(), got %v", allocs)
 	}
 }
 

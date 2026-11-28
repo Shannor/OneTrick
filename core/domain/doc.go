@@ -4,6 +4,7 @@
 //
 // Architectural invariants (enforced by arch_test.go):
 //   - Zero driven/driving ports and zero I/O.
-//   - Zero transport or persistence struct tags (json, firestore) and zero external SDK imports.
-//   - Leaf core package: never imports sibling core/<service> or core/<workflow> packages.
+//   - Zero transport or persistence struct tags (json, firestore).
+//   - Pure leaf package: zero third-party imports, only pure leaf internal helpers
+//     (oneTrick/{set,utils,ptr}), and zero imports of sibling core/<service> or core/<workflow> packages.
 package domain
