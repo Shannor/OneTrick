@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
 	"oneTrick/utils"
 	"slices"
@@ -100,7 +101,7 @@ func (f *firestoreUserStore) findUsersByIDs(ctx context.Context, userIDs []strin
 		if err != nil {
 			return nil, err
 		}
-		chunkUsers, err := utils.GetAllToStructs[User](docs)
+		chunkUsers, err := fsutil.GetAllToStructs[User](docs)
 		if err != nil {
 			return nil, err
 		}
@@ -155,7 +156,7 @@ func (f *firestoreUserStore) findUsersByPrefix(ctx context.Context, queryLower s
 	if err != nil {
 		return nil, err
 	}
-	displayUsers, err := utils.GetAllToStructs[User](displayDocs)
+	displayUsers, err := fsutil.GetAllToStructs[User](displayDocs)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +171,7 @@ func (f *firestoreUserStore) findUsersByPrefix(ctx context.Context, queryLower s
 	if err != nil {
 		return nil, err
 	}
-	uniqueUsers, err := utils.GetAllToStructs[User](uniqueDocs)
+	uniqueUsers, err := fsutil.GetAllToStructs[User](uniqueDocs)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +192,7 @@ func (f *firestoreUserStore) findUsersByPrefix(ctx context.Context, queryLower s
 		if err != nil {
 			return nil, err
 		}
-		idUsers, err := utils.GetAllToStructs[User](idDocs)
+		idUsers, err := fsutil.GetAllToStructs[User](idDocs)
 		if err != nil {
 			return nil, err
 		}
@@ -298,7 +299,7 @@ func (f *firestoreUserStore) loadAllUsers(ctx context.Context) ([]User, error) {
 	if err != nil {
 		return nil, err
 	}
-	return utils.GetAllToStructs[User](docs)
+	return fsutil.GetAllToStructs[User](docs)
 }
 
 func (f *firestoreUserStore) findUsersByMembershipIDs(ctx context.Context, bungieNetIDs []string, primaryMembershipIDs []string) ([]User, error) {
@@ -323,7 +324,7 @@ func (f *firestoreUserStore) findUsersByMembershipIDs(ctx context.Context, bungi
 		if err != nil {
 			return nil, err
 		}
-		users, err := utils.GetAllToStructs[User](docs)
+		users, err := fsutil.GetAllToStructs[User](docs)
 		if err != nil {
 			return nil, err
 		}
@@ -338,7 +339,7 @@ func (f *firestoreUserStore) findUsersByMembershipIDs(ctx context.Context, bungi
 		if err != nil {
 			return nil, err
 		}
-		users, err := utils.GetAllToStructs[User](docs)
+		users, err := fsutil.GetAllToStructs[User](docs)
 		if err != nil {
 			return nil, err
 		}
@@ -376,7 +377,7 @@ func (f *firestoreUserStore) findUsersByPartyMembershipIDs(ctx context.Context, 
 		if err != nil {
 			return nil, err
 		}
-		users, err := utils.GetAllToStructs[User](docs)
+		users, err := fsutil.GetAllToStructs[User](docs)
 		if err != nil {
 			return nil, err
 		}
@@ -412,7 +413,7 @@ func (f *firestoreUserStore) findUsersByCharacterIDs(ctx context.Context, charac
 		if err != nil {
 			return nil, err
 		}
-		users, err := utils.GetAllToStructs[User](docs)
+		users, err := fsutil.GetAllToStructs[User](docs)
 		if err != nil {
 			return nil, err
 		}

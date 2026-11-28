@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/core/inventory"
 	"strconv"
 	"sync"
 
@@ -271,7 +272,7 @@ func assembleLoadout(
 			ItemProperties: *details,
 			BucketHash:     &details.BaseInfo.BucketHash,
 		}
-		loadout[strconv.FormatInt(snap.ItemProperties.BaseInfo.BucketHash, 10)] = snap
+		loadout[inventory.BucketKey(snap.ItemProperties.BaseInfo.BucketHash)] = snap
 	}
 	return loadout
 }

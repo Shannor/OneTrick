@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
 	"oneTrick/utils"
 	"time"
@@ -210,7 +211,7 @@ func (f *FirestoreStore) ListDocs(ctx context.Context, userID, characterID *stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
 	}
-	result, err := utils.GetAllToStructs[api.Session](docs)
+	result, err := fsutil.GetAllToStructs[api.Session](docs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse sessions: %w", err)
 	}
@@ -226,7 +227,7 @@ func (f *FirestoreStore) ListCompletedInWindow(ctx context.Context, since, until
 	if err != nil {
 		return nil, fmt.Errorf("failed to query completed sessions in cleanup window: %w", err)
 	}
-	result, err := utils.GetAllToStructs[api.Session](docs)
+	result, err := fsutil.GetAllToStructs[api.Session](docs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse completed sessions: %w", err)
 	}

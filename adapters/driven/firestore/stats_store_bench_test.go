@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
+	"oneTrick/core/inventory"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
-	"oneTrick/utils"
 	"os"
 	"strconv"
 	"testing"
@@ -133,28 +133,28 @@ func buildBenchAggregate(aggID, targetCharID, snapID string, idx int, now time.T
 
 func makeBenchLoadout(kinID string, enID string, subclassHash int64, powerID string, powerHash int64) api.Loadout {
 	return api.Loadout{
-		strconv.Itoa(destiny.Kinetic): {
+		inventory.KineticKey: {
 			InstanceID: kinID,
 			ItemHash:   1001,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{InstanceId: kinID, TierType: 6},
 			},
 		},
-		strconv.Itoa(destiny.Energy): {
+		inventory.EnergyKey: {
 			InstanceID: enID,
 			ItemHash:   2002,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{InstanceId: enID, TierType: 5},
 			},
 		},
-		strconv.Itoa(destiny.SubClass): {
+		inventory.SubClassKey: {
 			InstanceID: "sub-inst",
 			ItemHash:   subclassHash,
 			ItemProperties: api.ItemProperties{
 				BaseInfo: api.BaseItemInfo{Name: "Gunslinger"},
 			},
 		},
-		strconv.Itoa(destiny.Power): {
+		inventory.PowerKey: {
 			InstanceID: powerID,
 			ItemHash:   powerHash,
 			ItemProperties: api.ItemProperties{
@@ -222,7 +222,7 @@ func legacyGetAggregatesByCharacterID(ctx context.Context, db *firestore.Client,
 	if err != nil {
 		return nil, err
 	}
-	return utils.GetAllToStructs[api.Aggregate](aggDocs)
+	return fsutil.GetAllToStructs[api.Aggregate](aggDocs)
 }
 
 func BenchmarkFirestoreEmulator600AggregatesAnd200Snapshots(b *testing.B) {

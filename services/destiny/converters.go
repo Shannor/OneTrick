@@ -7,6 +7,7 @@ import (
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
 	"oneTrick/core/gamemode"
+	"oneTrick/core/inventory"
 	"slices"
 	"strconv"
 	"strings"
@@ -738,14 +739,6 @@ func generateArmorSetBonuses(
 		return nil
 	}
 
-	armorBuckets := []string{
-		strconv.FormatUint(uint64(HelmetArmor), 10),
-		strconv.FormatUint(uint64(GauntletsArmor), 10),
-		strconv.FormatUint(uint64(ChestArmor), 10),
-		strconv.FormatUint(uint64(LegArmor), 10),
-		strconv.FormatUint(uint64(ClassArmor), 10),
-	}
-
 	itemToSetHash := make(map[int64]int64)
 	for _, setDef := range itemSets {
 		for _, itemHash := range setDef.SetItems {
@@ -754,7 +747,7 @@ func generateArmorSetBonuses(
 	}
 
 	setCounts := make(map[int64]int)
-	for _, bucketKey := range armorBuckets {
+	for _, bucketKey := range inventory.ArmorBucketKeys() {
 		itemSnap, ok := loadout[bucketKey]
 		if !ok {
 			continue

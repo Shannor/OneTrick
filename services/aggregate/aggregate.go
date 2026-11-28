@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
 	"oneTrick/set"
 	"oneTrick/utils"
@@ -228,7 +229,7 @@ func (s *service) BySnapshotID(ctx context.Context, snapshotID string, gameMode 
 	if err != nil {
 		return nil, err
 	}
-	results, err := utils.GetAllToStructs[api.Aggregate](docs)
+	results, err := fsutil.GetAllToStructs[api.Aggregate](docs)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +286,7 @@ func (s *service) GetAggregatesByActivity(ctx context.Context, activityIDs []str
 		if err != nil {
 			return nil, err
 		}
-		results, err := utils.GetAllToStructs[api.Aggregate](docs)
+		results, err := fsutil.GetAllToStructs[api.Aggregate](docs)
 		if err != nil {
 			return nil, err
 		}
@@ -321,7 +322,7 @@ func (s *service) GetAggregates(ctx context.Context, IDs []string) ([]api.Aggreg
 			return nil, err
 		}
 
-		results, err := utils.GetAllToStructs[api.Aggregate](docs)
+		results, err := fsutil.GetAllToStructs[api.Aggregate](docs)
 		if err != nil {
 			return nil, err
 		}

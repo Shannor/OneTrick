@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"oneTrick/api"
 	"oneTrick/clients/bungie"
+	"oneTrick/core/inventory"
 	"oneTrick/set"
 	"slices"
 	"strconv"
@@ -382,23 +383,11 @@ func (a *service) GetLoadout(ctx context.Context, membershipID int64, membership
 				if equ.Items == nil {
 					continue
 				}
-				buckets := map[uint32]bool{
-					HelmetArmor:    true,
-					GauntletsArmor: true,
-					ChestArmor:     true,
-					LegArmor:       true,
-					ClassArmor:     true,
-					KineticBucket:  true,
-					EnergyBucket:   true,
-					PowerBucket:    true,
-					SubClass:       true,
-				}
-
 				for _, item := range *equ.Items {
 					if item.BucketHash == nil {
 						continue
 					}
-					if buckets[*item.BucketHash] {
+					if inventory.IsEquippedLoadoutBucket(*item.BucketHash) {
 						results = append(results, item)
 					}
 				}
