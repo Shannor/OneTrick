@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"oneTrick/core/domain"
 	"oneTrick/generator"
 	"oneTrick/set"
 	"strconv"
@@ -13,47 +14,17 @@ import (
 
 var (
 	ErrUserNotFound       = errors.New("user not found")
-	ErrDestinyUnavailable = errors.New("destiny 2 servers unavailable")
+	ErrDestinyUnavailable = domain.ErrDestinyUnavailable
 	ErrNotInFireteam      = errors.New("target user is not in caller's fireteam")
 	ErrInvalidRequest     = errors.New("invalid request")
 	ErrAlreadyActive      = errors.New("session already active")
 	ErrUnauthorized       = errors.New("unauthorized")
 )
 
-type Color struct {
-	Red   int
-	Green int
-	Blue  int
-	Alpha int
-}
-
-type ClassStat struct {
-	Name            string
-	Description     string
-	Icon            string
-	HasIcon         bool
-	StatCategory    int
-	AggregationType int
-	Value           int32
-}
-
-type Character struct {
-	ID                  string
-	Class               string
-	Race                string
-	CurrentTitle        string
-	Light               int64
-	EmblemURL           string
-	EmblemBackgroundURL string
-	EmblemColor         Color
-	Stats               map[string]ClassStat
-}
-
-type Membership struct {
-	ID          string
-	Type        int64
-	DisplayName string
-}
+type Color = domain.Color
+type ClassStat = domain.ClassStat
+type Character = domain.Character
+type Membership = domain.Membership
 
 type Player struct {
 	ID                  string
@@ -134,13 +105,7 @@ type AuditField struct {
 	Username string
 }
 
-type CompRankSnapshot struct {
-	Points       int
-	StepIndex    *int
-	DivisionName string
-	Icon         string
-	RecordedAt   *time.Time
-}
+type CompRankSnapshot = domain.CompRankSnapshot
 
 type CompTracking struct {
 	Enabled    bool

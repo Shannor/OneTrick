@@ -8,10 +8,10 @@ import (
 	httpadapter "oneTrick/adapters/driving/http"
 	"oneTrick/api"
 	"oneTrick/core/activity"
+	"oneTrick/core/domain"
 	"oneTrick/core/fireteam"
 	"oneTrick/core/telemetry"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -25,13 +25,32 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 )
 
+type CharacterReader interface {
+	GetCharacters(ctx context.Context, primaryMembershipID int64, membershipType int64) ([]domain.Character, error)
+}
+
+type ActivityHistoryReader interface {
+	GetActivityHistory(ctx context.Context, membershipID string, membershipType int64, characterID string, mode domain.ActivityQueryMode, count int64, page int64) ([]domain.ActivityInfo, error)
+}
+
+type OAuthClient interface {
+	ExchangeCode(ctx context.Context, code string) (domain.OAuthToken, error)
+	RefreshAccessToken(ctx context.Context, refreshToken string) (domain.OAuthToken, error)
+	GetCurrentAccount(ctx context.Context, accessToken string) (domain.BungieAccount, error)
+}
+
+type ItemManifestLookup interface {
+	GetItem(ctx context.Context, id int64) (domain.ItemManifest, bool, error)
+}
+
 // ensure that we've conformed to the `ServerInterface` with a compile-time check
 var _ api.StrictServerInterface = (*Server)(nil)
 
 type Server struct {
-	D2Service         destiny.Service
-	D2AuthService     destiny.AuthService
-	D2ManifestService destiny.ManifestService
+	CharacterReader   CharacterReader
+	ActivityHistory   ActivityHistoryReader
+	D2AuthService     OAuthClient
+	D2ManifestService ItemManifestLookup
 	UserService       user.Service
 	SnapshotService   snapshot.Service
 	AggregateService  aggregate.Service
@@ -44,21 +63,23 @@ type Server struct {
 }
 
 func NewServer(
-	service destiny.Service,
-	authService destiny.AuthService,
+	characterReader CharacterReader,
+	activityHistory ActivityHistoryReader,
+	authService OAuthClient,
 	userService user.Service,
 	snapshotService snapshot.Service,
 	aggregateService aggregate.Service,
 	sessionService session.Service,
 	fireteamService fireteam.Service,
-	manifestService destiny.ManifestService,
+	manifestService ItemManifestLookup,
 	statsService stats.Service,
 	telemetrySvc telemetry.Service,
 	activitySvc activity.Service,
 	internalAPIKey string,
 ) Server {
 	return Server{
-		D2Service:         service,
+		CharacterReader:   characterReader,
+		ActivityHistory:   activityHistory,
 		D2AuthService:     authService,
 		UserService:       userService,
 		SnapshotService:   snapshotService,
@@ -120,16 +141,16 @@ func (s Server) BackfillSnapshotInfo(ctx context.Context, request api.BackfillSn
 			continue
 		}
 		for key, item := range snap.Loadout { // item is a copy of the struct in the map
-			d2Item, err := s.D2ManifestService.GetItem(ctx, item.ItemHash)
-			if err != nil {
+			d2Item, found, err := s.D2ManifestService.GetItem(ctx, item.ItemHash)
+			if err != nil || !found {
 				failed++
 				continue
 			}
 			item.ItemProperties.BaseInfo.ItemTypeAndTierDisplayName = d2Item.ItemTypeAndTierDisplayName
 			item.ItemProperties.BaseInfo.ItemTypeDisplayName = d2Item.ItemTypeDisplayName
-			item.ItemProperties.BaseInfo.TierType = int32(d2Item.Inventory.TierType)
-			item.ItemProperties.BaseInfo.TierTypeName = d2Item.Inventory.TierTypeName
-			item.ItemProperties.BaseInfo.EquipableItemSetHash = d2Item.EquippingBlock.EquipableItemSetHash
+			item.ItemProperties.BaseInfo.TierType = d2Item.TierType
+			item.ItemProperties.BaseInfo.TierTypeName = d2Item.TierTypeName
+			item.ItemProperties.BaseInfo.EquipableItemSetHash = d2Item.EquipableItemSetHash
 			snap.Loadout[key] = item
 		}
 		err := s.SnapshotService.Update(ctx, snap.ID, func(data map[string]any) error {
@@ -328,11 +349,12 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 		if err != nil {
 			return result, err
 		}
-		characters, err := s.D2Service.GetCharacters(ctx, pmId, t)
+		domainChars, err := s.CharacterReader.GetCharacters(ctx, pmId, t)
 		if err != nil {
 			return result, err
 		}
-		if len(characters) > 0 {
+		if len(domainChars) > 0 {
+			characters := httpadapter.ToAPICharacters(domainChars)
 			result.Characters = characters
 			_ = s.UserService.UpdateCharacters(ctx, u.ID, characters)
 		}
@@ -352,15 +374,15 @@ func (s Server) GetUser(ctx context.Context, request api.GetUserRequestObject) (
 					return err
 				}
 
-				characters, err := s.D2Service.GetCharacters(bgCtx, pmId, t)
+				domainChars, err := s.CharacterReader.GetCharacters(bgCtx, pmId, t)
 				if err != nil {
 					return err
 				}
-				if len(characters) == 0 {
+				if len(domainChars) == 0 {
 					clog.WithGroupField(bgCtx, "request", "warning", "no characters found for user")
 					return nil
 				}
-				return s.UserService.UpdateCharacters(bgCtx, u.ID, characters)
+				return s.UserService.UpdateCharacters(bgCtx, u.ID, httpadapter.ToAPICharacters(domainChars))
 			})
 		}
 	}
@@ -672,10 +694,10 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 	code := request.Body.Code
 	clog.WithGroupFields(ctx, "request", clog.Fields{
 		"codeLen":     len(code),
-		"codeSnippet": destiny.CodeSnippet(code),
+		"codeSnippet": httpadapter.MaskOAuthCode(code),
 	})
 
-	resp, err := s.D2AuthService.GetAccessToken(ctx, code)
+	resp, err := s.D2AuthService.ExchangeCode(ctx, code)
 	if err != nil {
 		return nil, err
 	}
@@ -716,70 +738,46 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return api.Login200JSONResponse(result), nil
 	}
 
-	// TODO: Split into it's own function, when no account exists
-	bUser, err := s.D2AuthService.GetCurrentUser(ctx, resp.AccessToken)
+	bUser, err := s.D2AuthService.GetCurrentAccount(ctx, resp.AccessToken)
 	if err != nil {
 		return nil, err
 	}
-	if bUser == nil || (bUser.BungieNetUser == nil && bUser.DestinyMemberships == nil) {
+	if bUser.BungieNetMembershipID == "" && len(bUser.DestinyMemberships) == 0 {
 		return nil, fmt.Errorf("failed to fetch user data")
 	}
 
-	m := make([]user.Membership, 0)
-	u := user.User{}
-
-	if bUser.BungieNetUser != nil {
-		if bUser.BungieNetUser.MembershipId != nil {
-			u.MemberID = *bUser.BungieNetUser.MembershipId
-		}
-		if bUser.BungieNetUser.DisplayName != nil {
-			u.DisplayName = *bUser.BungieNetUser.DisplayName
-		}
-		if bUser.BungieNetUser.UniqueName != nil {
-			u.UniqueName = *bUser.BungieNetUser.UniqueName
-		}
+	m := make([]user.Membership, 0, len(bUser.DestinyMemberships))
+	u := user.User{
+		MemberID:            bUser.BungieNetMembershipID,
+		DisplayName:         bUser.DisplayName,
+		UniqueName:          bUser.UniqueName,
+		PrimaryMembershipID: bUser.PrimaryMembershipID,
 	}
 	if u.MemberID == "" {
 		u.MemberID = resp.MembershipID
 	}
 
-	if bUser.PrimaryMembershipId != nil {
-		u.PrimaryMembershipID = *bUser.PrimaryMembershipId
-	}
-
 	membershipType := int64(0)
-	if bUser.DestinyMemberships != nil {
-		for _, mem := range *bUser.DestinyMemberships {
-			if mem.MembershipId == nil || mem.MembershipType == nil {
-				continue
-			}
-			memID := *mem.MembershipId
-			memType := int64(*mem.MembershipType)
-			displayName := ""
-			if mem.DisplayName != nil {
-				displayName = *mem.DisplayName
-			}
+	for _, mem := range bUser.DestinyMemberships {
+		if mem.ID == "" || mem.Type == 0 {
+			continue
+		}
+		m = append(m, user.Membership{
+			ID:          mem.ID,
+			Type:        mem.Type,
+			DisplayName: mem.DisplayName,
+		})
 
-			m = append(m, user.Membership{
-				ID:          memID,
-				Type:        memType,
-				DisplayName: displayName,
-			})
+		if u.PrimaryMembershipID != "" && mem.ID == u.PrimaryMembershipID {
+			membershipType = mem.Type
+		}
 
-			// Match primary membership ID to determine membershipType
-			if u.PrimaryMembershipID != "" && memID == u.PrimaryMembershipID {
-				membershipType = memType
-			}
-
-			// If PrimaryMembershipID was not set by Bungie, fallback to first membership
-			if u.PrimaryMembershipID == "" {
-				u.PrimaryMembershipID = memID
-				membershipType = memType
-			}
+		if u.PrimaryMembershipID == "" {
+			u.PrimaryMembershipID = mem.ID
+			membershipType = mem.Type
 		}
 	}
 
-	// Fallback if membershipType is still 0 but memberships exist
 	if membershipType == 0 && len(m) > 0 {
 		membershipType = m[0].Type
 		if u.PrimaryMembershipID == "" {
@@ -808,10 +806,11 @@ func (s Server) Login(ctx context.Context, request api.LoginRequestObject) (api.
 		return nil, fmt.Errorf("invalid primary membership ID: %w", err)
 	}
 
-	chars, err := s.D2Service.GetCharacters(ctx, id, membershipType)
+	domainChars, err := s.CharacterReader.GetCharacters(ctx, id, membershipType)
 	if err != nil {
 		return nil, err
 	}
+	chars := httpadapter.ToAPICharacters(domainChars)
 
 	charIDs := make([]string, 0, len(chars))
 	for _, char := range chars {
@@ -1029,35 +1028,19 @@ func (s Server) GetActivities(ctx context.Context, request api.GetActivitiesRequ
 		"page":        params.Page,
 	})
 
-	history := make([]api.ActivityHistory, 0)
-	switch mode {
-	case api.AllPvP:
-		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
-		if err != nil {
-			return nil, err
-		}
-	case api.Competitive:
-		history, err = s.D2Service.GetCompetitiveActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
-		if err != nil {
-			return nil, err
-		}
-
-	case api.Quickplay:
-		history, err = s.D2Service.GetQuickPlayActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
-		if err != nil {
-			return nil, err
-		}
-	case api.IronBanner:
-		history, err = s.D2Service.GetIronBannerActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		history, err = s.D2Service.GetAllPVPActivity(ctx, params.XMembershipID, membershipType, params.CharacterID, params.Count, params.Page)
-		if err != nil {
-			return nil, err
-		}
+	domainHistory, err := s.ActivityHistory.GetActivityHistory(
+		ctx,
+		params.XMembershipID,
+		membershipType,
+		params.CharacterID,
+		httpadapter.ToActivityQueryMode(mode),
+		params.Count,
+		params.Page,
+	)
+	if err != nil {
+		return nil, err
 	}
+	history := httpadapter.ToAPIActivityHistories(domainHistory)
 	activityIDs := make([]string, 0)
 	for _, activityHistory := range history {
 		activityIDs = append(activityIDs, activityHistory.InstanceID)

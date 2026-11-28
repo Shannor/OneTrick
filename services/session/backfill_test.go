@@ -138,7 +138,7 @@ func TestBackfillSessionSummaries(t *testing.T) {
 
 	t.Run("backfills SnapshotLinks and SessionSummary companions idempotently while leaving solo sessions untouched", func(t *testing.T) {
 		store, aggSvc, uSvc := seedHistoricalFireteam()
-		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, nil, nil)
 		ctx := clog.NewContext(context.Background())
 
 		// Run 1: populates multi-character aggregate SnapshotLinks and both sessions' companions.
@@ -209,7 +209,7 @@ func TestBackfillSessionSummaries(t *testing.T) {
 
 	t.Run("dryRun computes accurate update counts with zero writes", func(t *testing.T) {
 		store, aggSvc, uSvc := seedHistoricalFireteam()
-		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, nil, nil)
 
 		res, err := svc.BackfillSessionSummaries(clog.NewContext(context.Background()), true)
 		if err != nil {
@@ -232,7 +232,7 @@ func TestBackfillSessionSummaries(t *testing.T) {
 		delete(store.docs, "ses-B")
 		aggSvc.stampErrByAgg = map[string]error{"agg-shared": errors.New("firestore unavailable")}
 
-		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, nil, nil)
 		res, err := svc.BackfillSessionSummaries(clog.NewContext(context.Background()), false)
 		if err != nil {
 			t.Fatalf("expected backfill to continue past per-item errors, got %v", err)
@@ -261,7 +261,7 @@ func TestBackfillSessionSummaries(t *testing.T) {
 		shared.Performance["char-deleted"] = makeCompanionPerf(0, 17, 777001, "777001")
 		aggSvc.byID["agg-shared"] = shared
 
-		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, nil, nil)
 		res, err := svc.BackfillSessionSummaries(clog.NewContext(context.Background()), false)
 		if err != nil {
 			t.Fatalf("BackfillSessionSummaries failed: %v", err)
@@ -279,7 +279,7 @@ func TestBackfillSessionSummaries(t *testing.T) {
 		store.docs["ses-A"].ID = ""
 		store.docs["ses-B"].ID = ""
 
-		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, nil, nil)
 		res, err := svc.BackfillSessionSummaries(clog.NewContext(context.Background()), false)
 		if err != nil {
 			t.Fatalf("BackfillSessionSummaries failed: %v", err)
@@ -298,7 +298,7 @@ func TestBackfillSessionSummaries(t *testing.T) {
 	t.Run("fails fast when user lookup errors instead of persisting partial state", func(t *testing.T) {
 		store, aggSvc, uSvc := seedHistoricalFireteam()
 		uSvc.findByCharErr = errors.New("firestore users unavailable")
-		svc := NewService(store, aggSvc, uSvc, nil, nil, nil)
+		svc := NewService(store, aggSvc, uSvc, nil, nil, nil, nil, nil)
 
 		_, err := svc.BackfillSessionSummaries(clog.NewContext(context.Background()), false)
 		if err == nil {

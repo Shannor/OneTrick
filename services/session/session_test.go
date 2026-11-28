@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"oneTrick/api"
+	"oneTrick/core/domain"
+	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"os"
 	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -510,7 +510,6 @@ func (f *fakeSessionUserService) GetPrimaryMembership(ctx context.Context, userI
 }
 
 type fakeSessionD2Service struct {
-	destiny.Service
 	mu               sync.Mutex
 	snapshots        []*api.CompRankSnapshot
 	calls            atomic.Int32
@@ -524,28 +523,66 @@ type fakeSessionD2Service struct {
 	perfErrByAct     map[string]error
 }
 
-func (f *fakeSessionD2Service) GetCompetitiveRank(ctx context.Context, pmID int64, membershipType int64, characterID string) (*api.CompRankSnapshot, error) {
+func (f *fakeSessionD2Service) GetCompetitiveRank(ctx context.Context, pmID int64, membershipType int64, characterID string) (domain.CompRankSnapshot, bool, error) {
 	idx := int(f.calls.Add(1)) - 1
+	var (
+		snap *api.CompRankSnapshot
+		err  error
+	)
 	if f.getCompRankFn != nil {
-		return f.getCompRankFn(ctx, pmID, membershipType, characterID)
+		snap, err = f.getCompRankFn(ctx, pmID, membershipType, characterID)
+	} else if idx < len(f.snapshots) {
+		snap = f.snapshots[idx]
+	} else if len(f.snapshots) > 0 {
+		snap = f.snapshots[len(f.snapshots)-1]
+	} else {
+		return domain.CompRankSnapshot{}, false, fmt.Errorf("no snapshot configured")
 	}
-	if idx < len(f.snapshots) {
-		return f.snapshots[idx], nil
+	if err != nil {
+		return domain.CompRankSnapshot{}, false, err
 	}
-	if len(f.snapshots) > 0 {
-		return f.snapshots[len(f.snapshots)-1], nil
+	if snap == nil {
+		return domain.CompRankSnapshot{}, false, nil
 	}
-	return nil, fmt.Errorf("no snapshot configured")
+	return domain.CompRankSnapshot{
+		Points:       snap.Points,
+		StepIndex:    snap.StepIndex,
+		DivisionName: ptr.Deref(snap.DivisionName),
+		Icon:         ptr.Deref(snap.Icon),
+		RecordedAt:   snap.RecordedAt,
+	}, true, nil
 }
 
-func (f *fakeSessionD2Service) GetAllPVPActivity(_ context.Context, _ string, _ int64, characterID string, _ int64, _ int64) ([]api.ActivityHistory, error) {
+func (f *fakeSessionD2Service) GetActivityHistory(_ context.Context, _ string, _ int64, characterID string, _ domain.ActivityQueryMode, _ int64, _ int64) ([]domain.ActivityInfo, error) {
 	if err, ok := f.activityErrByCh[characterID]; ok && err != nil {
 		return nil, err
 	}
-	return f.activitiesByChr[characterID], nil
+	histories := f.activitiesByChr[characterID]
+	out := make([]domain.ActivityInfo, 0, len(histories))
+	for _, h := range histories {
+		info := domain.ActivityInfo{
+			ReferenceID:  h.ReferenceID,
+			ActivityHash: h.ActivityHash,
+			InstanceID:   h.InstanceID,
+			Location:     h.Location,
+			Description:  h.Description,
+			Activity:     h.Activity,
+			ImageURL:     h.ImageURL,
+			ActivityIcon: h.ActivityIcon,
+			Period:       h.Period,
+			Mode:         ptr.Deref(h.Mode),
+			IsPrivate:    ptr.Deref(h.IsPrivate),
+			HasIsPrivate: h.IsPrivate != nil,
+		}
+		if h.EstimatedGameMode != nil {
+			info.EstimatedGameMode = string(*h.EstimatedGameMode)
+		}
+		out = append(out, info)
+	}
+	return out, nil
 }
 
-func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID string, characterIDs []string) (map[string]api.InstancePerformance, error) {
+func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID string, characterIDs []string) (map[string]domain.Performance, error) {
 	f.perfCalls.Add(1)
 	f.mu.Lock()
 	if f.perfCallsByAct == nil {
@@ -563,15 +600,88 @@ func (f *fakeSessionD2Service) GetPerformances(_ context.Context, activityID str
 	}
 	all := f.perfsByAct[activityID]
 	if len(characterIDs) == 0 {
-		return all, nil
+		out := make(map[string]domain.Performance, len(all))
+		for cid, perf := range all {
+			out[cid] = fromTestAPIPerformance(perf)
+		}
+		return out, nil
 	}
-	filtered := make(map[string]api.InstancePerformance, len(characterIDs))
+	filtered := make(map[string]domain.Performance, len(characterIDs))
 	for _, cid := range characterIDs {
 		if perf, ok := all[cid]; ok {
-			filtered[cid] = perf
+			filtered[cid] = fromTestAPIPerformance(perf)
 		}
 	}
 	return filtered, nil
+}
+
+func fromTestAPIStatPair(p *api.StatsValuePair) domain.StatValuePair {
+	if p == nil {
+		return domain.StatValuePair{}
+	}
+	return domain.StatValuePair{
+		Value:        ptr.Deref(p.Value),
+		DisplayValue: ptr.Deref(p.DisplayValue),
+		Present:      true,
+	}
+}
+
+func fromTestAPIUniqueStats(vals *map[string]api.UniqueStatValue) map[string]domain.UniqueStatValue {
+	if vals == nil {
+		return nil
+	}
+	out := make(map[string]domain.UniqueStatValue, len(*vals))
+	for k, v := range *vals {
+		out[k] = domain.UniqueStatValue{
+			Name: ptr.Deref(v.Name),
+			Basic: domain.StatValuePair{
+				Value:        ptr.Deref(v.Basic.Value),
+				DisplayValue: ptr.Deref(v.Basic.DisplayValue),
+				Present:      v.Basic.Value != nil || v.Basic.DisplayValue != nil,
+			},
+			PGA:        fromTestAPIStatPair(v.Pga),
+			Weighted:   fromTestAPIStatPair(v.Weighted),
+			ActivityID: v.ActivityID,
+		}
+	}
+	return out
+}
+
+func fromTestAPIPerformance(perf api.InstancePerformance) domain.Performance {
+	weapons := make(map[string]domain.WeaponMetrics, len(perf.Weapons))
+	for k, w := range perf.Weapons {
+		wm := domain.WeaponMetrics{
+			ReferenceID:         ptr.Deref(w.ReferenceID),
+			BucketHash:          ptr.Deref(w.BucketHash),
+			ItemTypeDisplayName: ptr.Deref(w.ItemTypeDisplayName),
+			Stats:               fromTestAPIUniqueStats(w.Stats),
+		}
+		if w.Display != nil {
+			wm.HasDisplay = true
+			wm.Display = domain.WeaponDisplay{
+				Name:        w.Display.Name,
+				Description: w.Display.Description,
+				Icon:        ptr.Deref(w.Display.Icon),
+				HasIcon:     w.Display.HasIcon,
+			}
+		}
+		weapons[k] = wm
+	}
+	return domain.Performance{
+		PlayerStats: domain.PlayerStats{
+			Kills:      fromTestAPIStatPair(perf.PlayerStats.Kills),
+			Assists:    fromTestAPIStatPair(perf.PlayerStats.Assists),
+			Deaths:     fromTestAPIStatPair(perf.PlayerStats.Deaths),
+			KD:         fromTestAPIStatPair(perf.PlayerStats.Kd),
+			KDA:        fromTestAPIStatPair(perf.PlayerStats.Kda),
+			Standing:   fromTestAPIStatPair(perf.PlayerStats.Standing),
+			Team:       fromTestAPIStatPair(perf.PlayerStats.Team),
+			FireteamID: fromTestAPIStatPair(perf.PlayerStats.FireTeamID),
+			TimePlayed: fromTestAPIStatPair(perf.PlayerStats.TimePlayed),
+		},
+		Weapons: weapons,
+		Extra:   fromTestAPIUniqueStats(perf.Extra),
+	}
 }
 
 type fakeSessionSnapshotService struct {
@@ -881,40 +991,36 @@ func (f *fakeSessionAggregateService) RemoveSession(_ context.Context, sessionID
 }
 
 type fakeSessionManifestService struct {
-	destiny.ManifestService
-	items      map[string]destiny.ItemDefinition
-	activities map[string]destiny.ActivityDefinition
-	modes      map[string]destiny.ActivityModeDefinition
+	items      map[int64]domain.ItemManifest
+	activities map[int64]domain.ActivityManifest
+	modes      map[int64]domain.ActivityModeManifest
 }
 
-func (f *fakeSessionManifestService) GetItemsByIDs(_ context.Context, IDs []int64) (map[string]destiny.ItemDefinition, error) {
-	out := make(map[string]destiny.ItemDefinition)
+func (f *fakeSessionManifestService) GetItemsByIDs(_ context.Context, IDs []int64) (map[int64]domain.ItemManifest, error) {
+	out := make(map[int64]domain.ItemManifest)
 	for _, id := range IDs {
-		key := strconv.FormatInt(id, 10)
-		if def, ok := f.items[key]; ok {
-			out[key] = def
+		if def, ok := f.items[id]; ok {
+			out[id] = def
 		}
 	}
 	return out, nil
 }
 
-func (f *fakeSessionManifestService) GetActivitiesByIDs(_ context.Context, IDs []int64) (map[string]destiny.ActivityDefinition, error) {
-	out := make(map[string]destiny.ActivityDefinition)
+func (f *fakeSessionManifestService) GetActivitiesByIDs(_ context.Context, IDs []int64) (map[int64]domain.ActivityManifest, error) {
+	out := make(map[int64]domain.ActivityManifest)
 	for _, id := range IDs {
-		key := strconv.FormatInt(id, 10)
-		if def, ok := f.activities[key]; ok {
-			out[key] = def
+		if def, ok := f.activities[id]; ok {
+			out[id] = def
 		}
 	}
 	return out, nil
 }
 
-func (f *fakeSessionManifestService) GetActivityModesByIDs(_ context.Context, IDs []int64) (map[string]destiny.ActivityModeDefinition, error) {
-	out := make(map[string]destiny.ActivityModeDefinition)
+func (f *fakeSessionManifestService) GetActivityModesByIDs(_ context.Context, IDs []int64) (map[int64]domain.ActivityModeManifest, error) {
+	out := make(map[int64]domain.ActivityModeManifest)
 	for _, id := range IDs {
-		key := strconv.FormatInt(id, 10)
-		if def, ok := f.modes[key]; ok {
-			out[key] = def
+		if def, ok := f.modes[id]; ok {
+			out[id] = def
 		}
 	}
 	return out, nil
@@ -1127,9 +1233,11 @@ func TestSessionService_CompTrackingStartCompleteAndIdempotentFinalize(t *testin
 
 	finalizeDone := make(chan context.Context, 1)
 	svc := &service{
-		store:       store,
-		userService: uSvc,
-		d2Service:   d2Svc,
+		store:           store,
+		userService:     uSvc,
+		compRanks:       d2Svc,
+		activityHistory: d2Svc,
+		performances:    d2Svc,
 		onFinalizeDone: func(bgCtx context.Context, _ error) {
 			finalizeDone <- bgCtx
 		},
@@ -1206,8 +1314,10 @@ func TestSessionService_StartWithoutCompTrackingSkipsBungieCall(t *testing.T) {
 	store := newMemorySessionStore()
 	d2Svc := &fakeSessionD2Service{}
 	svc := &service{
-		store:     store,
-		d2Service: d2Svc,
+		store:           store,
+		compRanks:       d2Svc,
+		activityHistory: d2Svc,
+		performances:    d2Svc,
 	}
 
 	started, err := svc.Start(context.Background(), "user-1", "char-1", api.AuditField{ID: "user-1", Username: "Guardian"}, false)
@@ -1359,18 +1469,18 @@ func TestSessionLifecycleHelpers(t *testing.T) {
 func TestComputeSessionSummary(t *testing.T) {
 	aggSvc := newFakeSessionAggregateService()
 	manifestSvc := &fakeSessionManifestService{
-		items: map[string]destiny.ItemDefinition{
-			"1001": {Hash: 1001, DisplayProperties: destiny.ItemDisplayProperties{Name: "Rose", Icon: "/img/rose.png"}},
-			"1002": {Hash: 1002, DisplayProperties: destiny.ItemDisplayProperties{Name: "Matador 64", Icon: "/img/matador.png"}},
-			"1003": {Hash: 1003, DisplayProperties: destiny.ItemDisplayProperties{Name: "Igneous Hammer", Icon: "https://cdn.example.com/igneous.png"}},
-			"1004": {Hash: 1004, DisplayProperties: destiny.ItemDisplayProperties{Name: "Cataphract GL3", Icon: "/img/cataphract.png"}},
-			"1005": {Hash: 1005, DisplayProperties: destiny.ItemDisplayProperties{Name: "Conditional Finality", Icon: "/img/cf.png"}},
+		items: map[int64]domain.ItemManifest{
+			1001: {Hash: 1001, Name: "Rose", IconURL: "/img/rose.png"},
+			1002: {Hash: 1002, Name: "Matador 64", IconURL: "/img/matador.png"},
+			1003: {Hash: 1003, Name: "Igneous Hammer", IconURL: "https://cdn.example.com/igneous.png"},
+			1004: {Hash: 1004, Name: "Cataphract GL3", IconURL: "/img/cataphract.png"},
+			1005: {Hash: 1005, Name: "Conditional Finality", IconURL: "/img/cf.png"},
 		},
-		activities: map[string]destiny.ActivityDefinition{
-			"9001": {Hash: 9001, DirectActivityModeHash: 5001},
+		activities: map[int64]domain.ActivityManifest{
+			9001: {Hash: 9001, DirectActivityModeHash: 5001},
 		},
-		modes: map[string]destiny.ActivityModeDefinition{
-			"5001": {Hash: 5001, DisplayProperties: destiny.ModeDisplayProperties{Name: "Trials of Osiris"}},
+		modes: map[int64]domain.ActivityModeManifest{
+			5001: {Hash: 5001, Name: "Trials of Osiris"},
 		},
 	}
 
@@ -1651,10 +1761,10 @@ func TestRunTick_ActiveSessionHappyPathAndSkipSave(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	resp, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
@@ -1782,10 +1892,10 @@ func TestRunTick_DryRunPerformsZeroWrites(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	resp, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{DryRun: true})
@@ -1867,10 +1977,10 @@ func TestRunTick_RecentlyCompletedLateActivityAndInProcessCompFinalize(t *testin
 		store:            store,
 		aggregateService: newFakeSessionAggregateService(),
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	resp, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
@@ -1997,10 +2107,10 @@ func TestRunTick_StaleAndInactiveLifecycle(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	resp, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{})
@@ -2117,10 +2227,10 @@ func TestRunTick_MissingPerformanceWarningAndPartialFailureResilience(t *testing
 		store:            store,
 		aggregateService: newFakeSessionAggregateService(),
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	ctx := clog.NewContext(context.Background())
@@ -2195,7 +2305,9 @@ func TestRunTick_SnapshotHistoryThrottling(t *testing.T) {
 		store:            store,
 		aggregateService: newFakeSessionAggregateService(),
 		userService:      uSvc,
-		d2Service:        &fakeSessionD2Service{},
+		compRanks:        &fakeSessionD2Service{},
+		activityHistory:  &fakeSessionD2Service{},
+		performances:     &fakeSessionD2Service{},
 		snapshotService:  snapSvc,
 		manifestService:  &fakeSessionManifestService{},
 		nowFn:            func() time.Time { return now },
@@ -2677,10 +2789,10 @@ func TestRunTick_CompletedSessionRefreshesIncompletePGCR(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	// Tick 1: persists match immediately with noMatch and logs warning.
@@ -2839,10 +2951,10 @@ func TestRunTick_ActiveSessionIncompletePGCRRetryAndWindowExpiry(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	// Tick 1 (t=0): incomplete PGCR saved, but LastSeenActivityID is NOT advanced yet.
@@ -3004,10 +3116,10 @@ func TestRunTick_PendingRetryUpdatesLastSeenAndPreventsPrematureExpiry(t *testin
 				store:            store,
 				aggregateService: aggSvc,
 				userService:      uSvc,
-				d2Service:        d2Svc,
-				snapshotService:  snapSvc,
-				manifestService:  &fakeSessionManifestService{},
-				nowFn:            func() time.Time { return now },
+				compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+				snapshotService: snapSvc,
+				manifestService: &fakeSessionManifestService{},
+				nowFn:           func() time.Time { return now },
 			}
 
 			// Tick 1 (t=0, 118m since start/lastSeen): partial PGCR saves aggregate and bumps LastSeenTimestamp, holding LastSeenActivityID.
@@ -3095,10 +3207,10 @@ func TestRunTick_IncompletePGCRStopsRetryingAfterWindow(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  &fakeSessionSnapshotService{},
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: &fakeSessionSnapshotService{},
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	resp, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true})
@@ -3209,10 +3321,10 @@ func TestRunTick_DryRunIncompletePGCRParity(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return t0 },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return t0 },
 	}
 
 	// Dry-run while PGCR is still incomplete: matches live tick (skipped, 0 refreshed, warning emitted, 0 DB writes).
@@ -3356,7 +3468,9 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			store:           store,
 			userService:     uSvc,
 			snapshotService: snapSvc,
-			d2Service:       d2Svc,
+			compRanks:       d2Svc,
+			activityHistory: d2Svc,
+			performances:    d2Svc,
 			nowFn:           func() time.Time { return t0 },
 			onFinalizeDone: func(bgCtx context.Context, _ error) {
 				finalizeDone <- bgCtx
@@ -3551,7 +3665,9 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			store:           store,
 			userService:     uSvc,
 			snapshotService: snapSvc,
-			d2Service:       d2Svc,
+			compRanks:       d2Svc,
+			activityHistory: d2Svc,
+			performances:    d2Svc,
 			nowFn:           func() time.Time { return t0 },
 			onFinalizeDone: func(bgCtx context.Context, _ error) {
 				finalizeDone <- bgCtx
@@ -3626,7 +3742,9 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			store:               store,
 			userService:         uSvc,
 			snapshotService:     snapSvc,
-			d2Service:           d2Svc,
+			compRanks:           d2Svc,
+			activityHistory:     d2Svc,
+			performances:        d2Svc,
 			nowFn:               func() time.Time { return t0 },
 			finalCheckInTimeout: 25 * time.Millisecond,
 			onFinalizeDone: func(bgCtx context.Context, _ error) {
@@ -3723,10 +3841,10 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 		}
 		finalizeDone := make(chan context.Context, 1)
 		svc := &service{
-			store:            store,
-			userService:      uSvc,
-			snapshotService:  snapSvc,
-			d2Service:        d2Svc,
+			store:           store,
+			userService:     uSvc,
+			snapshotService: snapSvc,
+			compRanks:       d2Svc, activityHistory: d2Svc, performances: d2Svc,
 			nowFn:            func() time.Time { return t0 },
 			finalCompTimeout: 25 * time.Millisecond,
 			onFinalizeDone: func(bgCtx context.Context, _ error) {
@@ -3800,7 +3918,9 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			store:           store,
 			userService:     uSvc,
 			snapshotService: snapSvc,
-			d2Service:       d2Svc,
+			compRanks:       d2Svc,
+			activityHistory: d2Svc,
+			performances:    d2Svc,
 			nowFn:           func() time.Time { return t0 },
 			onFinalizeDone: func(bgCtx context.Context, _ error) {
 				finalizeDone <- bgCtx
@@ -3880,7 +4000,9 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 			store:                 store,
 			userService:           uSvc,
 			snapshotService:       snapSvc,
-			d2Service:             d2Svc,
+			compRanks:             d2Svc,
+			activityHistory:       d2Svc,
+			performances:          d2Svc,
 			nowFn:                 func() time.Time { return t0 },
 			inFlightFinalizations: &sync.Map{},
 			onFinalizeDone: func(bgCtx context.Context, _ error) {
@@ -3978,7 +4100,9 @@ func TestSessionService_CompleteFinalLoadoutCheckIn(t *testing.T) {
 		svc := &service{
 			store:               store,
 			userService:         uSvc,
-			d2Service:           d2Svc,
+			compRanks:           d2Svc,
+			activityHistory:     d2Svc,
+			performances:        d2Svc,
 			nowFn:               func() time.Time { return t0 },
 			finalCheckInTimeout: 10 * time.Millisecond,
 			finalCompTimeout:    250 * time.Millisecond,
@@ -4117,10 +4241,10 @@ func TestRunTick_FireteamSharedActivityDeduplicatesPGCRAndStampsParticipantMetad
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	ctx := clog.NewContext(context.Background())
@@ -4261,10 +4385,10 @@ func TestRunTick_ParticipantMetadataOmitsEmptyFieldsAndReusesUserReadWithinTick(
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  &fakeSessionSnapshotService{},
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: &fakeSessionSnapshotService{},
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {
@@ -4356,10 +4480,10 @@ func TestRunTick_PGCRCacheScopedPerTick(t *testing.T) {
 		store:            store,
 		aggregateService: aggSvc,
 		userService:      uSvc,
-		d2Service:        d2Svc,
-		snapshotService:  snapSvc,
-		manifestService:  &fakeSessionManifestService{},
-		nowFn:            func() time.Time { return now },
+		compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+		snapshotService: snapSvc,
+		manifestService: &fakeSessionManifestService{},
+		nowFn:           func() time.Time { return now },
 	}
 
 	if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {
@@ -4458,10 +4582,10 @@ func TestRunTick_CandidateCharacterIDsExcludesExpiredAndGetUserGuardsAndAliases(
 			store:            store,
 			aggregateService: newFakeSessionAggregateService(),
 			userService:      uSvc,
-			d2Service:        d2Svc,
-			snapshotService:  &fakeSessionSnapshotService{},
-			manifestService:  &fakeSessionManifestService{},
-			nowFn:            func() time.Time { return now },
+			compRanks:        d2Svc, activityHistory: d2Svc, performances: d2Svc,
+			snapshotService: &fakeSessionSnapshotService{},
+			manifestService: &fakeSessionManifestService{},
+			nowFn:           func() time.Time { return now },
 		}
 
 		if _, err := svc.RunTick(clog.NewContext(context.Background()), TickOptions{SkipSave: true}); err != nil {

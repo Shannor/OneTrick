@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
-	"oneTrick/services/destiny"
+	"oneTrick/core/domain"
 	"oneTrick/utils"
 	"os"
 	"reflect"
@@ -20,17 +20,16 @@ import (
 )
 
 type fakeD2SearchService struct {
-	destiny.Service
-	results      []api.SearchUserResult
+	results      []domain.BungieUserSearchResult
 	hasMore      bool
 	err          error
-	searchFn     func(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error)
+	searchFn     func(ctx context.Context, prefix string, page int32) ([]domain.BungieUserSearchResult, bool, error)
 	capturedPref string
 	capturedPage int32
 	calls        int
 }
 
-func (f *fakeD2SearchService) Search(ctx context.Context, prefix string, page int32) ([]api.SearchUserResult, bool, error) {
+func (f *fakeD2SearchService) SearchUsers(ctx context.Context, prefix string, page int32) ([]domain.BungieUserSearchResult, bool, error) {
 	f.calls++
 	f.capturedPref = prefix
 	f.capturedPage = page
@@ -210,8 +209,8 @@ func TestUserServiceSearch(t *testing.T) {
 				},
 			},
 		}
-		d2 := &fakeD2SearchService{results: []api.SearchUserResult{}, hasMore: false}
-		svc := &userService{d2Service: d2, store: store}
+		d2 := &fakeD2SearchService{results: []domain.BungieUserSearchResult{}, hasMore: false}
+		svc := &userService{searcher: d2, store: store}
 
 		results, hasMore, err := svc.Search(context.Background(), "Weegee", 0)
 		if err != nil {
@@ -245,20 +244,19 @@ func TestUserServiceSearch(t *testing.T) {
 		store := &fakeUserSearchStore{}
 		d2 := &fakeD2SearchService{
 			hasMore: true,
-			results: []api.SearchUserResult{
+			results: []domain.BungieUserSearchResult{
 				{
-					IsRecorded:            false,
-					BungieNetMembershipID: new("bnet-99"),
+					BungieNetMembershipID: "bnet-99",
 					PrimaryMembershipID:   "pm-99",
-					PrimaryMembershipType: new(int64(2)),
+					PrimaryMembershipType: 2,
 					DisplayName:           "RandomGuardian",
 					UniqueName:            "RandomGuardian#9999",
-					IconPath:              new("/icons/psn.png"),
+					IconPath:              "/icons/psn.png",
 					AlternateNames:        []string{"RandomPSN"},
 				},
 			},
 		}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		results, hasMore, err := svc.Search(context.Background(), "Random", 0)
 		if err != nil {
@@ -300,28 +298,26 @@ func TestUserServiceSearch(t *testing.T) {
 		}
 		d2 := &fakeD2SearchService{
 			hasMore: true,
-			results: []api.SearchUserResult{
+			results: []domain.BungieUserSearchResult{
 				{
-					IsRecorded:            false,
-					BungieNetMembershipID: new("bnet-unrec-1"),
+					BungieNetMembershipID: "bnet-unrec-1",
 					PrimaryMembershipID:   "pm-unrec-1",
 					DisplayName:           "GuardianAlpha",
 					UniqueName:            "GuardianAlpha#1111",
 					AlternateNames:        []string{"Alpha"},
 				},
 				{
-					IsRecorded:            false,
-					BungieNetMembershipID: new("bnet-rec"),
+					BungieNetMembershipID: "bnet-rec",
 					PrimaryMembershipID:   "pm-rec",
-					PrimaryMembershipType: new(int64(3)),
+					PrimaryMembershipType: 3,
 					DisplayName:           "Guardian",
 					UniqueName:            "Guardian#4321",
-					IconPath:              new("/icons/steam.png"),
+					IconPath:              "/icons/steam.png",
 					AlternateNames:        []string{"GuardianSteam"},
 				},
 			},
 		}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		results, hasMore, err := svc.Search(context.Background(), "Guardian", 0)
 		if err != nil {
@@ -374,9 +370,8 @@ func TestUserServiceSearch(t *testing.T) {
 		}
 		d2 := &fakeD2SearchService{
 			hasMore: false,
-			results: []api.SearchUserResult{
+			results: []domain.BungieUserSearchResult{
 				{
-					IsRecorded:          false,
 					PrimaryMembershipID: "pm-p1",
 					DisplayName:         "PageOneHero",
 					UniqueName:          "PageOneHero#7777",
@@ -384,7 +379,7 @@ func TestUserServiceSearch(t *testing.T) {
 				},
 			},
 		}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		results, hasMore, err := svc.Search(context.Background(), "PageOne", 1)
 		if err != nil {
@@ -413,14 +408,14 @@ func TestUserServiceSearch(t *testing.T) {
 			},
 		}
 		d2 := &fakeD2SearchService{
-			results: []api.SearchUserResult{
+			results: []domain.BungieUserSearchResult{
 				// Unrecorded results in Bungie relevance order: Zeta first, then Alpha.
-				{IsRecorded: false, PrimaryMembershipID: "pm-u1", DisplayName: "ApexZeta", UniqueName: "ApexZeta#8888", AlternateNames: []string{}},
-				{IsRecorded: false, PrimaryMembershipID: "pm-u2", DisplayName: "ApexAlpha", UniqueName: "ApexAlpha#9999", AlternateNames: []string{}},
-				{IsRecorded: false, PrimaryMembershipID: "pm-u-exact", DisplayName: "ApexUnrec", UniqueName: "apex#1234", AlternateNames: []string{}},
+				{PrimaryMembershipID: "pm-u1", DisplayName: "ApexZeta", UniqueName: "ApexZeta#8888", AlternateNames: []string{}},
+				{PrimaryMembershipID: "pm-u2", DisplayName: "ApexAlpha", UniqueName: "ApexAlpha#9999", AlternateNames: []string{}},
+				{PrimaryMembershipID: "pm-u-exact", DisplayName: "ApexUnrec", UniqueName: "apex#1234", AlternateNames: []string{}},
 			},
 		}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		// Case 1: query matches exact uniqueName -> recorded exact uniqueName first, then unrecorded exact uniqueName, then remaining recorded, then unrecorded in Bungie order.
 		results, _, err := svc.Search(context.Background(), "APEX#1234", 0)
@@ -464,9 +459,9 @@ func TestUserServiceSearch(t *testing.T) {
 			},
 		}
 		d2 := &fakeD2SearchService{
-			err: destiny.ErrDestinyServerDown,
+			err: domain.ErrDestinyUnavailable,
 		}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		ctx := clog.NewContext(context.Background())
 		results, hasMore, err := svc.Search(ctx, "Weegee", 0)
@@ -500,13 +495,13 @@ func TestUserServiceSearch(t *testing.T) {
 			},
 		}
 		d2 := &fakeD2SearchService{
-			searchFn: func(ctx context.Context, _ string, _ int32) ([]api.SearchUserResult, bool, error) {
+			searchFn: func(ctx context.Context, _ string, _ int32) ([]domain.BungieUserSearchResult, bool, error) {
 				<-ctx.Done()
 				return nil, false, ctx.Err()
 			},
 		}
 		svc := &userService{
-			d2Service:     d2,
+			searcher:      d2,
 			store:         store,
 			bungieTimeout: 30 * time.Millisecond,
 		}
@@ -536,13 +531,13 @@ func TestUserServiceSearch(t *testing.T) {
 		reqCtx, cancelReq := context.WithCancel(clog.NewContext(context.Background()))
 		store := &fakeUserSearchStore{}
 		d2 := &fakeD2SearchService{
-			searchFn: func(ctx context.Context, _ string, _ int32) ([]api.SearchUserResult, bool, error) {
+			searchFn: func(ctx context.Context, _ string, _ int32) ([]domain.BungieUserSearchResult, bool, error) {
 				cancelReq()
 				<-ctx.Done()
 				return nil, false, ctx.Err()
 			},
 		}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		_, _, err := svc.Search(reqCtx, "Weegee", 0)
 		if !errors.Is(err, context.Canceled) {
@@ -569,17 +564,17 @@ func TestUserServiceSearch(t *testing.T) {
 			},
 		}
 		d2 := &fakeD2SearchService{
-			searchFn: func(_ context.Context, _ string, _ int32) ([]api.SearchUserResult, bool, error) {
+			searchFn: func(_ context.Context, _ string, _ int32) ([]domain.BungieUserSearchResult, bool, error) {
 				close(bungieStarted)
 				select {
 				case <-firestoreStarted:
 				case <-time.After(time.Second):
 					return nil, false, errors.New("timed out waiting for concurrent Firestore search")
 				}
-				return []api.SearchUserResult{}, false, nil
+				return []domain.BungieUserSearchResult{}, false, nil
 			},
 		}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		results, _, err := svc.Search(context.Background(), "Conc", 0)
 		if err != nil {
@@ -593,7 +588,7 @@ func TestUserServiceSearch(t *testing.T) {
 	t.Run("propagates Firestore error when local prefix search fails", func(t *testing.T) {
 		store := &fakeUserSearchStore{prefixErr: errors.New("firestore unavailable")}
 		d2 := &fakeD2SearchService{}
-		svc := &userService{d2Service: d2, store: store}
+		svc := &userService{searcher: d2, store: store}
 
 		_, _, err := svc.Search(context.Background(), "Weegee", 0)
 		if err == nil {

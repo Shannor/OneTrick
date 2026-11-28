@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
-	"oneTrick/services/destiny"
+	"oneTrick/core/domain"
 	"oneTrick/utils"
 	"strings"
 	"time"
@@ -14,6 +14,14 @@ import (
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
 )
+
+type CharacterReader interface {
+	GetCharacters(ctx context.Context, primaryMembershipID int64, membershipType int64) ([]domain.Character, error)
+}
+
+type UserSearcher interface {
+	SearchUsers(ctx context.Context, prefix string, page int32) ([]domain.BungieUserSearchResult, bool, error)
+}
 
 type Service interface {
 	GetUser(ctx context.Context, ID string) (*User, error)
@@ -34,9 +42,11 @@ type Service interface {
 	GetByCharacterID(ctx context.Context, characterID string) (*User, error)
 	Search(ctx context.Context, query string, page int) ([]api.SearchUserResult, bool, error)
 }
+
 type userService struct {
 	db            *firestore.Client
-	d2Service     destiny.Service
+	characters    CharacterReader
+	searcher      UserSearcher
 	store         userStore
 	bungieTimeout time.Duration
 }
@@ -48,11 +58,12 @@ const (
 	characterSubCollection = "characters"
 )
 
-func NewUserService(client *firestore.Client, service destiny.Service) Service {
+func NewUserService(client *firestore.Client, characters CharacterReader, searcher UserSearcher) Service {
 	return &userService{
-		db:        client,
-		d2Service: service,
-		store:     newFirestoreUserStore(client),
+		db:         client,
+		characters: characters,
+		searcher:   searcher,
+		store:      newFirestoreUserStore(client),
 	}
 }
 
@@ -177,10 +188,11 @@ func (s *userService) BackfillCharacters(ctx context.Context, userID string) err
 	if err != nil {
 		return err
 	}
-	chars, err := s.d2Service.GetCharacters(ctx, pmId, membershipType)
+	domainChars, err := s.characters.GetCharacters(ctx, pmId, membershipType)
 	if err != nil {
 		return fmt.Errorf("failed to fetch characters: %w", err)
 	}
+	chars := toAPICharacters(domainChars)
 	charIDs := make([]string, 0, len(chars))
 	for _, c := range chars {
 		charIDs = append(charIDs, c.Id)
@@ -195,6 +207,45 @@ func (s *userService) BackfillCharacters(ctx context.Context, userID string) err
 	}
 	clog.WithGroupField(ctx, "userService.backfillCharacters", "characterCount", len(charIDs))
 	return nil
+}
+
+func toAPICharacters(chars []domain.Character) []api.Character {
+	out := make([]api.Character, 0, len(chars))
+	for _, c := range chars {
+		var statsPtr *map[string]api.ClassStat
+		if c.Stats != nil {
+			stats := make(map[string]api.ClassStat, len(c.Stats))
+			for k, st := range c.Stats {
+				stats[k] = api.ClassStat{
+					Name:            st.Name,
+					Description:     st.Description,
+					Icon:            st.Icon,
+					HasIcon:         st.HasIcon,
+					StatCategory:    st.StatCategory,
+					AggregationType: st.AggregationType,
+					Value:           st.Value,
+				}
+			}
+			statsPtr = &stats
+		}
+		out = append(out, api.Character{
+			Id:                  c.ID,
+			Class:               c.Class,
+			Race:                c.Race,
+			CurrentTitle:        c.CurrentTitle,
+			Light:               c.Light,
+			EmblemURL:           c.EmblemURL,
+			EmblemBackgroundURL: c.EmblemBackgroundURL,
+			EmblemColor: api.Color{
+				Red:   c.EmblemColor.Red,
+				Green: c.EmblemColor.Green,
+				Blue:  c.EmblemColor.Blue,
+				Alpha: c.EmblemColor.Alpha,
+			},
+			Stats: statsPtr,
+		})
+	}
+	return out
 }
 
 func (s *userService) UpdateCharacters(ctx context.Context, userID string, characters []api.Character) error {

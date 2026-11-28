@@ -8,12 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"oneTrick/api"
-	"oneTrick/clients/bungie"
 	"oneTrick/core/activity"
+	"oneTrick/core/domain"
 	"oneTrick/core/fireteam"
 	"oneTrick/core/telemetry"
 	"oneTrick/logger"
-	"oneTrick/services/destiny"
 	"oneTrick/services/session"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/stats"
@@ -31,20 +30,27 @@ import (
 )
 
 type mockAuthService struct {
-	destiny.AuthService
-	membershipData *bungie.MembershipData
+	account domain.BungieAccount
 }
 
-func (m *mockAuthService) GetAccessToken(ctx context.Context, code string) (*destiny.AuthResponse, error) {
-	return &destiny.AuthResponse{
+func (m *mockAuthService) ExchangeCode(_ context.Context, _ string) (domain.OAuthToken, error) {
+	return domain.OAuthToken{
 		AccessToken:  "test-token",
 		MembershipID: "123456",
 		ExpiresIn:    3600,
 	}, nil
 }
 
-func (m *mockAuthService) GetCurrentUser(ctx context.Context, token string) (*bungie.MembershipData, error) {
-	return m.membershipData, nil
+func (m *mockAuthService) RefreshAccessToken(_ context.Context, _ string) (domain.OAuthToken, error) {
+	return domain.OAuthToken{
+		AccessToken:  "refreshed-token",
+		MembershipID: "123456",
+		ExpiresIn:    3600,
+	}, nil
+}
+
+func (m *mockAuthService) GetCurrentAccount(_ context.Context, _ string) (domain.BungieAccount, error) {
+	return m.account, nil
 }
 
 type mockUserService struct {
@@ -152,48 +158,45 @@ func (m *mockFireteamService) StartSessions(_ context.Context, actorUserID strin
 }
 
 type mockD2Service struct {
-	destiny.Service
 	capturedPrimaryID      int64
 	capturedMembershipType int64
 }
 
-func (m *mockD2Service) GetCharacters(ctx context.Context, primaryMembershipId int64, membershipType int64) ([]api.Character, error) {
+func (m *mockD2Service) GetCharacters(_ context.Context, primaryMembershipId int64, membershipType int64) ([]domain.Character, error) {
 	m.capturedPrimaryID = primaryMembershipId
 	m.capturedMembershipType = membershipType
-	return []api.Character{
-		{Id: "char1", Class: "Titan", Light: 2000},
+	return []domain.Character{
+		{ID: "char1", Class: "Titan", Light: 2000},
 	}, nil
+}
+
+func (m *mockD2Service) GetActivityHistory(_ context.Context, _ string, _ int64, _ string, _ domain.ActivityQueryMode, _ int64, _ int64) ([]domain.ActivityInfo, error) {
+	return nil, nil
 }
 
 func TestLoginNewUserCrossSave(t *testing.T) {
 	primaryID := "4611686018499886480"
 	steamID := "4611686018499886480"
-	steamType := int32(3)
 	xboxID := "12345"
-	xboxType := int32(1)
 	displayName := "TestGuardian"
 	bungieNetID := "9999"
 
-	memberships := []bungie.GroupsV2GroupUserInfoCard{
-		{
-			MembershipId:   &xboxID,
-			MembershipType: &xboxType,
-			DisplayName:    &displayName,
-		},
-		{
-			MembershipId:   &steamID,
-			MembershipType: &steamType,
-			DisplayName:    &displayName,
-		},
-	}
-
 	authMock := &mockAuthService{
-		membershipData: &bungie.MembershipData{
-			PrimaryMembershipId: &primaryID,
-			DestinyMemberships:  &memberships,
-			BungieNetUser: &bungie.UserGeneralUser{
-				MembershipId: &bungieNetID,
-				DisplayName:  &displayName,
+		account: domain.BungieAccount{
+			BungieNetMembershipID: bungieNetID,
+			DisplayName:           displayName,
+			PrimaryMembershipID:   primaryID,
+			DestinyMemberships: []domain.Membership{
+				{
+					ID:          xboxID,
+					Type:        1,
+					DisplayName: displayName,
+				},
+				{
+					ID:          steamID,
+					Type:        3,
+					DisplayName: displayName,
+				},
 			},
 		},
 	}
@@ -202,9 +205,10 @@ func TestLoginNewUserCrossSave(t *testing.T) {
 	d2Mock := &mockD2Service{}
 
 	server := Server{
-		D2AuthService: authMock,
-		UserService:   userMock,
-		D2Service:     d2Mock,
+		D2AuthService:   authMock,
+		UserService:     userMock,
+		CharacterReader: d2Mock,
+		ActivityHistory: d2Mock,
 	}
 
 	req := api.LoginRequestObject{
@@ -241,25 +245,19 @@ func TestLoginNewUserCrossSave(t *testing.T) {
 
 func TestLoginNewUserNoCrossSave(t *testing.T) {
 	xboxID := "12345"
-	xboxType := int32(1)
 	displayName := "TestGuardian"
 	bungieNetID := "9999"
 
-	memberships := []bungie.GroupsV2GroupUserInfoCard{
-		{
-			MembershipId:   &xboxID,
-			MembershipType: &xboxType,
-			DisplayName:    &displayName,
-		},
-	}
-
 	authMock := &mockAuthService{
-		membershipData: &bungie.MembershipData{
-			PrimaryMembershipId: nil,
-			DestinyMemberships:  &memberships,
-			BungieNetUser: &bungie.UserGeneralUser{
-				MembershipId: &bungieNetID,
-				DisplayName:  &displayName,
+		account: domain.BungieAccount{
+			BungieNetMembershipID: bungieNetID,
+			DisplayName:           displayName,
+			DestinyMemberships: []domain.Membership{
+				{
+					ID:          xboxID,
+					Type:        1,
+					DisplayName: displayName,
+				},
 			},
 		},
 	}
@@ -268,9 +266,10 @@ func TestLoginNewUserNoCrossSave(t *testing.T) {
 	d2Mock := &mockD2Service{}
 
 	server := Server{
-		D2AuthService: authMock,
-		UserService:   userMock,
-		D2Service:     d2Mock,
+		D2AuthService:   authMock,
+		UserService:     userMock,
+		CharacterReader: d2Mock,
+		ActivityHistory: d2Mock,
 	}
 
 	req := api.LoginRequestObject{
@@ -504,8 +503,8 @@ func TestGetSnapshotsZeroIndexedPageOffset(t *testing.T) {
 			statsMock := &mockStatsService{}
 			d2Mock := &mockD2Service{}
 			server := Server{
-				StatsService: statsMock,
-				D2Service:    d2Mock,
+				StatsService:    statsMock,
+				CharacterReader: d2Mock,
 			}
 
 			req := api.GetSnapshotsRequestObject{
@@ -1002,7 +1001,7 @@ func TestHTTPRouterOpenAPIMiddlewareEndpoints(t *testing.T) {
 	server := Server{
 		SnapshotService: snapMock,
 		StatsService:    statsMock,
-		D2Service:       d2Mock,
+		CharacterReader: d2Mock,
 	}
 
 	r := gin.New()
@@ -1089,7 +1088,7 @@ func TestGetUserCharacterRefreshAndFallback(t *testing.T) {
 			},
 		}
 		d2Mock := &mockD2Service{}
-		server := Server{UserService: uMock, D2Service: d2Mock}
+		server := Server{UserService: uMock, CharacterReader: d2Mock}
 
 		resp, err := server.GetUser(context.Background(), api.GetUserRequestObject{UserID: "u-empty"})
 		if err != nil {
@@ -1118,7 +1117,7 @@ func TestGetUserCharacterRefreshAndFallback(t *testing.T) {
 			},
 		}
 		d2Mock := &mockD2Service{}
-		server := Server{UserService: uMock, D2Service: d2Mock}
+		server := Server{UserService: uMock, CharacterReader: d2Mock}
 
 		_, err := server.GetUser(context.Background(), api.GetUserRequestObject{UserID: "u-fresh"})
 		if err != nil {
@@ -1144,7 +1143,7 @@ func TestGetUserCharacterRefreshAndFallback(t *testing.T) {
 			},
 		}
 		d2Mock := &mockD2Service{}
-		server := Server{UserService: uMock, D2Service: d2Mock}
+		server := Server{UserService: uMock, CharacterReader: d2Mock}
 
 		_, err := server.GetUser(context.Background(), api.GetUserRequestObject{UserID: "u-inflight"})
 		if err != nil {
@@ -1702,16 +1701,12 @@ func (m *mockBackfillSnapshotService) Update(_ context.Context, snapshotID strin
 }
 
 type mockBackfillManifestService struct {
-	destiny.ManifestService
-	items map[int64]*destiny.ItemDefinition
+	items map[int64]domain.ItemManifest
 }
 
-func (m *mockBackfillManifestService) GetItem(_ context.Context, hash int64) (*destiny.ItemDefinition, error) {
+func (m *mockBackfillManifestService) GetItem(_ context.Context, hash int64) (domain.ItemManifest, bool, error) {
 	item, ok := m.items[hash]
-	if !ok {
-		return nil, fmt.Errorf("not found")
-	}
-	return item, nil
+	return item, ok, nil
 }
 
 func TestBackfillSnapshotInfoPopulatesEquipableItemSetHash(t *testing.T) {
@@ -1732,13 +1727,14 @@ func TestBackfillSnapshotInfoPopulatesEquipableItemSetHash(t *testing.T) {
 		},
 	}
 	manifestMock := &mockBackfillManifestService{
-		items: map[int64]*destiny.ItemDefinition{
+		items: map[int64]domain.ItemManifest{
 			111222: {
 				Hash:                       111222,
 				ItemTypeDisplayName:        "Helmet",
 				ItemTypeAndTierDisplayName: "Legendary Helmet",
-				Inventory:                  destiny.Inventory{TierType: 5, TierTypeName: "Legendary"},
-				EquippingBlock:             destiny.EquippingBlock{EquipableItemSetHash: &setHash},
+				TierType:                   5,
+				TierTypeName:               "Legendary",
+				EquipableItemSetHash:       &setHash,
 			},
 		},
 	}
@@ -2154,7 +2150,7 @@ func TestGetFireteamEndpoint(t *testing.T) {
 
 	t.Run("503 returns ErrDestinyServerDown when Destiny servers are unavailable", func(t *testing.T) {
 		ftMock := &mockFireteamService{
-			err: fmt.Errorf("%w: %w", fireteam.ErrDestinyUnavailable, destiny.ErrDestinyServerDown),
+			err: fmt.Errorf("%w: %w", fireteam.ErrDestinyUnavailable, domain.ErrDestinyUnavailable),
 		}
 
 		r := newRouter(ftMock)
@@ -2350,7 +2346,7 @@ func TestStartFireteamSessionsEndpoint(t *testing.T) {
 			},
 			{
 				name:       "503 destiny unavailable",
-				err:        fmt.Errorf("%w: %w", fireteam.ErrDestinyUnavailable, destiny.ErrDestinyServerDown),
+				err:        fmt.Errorf("%w: %w", fireteam.ErrDestinyUnavailable, domain.ErrDestinyUnavailable),
 				wantCode:   http.StatusServiceUnavailable,
 				wantStatus: api.ErrDestinyServerDown,
 			},

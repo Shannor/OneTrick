@@ -251,7 +251,7 @@ func TestFirestoreEmulatorTelemetryStoreAndService(t *testing.T) {
 		SnapshotLinks: map[string]api.SnapshotLink{},
 	})
 
-	userSvc := user.NewUserService(db, nil)
+	userSvc := user.NewUserService(db, nil, nil)
 	aggSvc := aggregate.NewService(db)
 	snapSvc := snapshot.NewService(db, userSvc, nil, aggSvc)
 	store := NewTelemetryMatchStore(db)

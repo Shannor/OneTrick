@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/core/domain"
 	"oneTrick/generator"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"oneTrick/utils"
@@ -20,6 +20,24 @@ import (
 	"cloud.google.com/go/firestore"
 	clog "github.com/Shannor/canonical-logger"
 )
+
+type CompRankReader interface {
+	GetCompetitiveRank(ctx context.Context, primaryMembershipID int64, membershipType int64, characterID string) (domain.CompRankSnapshot, bool, error)
+}
+
+type ActivityHistoryReader interface {
+	GetActivityHistory(ctx context.Context, membershipID string, membershipType int64, characterID string, mode domain.ActivityQueryMode, count int64, page int64) ([]domain.ActivityInfo, error)
+}
+
+type PerformanceReader interface {
+	GetPerformances(ctx context.Context, activityID string, characterIDs []string) (map[string]domain.Performance, error)
+}
+
+type ManifestReader interface {
+	GetItemsByIDs(ctx context.Context, ids []int64) (map[int64]domain.ItemManifest, error)
+	GetActivitiesByIDs(ctx context.Context, ids []int64) (map[int64]domain.ActivityManifest, error)
+	GetActivityModesByIDs(ctx context.Context, ids []int64) (map[int64]domain.ActivityModeManifest, error)
+}
 
 type Service interface {
 	Start(ctx context.Context, userID string, characterID string, startedBy api.AuditField, trackComp bool) (*api.Session, error)
@@ -50,9 +68,11 @@ type service struct {
 	store                 Store
 	aggregateService      aggregate.Service
 	userService           user.Service
-	d2Service             destiny.Service
+	compRanks             CompRankReader
+	activityHistory       ActivityHistoryReader
+	performances          PerformanceReader
 	snapshotService       snapshot.Service
-	manifestService       destiny.ManifestService
+	manifestService       ManifestReader
 	inFlightFinalizations *sync.Map
 	nowFn                 func() time.Time
 	finalCheckInTimeout   time.Duration
@@ -67,15 +87,19 @@ func NewService(
 	store Store,
 	aggregateService aggregate.Service,
 	userService user.Service,
-	d2Service destiny.Service,
+	compRanks CompRankReader,
+	activityHistory ActivityHistoryReader,
+	performances PerformanceReader,
 	snapshotService snapshot.Service,
-	manifestService destiny.ManifestService,
+	manifestService ManifestReader,
 ) Service {
 	return &service{
 		store:                 store,
 		aggregateService:      aggregateService,
 		userService:           userService,
-		d2Service:             d2Service,
+		compRanks:             compRanks,
+		activityHistory:       activityHistory,
+		performances:          performances,
 		snapshotService:       snapshotService,
 		manifestService:       manifestService,
 		inFlightFinalizations: &sync.Map{},
@@ -171,7 +195,7 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 		compTracking := &api.CompTracking{
 			Enabled: true,
 		}
-		if s.userService != nil && s.d2Service != nil {
+		if s.userService != nil && s.compRanks != nil {
 			pmID, membershipType, err := s.userService.GetPrimaryMembership(ctx, userID)
 			if err != nil {
 				clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
@@ -179,14 +203,14 @@ func (s service) Start(ctx context.Context, userID string, characterID string, s
 					"compRankError": err.Error(),
 				})
 			} else {
-				snap, err := s.d2Service.GetCompetitiveRank(ctx, pmID, membershipType, characterID)
+				snap, found, err := s.compRanks.GetCompetitiveRank(ctx, pmID, membershipType, characterID)
 				if err != nil {
 					clog.WithGroupFields(ctx, "sessionService.start", clog.Fields{
 						"warning":       "failed to fetch starting competitive rank",
 						"compRankError": err.Error(),
 					})
-				} else {
-					compTracking.Start = snap
+				} else if found {
+					compTracking.Start = toAPICompRankSnapshot(snap)
 				}
 			}
 		} else {
@@ -418,7 +442,7 @@ func (s service) Complete(ctx context.Context, ID string) (*api.Session, error) 
 
 	needsLoadout := justCompleted && s.snapshotService != nil && s.userService != nil
 	wantsCompFinalize := session.CompTracking != nil && session.CompTracking.Enabled && session.CompTracking.End == nil
-	needsCompFinalize := wantsCompFinalize && s.userService != nil && s.d2Service != nil
+	needsCompFinalize := wantsCompFinalize && s.userService != nil && s.compRanks != nil
 	if wantsCompFinalize && !needsCompFinalize {
 		clog.WithGroupFields(ctx, "sessionService.complete", clog.Fields{
 			"warning":            "competitive rank services not configured",
@@ -620,7 +644,7 @@ func (s service) finalizeCompTrackingForSession(ctx context.Context, ses *api.Se
 		return fmt.Errorf("session %s is not completed", ses.ID)
 	}
 
-	if s.userService == nil || s.d2Service == nil {
+	if s.userService == nil || s.compRanks == nil {
 		return fmt.Errorf("competitive rank services not configured")
 	}
 
@@ -662,13 +686,14 @@ func (s service) fetchAndPersistCompEnd(
 	hasStart bool,
 	startPoints int,
 ) (*api.CompRankSnapshot, *int, error) {
-	endSnap, err := s.d2Service.GetCompetitiveRank(fetchCtx, pmID, membershipType, characterID)
+	domainEnd, found, err := s.compRanks.GetCompetitiveRank(fetchCtx, pmID, membershipType, characterID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to fetch ending competitive rank: %w", err)
 	}
-	if endSnap == nil {
+	if !found {
 		return nil, nil, fmt.Errorf("empty ending competitive rank snapshot")
 	}
+	endSnap := toAPICompRankSnapshot(domainEnd)
 
 	var pointDelta *int
 	if hasStart {

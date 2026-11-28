@@ -5,6 +5,8 @@ import (
 	"errors"
 	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
+	"oneTrick/core/domain"
+	"oneTrick/ptr"
 	"oneTrick/utils"
 	"slices"
 	"strings"
@@ -476,10 +478,14 @@ func (s *userService) Search(ctx context.Context, query string, page int) ([]api
 		hasMore       bool
 		bungieErr     error
 	)
-	if s.d2Service != nil {
+	if s.searcher != nil {
 		bungieCtx, cancel := context.WithTimeout(ctx, s.bungieSearchTimeout())
-		bungieResults, hasMore, bungieErr = s.d2Service.Search(bungieCtx, trimmed, int32(page))
+		var domainHits []domain.BungieUserSearchResult
+		domainHits, hasMore, bungieErr = s.searcher.SearchUsers(bungieCtx, trimmed, int32(page))
 		cancel()
+		if bungieErr == nil {
+			bungieResults = toAPISearchUserResults(domainHits)
+		}
 	}
 
 	wg.Wait()
@@ -832,4 +838,28 @@ func isASCIIDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+func toAPISearchUserResults(hits []domain.BungieUserSearchResult) []api.SearchUserResult {
+	out := make([]api.SearchUserResult, 0, len(hits))
+	for _, r := range hits {
+		alt := r.AlternateNames
+		if alt == nil {
+			alt = make([]string, 0)
+		}
+		item := api.SearchUserResult{
+			IsRecorded:            false,
+			BungieNetMembershipID: ptr.NonEmpty(r.BungieNetMembershipID),
+			PrimaryMembershipID:   r.PrimaryMembershipID,
+			DisplayName:           r.DisplayName,
+			UniqueName:            r.UniqueName,
+			IconPath:              ptr.NonEmpty(r.IconPath),
+			AlternateNames:        alt,
+		}
+		if r.PrimaryMembershipType != 0 {
+			item.PrimaryMembershipType = new(r.PrimaryMembershipType)
+		}
+		out = append(out, item)
+	}
+	return out
 }

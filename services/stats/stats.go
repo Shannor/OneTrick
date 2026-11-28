@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"oneTrick/adapters/driven/firestore/fsutil"
 	"oneTrick/api"
+	"oneTrick/core/domain"
+	"oneTrick/core/gamemode"
 	"oneTrick/core/inventory"
-	"oneTrick/services/destiny"
+	"oneTrick/ptr"
 	"oneTrick/services/snapshot"
 	"oneTrick/services/user"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,10 @@ import (
 	clog "github.com/Shannor/canonical-logger"
 	"golang.org/x/sync/errgroup"
 )
+
+type ItemManifestReader interface {
+	GetItemsByIDs(ctx context.Context, ids []int64) (map[int64]domain.ItemManifest, error)
+}
 
 // Service defines operations for retrieving stats-related data.
 // Note: "Loadout" in product language corresponds to a Snapshot in code.
@@ -37,11 +42,11 @@ type service struct {
 	store           Store
 	snapshotService snapshot.Service
 	userService     user.Service
-	manifestService destiny.ManifestService
+	manifestService ItemManifestReader
 }
 
 // NewService creates a new Stats service instance.
-func NewService(db *firestore.Client, store Store, snapshotService snapshot.Service, userService user.Service, manifestService destiny.ManifestService) Service {
+func NewService(db *firestore.Client, store Store, snapshotService snapshot.Service, userService user.Service, manifestService ItemManifestReader) Service {
 	return &service{
 		DB:              db,
 		store:           store,
@@ -125,7 +130,13 @@ func buildPageSimilarCounts(snapshots []api.CharacterSnapshot, allSimilarCounts 
 // MatchesGameMode classifies whether an ActivityHistory record belongs to the specified GameMode
 // by inspecting both history.Mode and history.Activity.
 func MatchesGameMode(history api.ActivityHistory, gameMode api.GameMode) bool {
-	return destiny.MatchesGameMode(history, gameMode)
+	if gameMode == "" || gameMode == api.GameModeAll {
+		return true
+	}
+	if history.EstimatedGameMode != nil {
+		return *history.EstimatedGameMode == gameMode
+	}
+	return gamemode.EstimateName(ptr.Deref(history.Mode), history.Activity) == string(gameMode)
 }
 
 func hasGameModeFilter(gameMode *api.GameMode) bool {
@@ -544,16 +555,8 @@ func (s *service) batchResolveItemTiers(
 		return nil
 	}
 	tiers := make(map[int64]int32, len(defs))
-	for k, def := range defs {
-		hash := def.Hash
-		if hash == 0 {
-			parsed, parseErr := strconv.ParseInt(k, 10, 64)
-			if parseErr != nil {
-				continue
-			}
-			hash = parsed
-		}
-		tiers[hash] = int32(def.Inventory.TierType)
+	for hash, def := range defs {
+		tiers[hash] = def.TierType
 	}
 	return tiers
 }

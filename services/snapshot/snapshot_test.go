@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"oneTrick/api"
+	"oneTrick/core/domain"
+	"oneTrick/core/inventory"
+	"oneTrick/ptr"
 	"oneTrick/services/aggregate"
-	"oneTrick/services/destiny"
 	"oneTrick/services/user"
 	"oneTrick/utils"
 	"os"
@@ -341,10 +343,10 @@ func (m *mockAggregateService) RemoveSnapshot(_ context.Context, snapshotID stri
 }
 
 func makeLoadout(kinInst string, kinHash int64, enInst string, enHash int64, subHash int64, powInst string, powHash int64) api.Loadout {
-	kinKey := strconv.Itoa(destiny.Kinetic)
-	enKey := strconv.Itoa(destiny.Energy)
-	subKey := strconv.Itoa(destiny.SubClass)
-	powKey := strconv.Itoa(destiny.Power)
+	kinKey := inventory.KineticKey
+	enKey := inventory.EnergyKey
+	subKey := inventory.SubClassKey
+	powKey := inventory.PowerKey
 
 	loadout := make(api.Loadout)
 	if kinInst != "" || kinHash != 0 {
@@ -352,7 +354,7 @@ func makeLoadout(kinInst string, kinHash int64, enInst string, enHash int64, sub
 			InstanceID: kinInst,
 			ItemHash:   kinHash,
 			ItemProperties: api.ItemProperties{
-				BaseInfo: api.BaseItemInfo{InstanceId: kinInst, ItemHash: kinHash, BucketHash: destiny.Kinetic},
+				BaseInfo: api.BaseItemInfo{InstanceId: kinInst, ItemHash: kinHash, BucketHash: inventory.Kinetic},
 				Perks:    []api.Perk{{Hash: 200}, {Hash: 100}},
 			},
 		}
@@ -362,7 +364,7 @@ func makeLoadout(kinInst string, kinHash int64, enInst string, enHash int64, sub
 			InstanceID: enInst,
 			ItemHash:   enHash,
 			ItemProperties: api.ItemProperties{
-				BaseInfo: api.BaseItemInfo{InstanceId: enInst, ItemHash: enHash, BucketHash: destiny.Energy},
+				BaseInfo: api.BaseItemInfo{InstanceId: enInst, ItemHash: enHash, BucketHash: inventory.Energy},
 				Perks:    []api.Perk{{Hash: 400}, {Hash: 300}},
 			},
 		}
@@ -372,7 +374,7 @@ func makeLoadout(kinInst string, kinHash int64, enInst string, enHash int64, sub
 			InstanceID: "sub-inst-1",
 			ItemHash:   subHash,
 			ItemProperties: api.ItemProperties{
-				BaseInfo: api.BaseItemInfo{InstanceId: "sub-inst-1", ItemHash: subHash, BucketHash: destiny.SubClass},
+				BaseInfo: api.BaseItemInfo{InstanceId: "sub-inst-1", ItemHash: subHash, BucketHash: inventory.SubClass},
 			},
 		}
 	}
@@ -381,7 +383,7 @@ func makeLoadout(kinInst string, kinHash int64, enInst string, enHash int64, sub
 			InstanceID: powInst,
 			ItemHash:   powHash,
 			ItemProperties: api.ItemProperties{
-				BaseInfo: api.BaseItemInfo{InstanceId: powInst, ItemHash: powHash, BucketHash: destiny.Power},
+				BaseInfo: api.BaseItemInfo{InstanceId: powInst, ItemHash: powHash, BucketHash: inventory.Power},
 			},
 		}
 	}
@@ -406,10 +408,10 @@ func TestGenerateHashMatchesServerTickAndPreservesCallerPerks(t *testing.T) {
 	// Build an equivalent loadout with reversed perk slices and extra cosmetic fields
 	// that server-tick ignores when hashing.
 	l2 := makeLoadout("kin-1", 111, "en-1", 222, 333, "pow-1", 444)
-	kinItem := l2[strconv.Itoa(destiny.Kinetic)]
+	kinItem := l2[inventory.KineticKey]
 	kinItem.Name = "Cosmetic Rename"
 	kinItem.ItemProperties.Perks = []api.Perk{{Hash: 100}, {Hash: 200}}
-	l2[strconv.Itoa(destiny.Kinetic)] = kinItem
+	l2[inventory.KineticKey] = kinItem
 
 	h1, err := GenerateHash(l1)
 	if err != nil {
@@ -424,7 +426,7 @@ func TestGenerateHashMatchesServerTickAndPreservesCallerPerks(t *testing.T) {
 	}
 
 	// Verify caller's Perks slice in l1 was NOT mutated in-place ({200, 100}).
-	origPerks := l1[strconv.Itoa(destiny.Kinetic)].ItemProperties.Perks
+	origPerks := l1[inventory.KineticKey].ItemProperties.Perks
 	if origPerks[0].Hash != 200 || origPerks[1].Hash != 100 {
 		t.Fatalf("expected GenerateHash not to mutate caller's Perks slice, got %+v", origPerks)
 	}
@@ -858,9 +860,9 @@ func TestFirestoreEmulatorSnapshotSoftMergeLifecycle(t *testing.T) {
 }
 
 func TestCanMergeServerTickVsBackendEffectiveInstanceID(t *testing.T) {
-	kineticKey := strconv.Itoa(destiny.Kinetic)
-	energyKey := strconv.Itoa(destiny.Energy)
-	subclassKey := strconv.Itoa(destiny.SubClass)
+	kineticKey := inventory.KineticKey
+	energyKey := inventory.EnergyKey
+	subclassKey := inventory.SubClassKey
 
 	// Backend snapshot sets both top-level InstanceID and BaseInfo.InstanceId to real 64-bit Bungie ID.
 	backendSnap := &api.CharacterSnapshot{
@@ -948,7 +950,6 @@ func (f *fakeSnapshotUserService) GetMembershipType(_ context.Context, _, _ stri
 }
 
 type fakeSnapshotD2Service struct {
-	destiny.Service
 	loadout            api.Loadout
 	stats              map[string]api.ClassStat
 	bonuses            []api.ArmorSetBonus
@@ -956,15 +957,88 @@ type fakeSnapshotD2Service struct {
 	lastMembershipType int64
 }
 
-func (f *fakeSnapshotD2Service) GetLoadout(_ context.Context, _ int64, membershipType int64, _ string) (api.Loadout, map[string]api.ClassStat, []api.ArmorSetBonus, *time.Time, error) {
+func (f *fakeSnapshotD2Service) GetLiveLoadout(_ context.Context, _ int64, membershipType int64, _ string) (domain.LiveLoadout, error) {
 	f.lastMembershipType = membershipType
-	return f.loadout, f.stats, f.bonuses, f.ts, nil
+	outLoadout := make(domain.Loadout, len(f.loadout))
+	for k, item := range f.loadout {
+		perks := make([]domain.Perk, 0, len(item.ItemProperties.Perks))
+		for _, pk := range item.ItemProperties.Perks {
+			perks = append(perks, domain.Perk{
+				Name:        pk.Name,
+				Description: ptr.Deref(pk.Description),
+				Hash:        pk.Hash,
+				IconPath:    ptr.Deref(pk.IconPath),
+			})
+		}
+		outLoadout[k] = domain.ItemSnapshot{
+			InstanceID: item.InstanceID,
+			Name:       item.Name,
+			ItemHash:   item.ItemHash,
+			BucketHash: item.BucketHash,
+			Details: domain.ItemProperties{
+				CharacterID: ptr.Deref(item.ItemProperties.CharacterId),
+				BaseInfo: domain.BaseItemInfo{
+					Name:                       item.ItemProperties.BaseInfo.Name,
+					Icon:                       ptr.Deref(item.ItemProperties.BaseInfo.Icon),
+					ItemHash:                   item.ItemProperties.BaseInfo.ItemHash,
+					InstanceID:                 item.ItemProperties.BaseInfo.InstanceId,
+					BucketHash:                 item.ItemProperties.BaseInfo.BucketHash,
+					ItemTypeAndTierDisplayName: item.ItemProperties.BaseInfo.ItemTypeAndTierDisplayName,
+					ItemTypeDisplayName:        item.ItemProperties.BaseInfo.ItemTypeDisplayName,
+					TierTypeName:               item.ItemProperties.BaseInfo.TierTypeName,
+					TierType:                   item.ItemProperties.BaseInfo.TierType,
+					EquipableItemSetHash:       item.ItemProperties.BaseInfo.EquipableItemSetHash,
+				},
+				Perks: perks,
+			},
+		}
+	}
+	outStats := make(map[string]domain.ClassStat, len(f.stats))
+	for k, st := range f.stats {
+		outStats[k] = domain.ClassStat{
+			Name:            st.Name,
+			Description:     st.Description,
+			Icon:            st.Icon,
+			HasIcon:         st.HasIcon,
+			StatCategory:    st.StatCategory,
+			AggregationType: st.AggregationType,
+			Value:           st.Value,
+		}
+	}
+	var outBonuses []domain.ArmorSetBonus
+	if len(f.bonuses) > 0 {
+		outBonuses = make([]domain.ArmorSetBonus, 0, len(f.bonuses))
+		for _, b := range f.bonuses {
+			perks := make([]domain.ArmorSetBonusPerk, 0, len(b.ActivePerks))
+			for _, pk := range b.ActivePerks {
+				perks = append(perks, domain.ArmorSetBonusPerk{
+					RequiredSetCount: pk.RequiredSetCount,
+					Hash:             pk.Hash,
+					Name:             pk.Name,
+					Description:      ptr.Deref(pk.Description),
+					IconPath:         ptr.Deref(pk.IconPath),
+				})
+			}
+			outBonuses = append(outBonuses, domain.ArmorSetBonus{
+				SetHash:     b.SetHash,
+				SetName:     b.SetName,
+				ActiveCount: b.ActiveCount,
+				ActivePerks: perks,
+			})
+		}
+	}
+	return domain.LiveLoadout{
+		Loadout:         outLoadout,
+		Stats:           outStats,
+		ArmorSetBonuses: outBonuses,
+		MintedAt:        f.ts,
+	}, nil
 }
 
 func TestCloneSnapshotAndSaveRoundTripArmorSetBonuses(t *testing.T) {
-	kineticKey := strconv.Itoa(destiny.Kinetic)
-	energyKey := strconv.Itoa(destiny.Energy)
-	powerKey := strconv.Itoa(destiny.Power)
+	kineticKey := inventory.KineticKey
+	energyKey := inventory.EnergyKey
+	powerKey := inventory.PowerKey
 
 	loadout := api.Loadout{
 		kineticKey: {
@@ -1298,7 +1372,7 @@ func TestCreate_LegacyServerTickHashFallback(t *testing.T) {
 	ctx := context.Background()
 
 	loadout := api.Loadout{
-		strconv.Itoa(destiny.Kinetic): {
+		inventory.KineticKey: {
 			InstanceID: "6917529027641081234",
 			ItemHash:   123456789,
 			ItemProperties: api.ItemProperties{
@@ -1421,10 +1495,10 @@ func TestCreate_LegacyServerTickHashFallback(t *testing.T) {
 func TestSaveSessionCheckIn_ThrottlingAndMultiHourFindBestFit(t *testing.T) {
 	makeLoadoutWithKinetic := func(kineticInstanceID string, kineticItemHash int64, perkHash int64) api.Loadout {
 		return api.Loadout{
-			strconv.Itoa(destiny.Kinetic): {
+			inventory.KineticKey: {
 				ItemHash:   kineticItemHash,
 				InstanceID: kineticInstanceID,
-				BucketHash: new(int64(destiny.Kinetic)),
+				BucketHash: new(int64(inventory.Kinetic)),
 				ItemProperties: api.ItemProperties{
 					BaseInfo: api.BaseItemInfo{
 						InstanceId: kineticInstanceID,
@@ -1433,10 +1507,10 @@ func TestSaveSessionCheckIn_ThrottlingAndMultiHourFindBestFit(t *testing.T) {
 					Perks: []api.Perk{{Hash: perkHash, Name: "Perk"}},
 				},
 			},
-			strconv.Itoa(destiny.Energy): {
+			inventory.EnergyKey: {
 				ItemHash:   2002,
 				InstanceID: "en-inst-1",
-				BucketHash: new(int64(destiny.Energy)),
+				BucketHash: new(int64(inventory.Energy)),
 				ItemProperties: api.ItemProperties{
 					BaseInfo: api.BaseItemInfo{
 						InstanceId: "en-inst-1",
@@ -1444,10 +1518,10 @@ func TestSaveSessionCheckIn_ThrottlingAndMultiHourFindBestFit(t *testing.T) {
 					},
 				},
 			},
-			strconv.Itoa(destiny.Power): {
+			inventory.PowerKey: {
 				ItemHash:   3003,
 				InstanceID: "pw-inst-1",
-				BucketHash: new(int64(destiny.Power)),
+				BucketHash: new(int64(inventory.Power)),
 				ItemProperties: api.ItemProperties{
 					BaseInfo: api.BaseItemInfo{
 						InstanceId: "pw-inst-1",
