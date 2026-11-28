@@ -110,7 +110,6 @@ type tickRunner struct {
 	pgcrFlight            singleflight.Group
 	pgcrCache             map[string]map[string]api.InstancePerformance
 	charLocks             [64]sync.Mutex
-	activityLocks         [64]sync.Mutex
 	candidateCharacterIDs []string
 	loadoutsThrottled     int
 	aggregatesRefreshed   int
@@ -133,12 +132,12 @@ func newTickRunner(svc service, opts TickOptions) *tickRunner {
 	}
 }
 
-func lockStripe(locks *[64]sync.Mutex, key string) func() {
+func lockStripe(locks *[64]sync.Mutex, key string) *sync.Mutex {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
 	mu := &locks[h.Sum32()%uint32(len(locks))]
 	mu.Lock()
-	return mu.Unlock
+	return mu
 }
 
 func (s service) RunTick(ctx context.Context, opts TickOptions) (*api.SessionTickResponse, error) {
@@ -203,16 +202,16 @@ func (r *tickRunner) run(ctx context.Context) (*api.SessionTickResponse, error) 
 	return r.resp, nil
 }
 
-func (r *tickRunner) processCandidates(ctx context.Context, candidates []TickCandidate) {
+func (r *tickRunner) processCandidates(tickCtx context.Context, candidates []TickCandidate) {
 	if len(candidates) == 0 {
 		return
 	}
 	outcomes := make([]sessionTickOutcome, len(candidates))
 
-	_ = clog.LoopRollupWithOptions(ctx, "sessionService.processSession", candidates, clog.LoopOptions{
+	_ = clog.LoopRollupWithOptions(tickCtx, "sessionService.processSession", candidates, clog.LoopOptions{
 		Concurrency: r.opts.concurrency(),
 	}, func(iterCtx context.Context, idx int, cand TickCandidate) error {
-		out, err := r.processSession(iterCtx, cand)
+		out, err := r.processSession(tickCtx, iterCtx, cand)
 		outcomes[idx] = out
 		return err
 	})
@@ -254,11 +253,11 @@ func (r *tickRunner) applyCandidateOutcomes(outcomes []sessionTickOutcome) {
 	}
 }
 
-func (r *tickRunner) processSession(iterCtx context.Context, cand TickCandidate) (out sessionTickOutcome, err error) {
+func (r *tickRunner) processSession(tickCtx, iterCtx context.Context, cand TickCandidate) (out sessionTickOutcome, err error) {
 	// Serialize rare overlapping pending + recently-completed grace sessions on the same character.
 	if cand.Session.CharacterID != "" {
-		unlock := lockStripe(&r.charLocks, cand.Session.CharacterID)
-		defer unlock()
+		mu := lockStripe(&r.charLocks, cand.Session.CharacterID)
+		defer mu.Unlock()
 	}
 
 	clog.WithGroupFields(iterCtx, "session", clog.Fields{
@@ -283,7 +282,7 @@ func (r *tickRunner) processSession(iterCtx context.Context, cand TickCandidate)
 		return expOut, expErr
 	}
 
-	membership, err := r.resolveMembership(iterCtx, cand.Session)
+	membership, err := r.resolveMembership(tickCtx, cand.Session)
 	if err != nil {
 		out.sessionsErrored++
 		out.errorsTotal++
@@ -312,7 +311,7 @@ func (r *tickRunner) processSession(iterCtx context.Context, cand TickCandidate)
 
 	out.activitiesFound += len(histories)
 
-	linkRes, fatalLinkErr, err := r.linkActivities(iterCtx, updatedCand.Session, membership.participant, histories)
+	linkRes, fatalLinkErr, err := r.linkActivities(tickCtx, iterCtx, updatedCand.Session, membership.participant, histories)
 	out.errorsTotal += linkRes.activityErrors
 	if err != nil {
 		if fatalLinkErr {
@@ -387,7 +386,7 @@ func (r *tickRunner) expireIfNeeded(ctx context.Context, cand TickCandidate) (bo
 	return true, out, nil
 }
 
-func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, error) {
+func (r *tickRunner) getUser(tickCtx context.Context, userID string) (*user.User, error) {
 	if userID == "" {
 		return nil, user.NotFound
 	}
@@ -406,7 +405,7 @@ func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, er
 			return cached, nil
 		}
 
-		u, err := r.svc.userService.GetUser(ctx, userID)
+		u, err := r.svc.userService.GetUser(clog.NewContext(tickCtx), userID)
 		if err != nil {
 			return nil, err
 		}
@@ -428,12 +427,12 @@ func (r *tickRunner) getUser(ctx context.Context, userID string) (*user.User, er
 	return val.(*user.User), nil
 }
 
-func (r *tickRunner) resolveMembership(ctx context.Context, ses api.Session) (tickMembership, error) {
+func (r *tickRunner) resolveMembership(tickCtx context.Context, ses api.Session) (tickMembership, error) {
 	if r.svc.userService == nil || r.svc.d2Service == nil {
 		return tickMembership{}, fmt.Errorf("session tick dependencies not configured")
 	}
 
-	u, err := r.getUser(ctx, ses.UserID)
+	u, err := r.getUser(tickCtx, ses.UserID)
 	if err != nil {
 		return tickMembership{}, fmt.Errorf("failed to fetch user for session %s: %w", ses.ID, err)
 	}
@@ -530,7 +529,7 @@ type activityLinkOutcome struct {
 	pendingRetry    bool
 }
 
-func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, participant tickParticipant, histories []api.ActivityHistory) (linkActivitiesResult, bool, error) {
+func (r *tickRunner) linkActivities(tickCtx, iterCtx context.Context, ses api.Session, participant tickParticipant, histories []api.ActivityHistory) (linkActivitiesResult, bool, error) {
 	if r.svc.aggregateService == nil {
 		return linkActivitiesResult{}, true, fmt.Errorf("aggregate service not configured for session %s", ses.ID)
 	}
@@ -555,7 +554,7 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, pa
 	}
 	dirty := set.NewOrdered[string]()
 	_ = clog.LoopRollup(iterCtx, "aggregateService.processActivity", histories, func(actCtx context.Context, _ int, history api.ActivityHistory) error {
-		outcome, err := r.linkSingleActivity(actCtx, ses, participant, history, existingByActivity[history.InstanceID])
+		outcome, err := r.linkSingleActivity(tickCtx, actCtx, ses, participant, history, existingByActivity[history.InstanceID])
 		if err != nil {
 			res.activityErrors++
 			res.hasPendingRetry = true
@@ -580,7 +579,7 @@ func (r *tickRunner) linkActivities(iterCtx context.Context, ses api.Session, pa
 	return res, false, nil
 }
 
-func (r *tickRunner) getPerformances(ctx context.Context, activityID string) (map[string]api.InstancePerformance, error) {
+func (r *tickRunner) getPerformances(tickCtx context.Context, activityID string) (map[string]api.InstancePerformance, error) {
 	r.pgcrMu.RLock()
 	cached, ok := r.pgcrCache[activityID]
 	r.pgcrMu.RUnlock()
@@ -598,7 +597,7 @@ func (r *tickRunner) getPerformances(ctx context.Context, activityID string) (ma
 			return cached, nil
 		}
 
-		performances, err := r.svc.d2Service.GetPerformances(ctx, activityID, r.candidateCharacterIDs)
+		performances, err := r.svc.d2Service.GetPerformances(clog.NewContext(tickCtx), activityID, r.candidateCharacterIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -618,21 +617,7 @@ func (r *tickRunner) getPerformances(ctx context.Context, activityID string) (ma
 	return val.(map[string]api.InstancePerformance), nil
 }
 
-func (r *tickRunner) upsertActivity(
-	ctx context.Context,
-	characterID string,
-	history api.ActivityHistory,
-	stampedLink api.SnapshotLink,
-	performance api.InstancePerformance,
-) (*api.Aggregate, error) {
-	if history.InstanceID != "" {
-		unlock := lockStripe(&r.activityLocks, history.InstanceID)
-		defer unlock()
-	}
-	return r.svc.aggregateService.UpsertSessionActivity(ctx, characterID, history, stampedLink, performance)
-}
-
-func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session, participant tickParticipant, history api.ActivityHistory, existing *api.Aggregate) (activityLinkOutcome, error) {
+func (r *tickRunner) linkSingleActivity(tickCtx, actCtx context.Context, ses api.Session, participant tickParticipant, history api.ActivityHistory, existing *api.Aggregate) (activityLinkOutcome, error) {
 	clog.WithGroupField(actCtx, "activity", "activityId", history.InstanceID)
 
 	refreshing := false
@@ -643,7 +628,7 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 		refreshing = true
 	}
 
-	performances, err := r.getPerformances(actCtx, history.InstanceID)
+	performances, err := r.getPerformances(tickCtx, history.InstanceID)
 	if err != nil {
 		return activityLinkOutcome{}, fmt.Errorf("failed to fetch performances for activity %s: %w", history.InstanceID, err)
 	}
@@ -699,7 +684,7 @@ func (r *tickRunner) linkSingleActivity(actCtx context.Context, ses api.Session,
 
 	stampedLink := stampParticipantMetadata(*link, ses.ID, participant)
 
-	agg, err := r.upsertActivity(actCtx, ses.CharacterID, history, stampedLink, *enrichedPerformance)
+	agg, err := r.svc.aggregateService.UpsertSessionActivity(actCtx, ses.CharacterID, history, stampedLink, *enrichedPerformance)
 	if err != nil {
 		return activityLinkOutcome{}, fmt.Errorf("failed to add data to aggregate for activity %s: %w", history.InstanceID, err)
 	}
@@ -799,19 +784,14 @@ func stampParticipantMetadata(link api.SnapshotLink, sessionID string, p tickPar
 
 func (r *tickRunner) persistSessionProgress(iterCtx context.Context, cand TickCandidate, latestID string, linkRes linkActivitiesResult) (sessionTickOutcome, error) {
 	ses := cand.Session
-	existingSet := make(map[string]struct{}, len(ses.AggregateIDs)+len(linkRes.aggregateIDs))
-	for _, id := range ses.AggregateIDs {
-		existingSet[id] = struct{}{}
-	}
+	seen := set.FromSlice(ses.AggregateIDs)
 	newAggIDs := make([]string, 0, len(linkRes.aggregateIDs))
 	for _, id := range linkRes.aggregateIDs {
-		if id == "" {
+		if id == "" || seen.Contains(id) {
 			continue
 		}
-		if _, exists := existingSet[id]; !exists {
-			existingSet[id] = struct{}{}
-			newAggIDs = append(newAggIDs, id)
-		}
+		seen.Add(id)
+		newAggIDs = append(newAggIDs, id)
 	}
 
 	var out sessionTickOutcome

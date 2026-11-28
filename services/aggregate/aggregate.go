@@ -85,12 +85,12 @@ func NewService(db *firestore.Client) Service {
 	}
 }
 
-func (s *service) lockActivity(activityID string) func() {
+func (s *service) lockActivity(activityID string) *sync.Mutex {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(activityID))
 	mu := &s.activityLocks[h.Sum32()%uint32(len(s.activityLocks))]
 	mu.Lock()
-	return mu.Unlock
+	return mu
 }
 
 func (s *service) UpsertSessionActivity(
@@ -101,8 +101,8 @@ func (s *service) UpsertSessionActivity(
 	performance api.InstancePerformance,
 ) (*api.Aggregate, error) {
 	if history.InstanceID != "" {
-		unlock := s.lockActivity(history.InstanceID)
-		defer unlock()
+		mu := s.lockActivity(history.InstanceID)
+		defer mu.Unlock()
 	}
 
 	now := time.Now()
